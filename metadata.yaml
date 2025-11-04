@@ -1,0 +1,7 @@
+name: astrbot_plugin_video_parser
+desc: 统一视频链接解析插件，支持B站、抖音等平台，可扩展支持更多平台
+help: 自动识别并解析消息中的视频链接，支持B站、抖音等平台。可以通过配置启用/禁用特定平台的解析器。
+version: v1.0.0
+author: drdon1234
+repo: https://github.com/drdon1234/astrbot_plugin_video_parser
+

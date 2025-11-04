@@ -1,0 +1,39 @@
+{
+    "is_auto_parse": {
+        "description": "是否自动解析视频链接",
+        "type": "bool",
+        "hint": "启用后将自动识别并解析消息中的视频链接",
+        "default": true
+    },
+    "is_auto_pack": {
+        "description": "是否将解析结果打包为消息集合",
+        "type": "bool",
+        "hint": "需要在任何wechat平台使用请禁用此项",
+        "default": true
+    },
+    "max_video_size_mb": {
+        "description": "最大允许发送的视频大小(MB)",
+        "type": "float",
+        "hint": "超过此大小的视频将被跳过，设置为0表示不限制",
+        "default": 0.0
+    },
+    "enable_bilibili": {
+        "description": "是否启用B站解析器",
+        "type": "bool",
+        "hint": "禁用后将不再解析B站链接",
+        "default": true
+    },
+    "enable_douyin": {
+        "description": "是否启用抖音解析器",
+        "type": "bool",
+        "hint": "禁用后将不再解析抖音链接",
+        "default": true
+    },
+    "trigger_keywords": {
+        "description": "手动触发解析的关键词列表",
+        "type": "list",
+        "hint": "当is_auto_parse为false时，消息中包含这些关键词才会触发解析",
+        "default": ["视频解析", "解析视频"]
+    }
+}
+
