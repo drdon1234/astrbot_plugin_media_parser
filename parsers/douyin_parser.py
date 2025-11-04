@@ -71,13 +71,11 @@ class DouyinParser(BaseVideoParser):
                 response_text = await response.text()
                 json_str = self.extract_router_data(response_text)
                 if not json_str:
-                    print('未找到 _ROUTER_DATA')
                     return None
                 json_str = json_str.replace('\\u002F', '/').replace('\\/', '/')
                 try:
                     json_data = json.loads(json_str)
-                except Exception as e:
-                    print('JSON解析失败', e)
+                except Exception:
                     return None
                 loader_data = json_data.get('loaderData', {})
                 video_info = None
@@ -86,7 +84,6 @@ class DouyinParser(BaseVideoParser):
                         video_info = v['videoInfoRes']
                         break
                 if not video_info or 'item_list' not in video_info or not video_info['item_list']:
-                    print('未找到视频信息')
                     return None
                 item_list = video_info['item_list'][0]
                 title = item_list['desc']
@@ -111,8 +108,7 @@ class DouyinParser(BaseVideoParser):
                     'images': images,
                     'is_gallery': is_gallery
                 }
-        except aiohttp.ClientError as e:
-            print(f'请求错误：{e}')
+        except aiohttp.ClientError:
             return None
 
     async def get_redirected_url(self, session, url):
@@ -146,7 +142,6 @@ class DouyinParser(BaseVideoParser):
                             "is_gallery": result.get('is_gallery', False)
                         }
                 return None
-            except Exception as e:
-                print(f"解析抖音链接失败 {url}: {e}", flush=True)
+            except Exception:
                 return None
 

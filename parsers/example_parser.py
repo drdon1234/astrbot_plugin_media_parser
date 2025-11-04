@@ -84,7 +84,6 @@ class ExampleParser(BaseVideoParser):
             # }
             
             return None  # 示例解析器默认返回None
-        except Exception as e:
-            print(f"解析示例链接失败 {url}: {e}", flush=True)
+        except Exception:
             return None
 

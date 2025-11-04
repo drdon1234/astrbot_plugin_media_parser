@@ -6,7 +6,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 import aiohttp
-from astrbot.api.message_components import Node, Nodes
 
 
 class BaseVideoParser(ABC):
@@ -139,9 +138,13 @@ class BaseVideoParser(ABC):
         if result.get('timestamp'):
             text_parts.append(f"发布时间：{result['timestamp']}")
         
+        if not text_parts:
+            return None
+        
         desc_text = "\n".join(text_parts)
         
         if is_auto_pack:
+            from astrbot.api.message_components import Node
             return Node(
                 name=sender_name,
                 uin=sender_id,
@@ -163,7 +166,7 @@ class BaseVideoParser(ABC):
         Returns:
             List: 媒体节点列表
         """
-        from astrbot.api.message_components import Video, Image
+        from astrbot.api.message_components import Video, Image, Node
         
         nodes = []
         

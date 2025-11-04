@@ -71,6 +71,22 @@ class ParserManager:
                 links_with_parser.append((link, parser))
         return links_with_parser
     
+    def _deduplicate_links(self, links_with_parser: List[Tuple[str, BaseVideoParser]]) -> Dict[str, BaseVideoParser]:
+        """
+        对链接进行去重，保留第一个出现的链接
+        
+        Args:
+            links_with_parser: (链接, 解析器) 的列表
+            
+        Returns:
+            Dict[str, BaseVideoParser]: 去重后的链接字典
+        """
+        unique_links = {}
+        for link, parser in links_with_parser:
+            if link not in unique_links:
+                unique_links[link] = parser
+        return unique_links
+    
     async def parse_url(self, url: str, session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
         """
         解析单个URL
@@ -103,22 +119,14 @@ class ParserManager:
             return []
         
         # 去重
-        unique_links = {}
-        for link, parser in links_with_parser:
-            if link not in unique_links:
-                unique_links[link] = parser
+        unique_links = self._deduplicate_links(links_with_parser)
         
         # 并发解析
         tasks = [parser.parse(session, url) for url, parser in unique_links.items()]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # 过滤异常和None
-        valid_results = []
-        for result in results:
-            if result and not isinstance(result, Exception):
-                valid_results.append(result)
-        
-        return valid_results
+        return [result for result in results if result and not isinstance(result, Exception)]
     
     async def build_nodes(self, event, is_auto_pack: bool) -> Optional[List]:
         """
@@ -138,19 +146,16 @@ class ParserManager:
                 return None
             
             # 去重
-            unique_links = {}
-            for link, parser in links_with_parser:
-                if link not in unique_links:
-                    unique_links[link] = parser
+            unique_links = self._deduplicate_links(links_with_parser)
             
             nodes = []
             sender_name = "视频解析bot"
             platform = event.get_platform_name()
             sender_id = event.get_self_id()
-            if platform != "wechatpadpro" and platform != "webchat" and platform != "gewechat":
+            if platform not in ("wechatpadpro", "webchat", "gewechat"):
                 try:
                     sender_id = int(sender_id)
-                except:
+                except (ValueError, TypeError):
                     sender_id = 10000
             
             timeout = aiohttp.ClientTimeout(total=30)
@@ -158,92 +163,23 @@ class ParserManager:
                 tasks = [parser.parse(session, url) for url, parser in unique_links.items()]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 
+                # 使用第一个解析器实例来构建节点（所有解析器都继承自BaseVideoParser，方法相同）
+                parser_instance = next(iter(unique_links.values())) if unique_links else None
+                
                 for result in results:
-                    if result and not isinstance(result, Exception):
-                        # 构建文本节点
-                        text_node = self._build_text_node(result, sender_name, sender_id, is_auto_pack)
+                    if result and not isinstance(result, Exception) and parser_instance:
+                        # 使用基类方法构建文本节点
+                        text_node = parser_instance.build_text_node(result, sender_name, sender_id, is_auto_pack)
                         if text_node:
                             nodes.append(text_node)
                         
-                        # 构建媒体节点
-                        media_nodes = self._build_media_nodes(result, sender_name, sender_id, is_auto_pack)
+                        # 使用基类方法构建媒体节点
+                        media_nodes = parser_instance.build_media_nodes(result, sender_name, sender_id, is_auto_pack)
                         nodes.extend(media_nodes)
             
             if not nodes:
                 return None
             return nodes
-        except Exception as e:
-            print(f"构建节点时发生错误：{e}", flush=True)
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return None
-    
-    def _build_text_node(self, result: Dict[str, Any], sender_name: str, sender_id: Any, is_auto_pack: bool):
-        """构建文本节点"""
-        from astrbot.api.message_components import Plain, Node
-        
-        text_parts = []
-        if result.get('title'):
-            text_parts.append(f"标题：{result['title']}")
-        if result.get('author'):
-            text_parts.append(f"作者：{result['author']}")
-        if result.get('desc'):
-            text_parts.append(f"简介：{result['desc']}")
-        if result.get('timestamp'):
-            text_parts.append(f"发布时间：{result['timestamp']}")
-        
-        if not text_parts:
-            return None
-        
-        desc_text = "\n".join(text_parts)
-        
-        if is_auto_pack:
-            return Node(
-                name=sender_name,
-                uin=sender_id,
-                content=[Plain(desc_text)]
-            )
-        else:
-            return Plain(desc_text)
-    
-    def _build_media_nodes(self, result: Dict[str, Any], sender_name: str, sender_id: Any, is_auto_pack: bool) -> List:
-        """构建媒体节点"""
-        from astrbot.api.message_components import Video, Image, Node
-        
-        nodes = []
-        
-        # 处理图片集
-        if result.get('is_gallery') and result.get('images'):
-            if is_auto_pack:
-                gallery_node_content = []
-                for image_url in result['images']:
-                    image_node = Node(
-                        name=sender_name,
-                        uin=sender_id,
-                        content=[Image.fromURL(image_url)]
-                    )
-                    gallery_node_content.append(image_node)
-                parent_gallery_node = Node(
-                    name=sender_name,
-                    uin=sender_id,
-                    content=gallery_node_content
-                )
-                nodes.append(parent_gallery_node)
-            else:
-                for image_url in result['images']:
-                    nodes.append(Image.fromURL(image_url))
-        # 处理视频
-        elif result.get('direct_url'):
-            if is_auto_pack:
-                video_node = Node(
-                    name=sender_name,
-                    uin=sender_id,
-                    content=[Video.fromURL(result['direct_url'])]
-                )
-            else:
-                cover = result.get('thumb_url')
-                video_node = Video.fromURL(result['direct_url'], cover=cover) if cover else Video.fromURL(result['direct_url'])
-            nodes.append(video_node)
-        
-        return nodes
 
