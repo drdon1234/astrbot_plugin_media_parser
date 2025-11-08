@@ -51,18 +51,35 @@ class ParserManager:
     def extract_all_links(self, text: str) -> List[Tuple[str, BaseVideoParser]]:
         """
         从文本中提取所有可解析的链接，并返回链接和对应的解析器
+        按照链接在文本中出现的顺序返回
         
         Args:
             text: 输入文本
             
         Returns:
-            List[Tuple[str, BaseVideoParser]]: (链接, 解析器) 的列表
+            List[Tuple[str, BaseVideoParser]]: (链接, 解析器) 的列表，按文本中出现顺序
         """
-        links_with_parser = []
+        # 收集所有链接及其在文本中的位置
+        links_with_position = []
         for parser in self.parsers:
             links = parser.extract_links(text)
             for link in links:
+                # 查找链接在文本中的位置
+                position = text.find(link)
+                if position != -1:
+                    links_with_position.append((position, link, parser))
+        
+        # 按位置排序，保持文本中的原始顺序
+        links_with_position.sort(key=lambda x: x[0])
+        
+        # 去重：保留第一个出现的链接
+        seen_links = set()
+        links_with_parser = []
+        for position, link, parser in links_with_position:
+            if link not in seen_links:
+                seen_links.add(link)
                 links_with_parser.append((link, parser))
+        
         return links_with_parser
     
     def _deduplicate_links(self, links_with_parser: List[Tuple[str, BaseVideoParser]]) -> Dict[str, BaseVideoParser]:
