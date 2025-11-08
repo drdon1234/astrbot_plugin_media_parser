@@ -492,7 +492,7 @@ class KuaishouParser(BaseVideoParser):
     def build_media_nodes(self, result: Dict[str, Any], sender_name: str, sender_id: Any, is_auto_pack: bool) -> List:
         """
         构建媒体节点（视频或图片）
-        对于图集，优先使用下载的图片文件，避免发送时下载失败
+        优先使用下载的图片文件，避免发送时下载失败
         使用下载的图片文件而不是URL，以避免QQ/NapCat无法识别文件类型的问题
         
         Args:
@@ -504,108 +504,36 @@ class KuaishouParser(BaseVideoParser):
         Returns:
             List: 媒体节点列表
         """
-        from astrbot.api.message_components import Video, Image, Node
-        
         nodes = []
         
         # 处理图片集（优先使用下载的文件）
         if result.get('is_gallery') and result.get('image_files'):
-            image_files = result['image_files']
-            if isinstance(image_files, list) and len(image_files) > 0:
-                if is_auto_pack:
-                    gallery_node_content = []
-                    for image_path in image_files:
-                        if image_path:
-                            image_path = os.path.normpath(image_path)
-                            if os.path.exists(image_path):
-                                try:
-                                    image_node_content = Image.fromFileSystem(image_path)
-                                    image_node = Node(
-                                        name=sender_name,
-                                        uin=sender_id,
-                                        content=[image_node_content]
-                                    )
-                                    gallery_node_content.append(image_node)
-                                except Exception:
-                                    # 如果加载失败，清理临时文件
-                                    if os.path.exists(image_path):
-                                        try:
-                                            os.unlink(image_path)
-                                        except Exception:
-                                            pass
-                                    continue
-                    if gallery_node_content:
-                        # 仅在图片数量 > 1 时创建父节点
-                        if len(gallery_node_content) > 1:
-                            parent_gallery_node = Node(
-                                name=sender_name,
-                                uin=sender_id,
-                                content=gallery_node_content
-                            )
-                            nodes.append(parent_gallery_node)
-                        else:
-                            nodes.extend(gallery_node_content)
-                else:
-                    for image_path in image_files:
-                        if image_path:
-                            image_path = os.path.normpath(image_path)
-                            if os.path.exists(image_path):
-                                try:
-                                    nodes.append(Image.fromFileSystem(image_path))
-                                except Exception:
-                                    # 如果加载失败，清理临时文件
-                                    if os.path.exists(image_path):
-                                        try:
-                                            os.unlink(image_path)
-                                        except Exception:
-                                            pass
-                                    continue
+            gallery_nodes = self._build_gallery_nodes_from_files(
+                result['image_files'],
+                sender_name,
+                sender_id,
+                is_auto_pack
+            )
+            nodes.extend(gallery_nodes)
         # 如果没有下载的文件，回退到使用URL（兼容旧逻辑）
         elif result.get('is_gallery') and result.get('images'):
-            images = result['images']
-            if isinstance(images, list) and len(images) > 0:
-                valid_images = [img for img in images if img and isinstance(img, str) and img.startswith(('http://', 'https://'))]
-                if valid_images:
-                    if is_auto_pack:
-                        gallery_node_content = []
-                        for image_url in valid_images:
-                            try:
-                                image_node = Node(
-                                    name=sender_name,
-                                    uin=sender_id,
-                                    content=[Image.fromURL(image_url)]
-                                )
-                                gallery_node_content.append(image_node)
-                            except Exception:
-                                continue
-                        if gallery_node_content:
-                            # 仅在图片数量 > 1 时创建父节点
-                            if len(gallery_node_content) > 1:
-                                parent_gallery_node = Node(
-                                    name=sender_name,
-                                    uin=sender_id,
-                                    content=gallery_node_content
-                                )
-                                nodes.append(parent_gallery_node)
-                            else:
-                                nodes.extend(gallery_node_content)
-                    else:
-                        for image_url in valid_images:
-                            try:
-                                nodes.append(Image.fromURL(image_url))
-                            except Exception:
-                                continue
+            gallery_nodes = self._build_gallery_nodes_from_urls(
+                result['images'],
+                sender_name,
+                sender_id,
+                is_auto_pack
+            )
+            nodes.extend(gallery_nodes)
         # 处理视频
         elif result.get('direct_url'):
-            if is_auto_pack:
-                video_node = Node(
-                    name=sender_name,
-                    uin=sender_id,
-                    content=[Video.fromURL(result['direct_url'])]
-                )
-            else:
-                cover = result.get('thumb_url')
-                video_node = Video.fromURL(result['direct_url'], cover=cover) if cover else Video.fromURL(result['direct_url'])
-            nodes.append(video_node)
+            video_node = self._build_video_node_from_url(
+                result['direct_url'],
+                sender_name,
+                sender_id,
+                is_auto_pack,
+                result.get('thumb_url')
+            )
+            if video_node:
+                nodes.append(video_node)
         
         return nodes

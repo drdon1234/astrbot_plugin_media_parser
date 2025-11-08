@@ -254,79 +254,43 @@ class TwitterParser(BaseVideoParser):
         """
         构建媒体节点（视频或图片）
         重写基类方法以支持从文件系统加载 Twitter 媒体
-        """
-        from astrbot.api.message_components import Video, Image, Node
         
+        Args:
+            result: 解析结果
+            sender_name: 发送者名称
+            sender_id: 发送者ID
+            is_auto_pack: 是否打包为Node
+            
+        Returns:
+            List: 媒体节点列表
+        """
         nodes = []
         
+        # 处理推特视频（从文件）
         if result.get('is_twitter_video') and result.get('video_files'):
             for video_file_info in result['video_files']:
                 file_path = video_file_info.get('file_path')
                 if file_path:
-                    file_path = os.path.normpath(file_path)
-                    if os.path.exists(file_path):
-                        try:
-                            video_node = Video.fromFileSystem(file_path)
-                            if is_auto_pack:
-                                node = Node(
-                                    name=sender_name,
-                                    uin=sender_id,
-                                    content=[video_node]
-                                )
-                                nodes.append(node)
-                            else:
-                                nodes.append(video_node)
-                        except Exception:
-                            pass
+                    video_node = self._build_video_node_from_file(
+                        file_path,
+                        sender_name,
+                        sender_id,
+                        is_auto_pack
+                    )
+                    if video_node:
+                        nodes.append(video_node)
         
+        # 处理推特图片（从文件）
         elif result.get('is_twitter_images') and result.get('image_files'):
-            if is_auto_pack:
-                gallery_node_content = []
-                for image_path in result['image_files']:
-                    if image_path:
-                        image_path = os.path.normpath(image_path)
-                        if os.path.exists(image_path):
-                            try:
-                                image_node_content = Image.fromFileSystem(image_path)
-                                image_node = Node(
-                                    name=sender_name,
-                                    uin=sender_id,
-                                    content=[image_node_content]
-                                )
-                                gallery_node_content.append(image_node)
-                            except Exception:
-                                # 如果加载失败，清理临时文件
-                                if os.path.exists(image_path):
-                                    try:
-                                        os.unlink(image_path)
-                                    except Exception:
-                                        pass
-                
-                if gallery_node_content:
-                    if result.get('is_gallery') and len(gallery_node_content) > 1:
-                        parent_gallery_node = Node(
-                            name=sender_name,
-                            uin=sender_id,
-                            content=gallery_node_content
-                        )
-                        nodes.append(parent_gallery_node)
-                    else:
-                        nodes.extend(gallery_node_content)
-            else:
-                for image_path in result['image_files']:
-                    if image_path:
-                        image_path = os.path.normpath(image_path)
-                        if os.path.exists(image_path):
-                            try:
-                                nodes.append(Image.fromFileSystem(image_path))
-                            except Exception:
-                                # 如果加载失败，清理临时文件
-                                if os.path.exists(image_path):
-                                    try:
-                                        os.unlink(image_path)
-                                    except Exception:
-                                        pass
+            gallery_nodes = self._build_gallery_nodes_from_files(
+                result['image_files'],
+                sender_name,
+                sender_id,
+                is_auto_pack
+            )
+            nodes.extend(gallery_nodes)
         
+        # 如果不是推特特定内容，回退到基类方法
         elif not result.get('is_twitter_video') and not result.get('is_twitter_images'):
             return super().build_media_nodes(result, sender_name, sender_id, is_auto_pack)
         
