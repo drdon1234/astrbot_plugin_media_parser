@@ -100,6 +100,14 @@ class VideoParserPlugin(Star):
         if not self._should_parse(event.message_str):
             return
         
+        # 先检查是否有可解析的链接
+        links_with_parser = self.parser_manager.extract_all_links(event.message_str)
+        if not links_with_parser:
+            return
+        
+        # 检测到可解析链接后立即发送提示消息
+        await event.send(event.plain_result("视频解析bot为您服务 ٩( 'ω' )و"))
+        
         result = await self.parser_manager.build_nodes(event, self.is_auto_pack)
         if result is None:
             return
@@ -107,7 +115,6 @@ class VideoParserPlugin(Star):
         nodes, temp_files, video_files = result
         
         try:
-            await event.send(event.plain_result("视频解析bot为您服务 ٩( 'ω' )و"))
             if self.is_auto_pack:
                 await event.send(event.chain_result([Nodes(nodes)]))
             else:

@@ -155,13 +155,20 @@ class ParserManager:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 
                 for (url, parser_instance), result in zip(url_parser_pairs, results):
-                    # 跳过异常结果（解析失败时会返回异常）
-                    if isinstance(result, Exception):
-                        # 解析失败，继续处理下一个链接
-                        continue
-                    
-                    # 跳过None结果（解析失败时返回None）
-                    if not result:
+                    # 处理异常结果或None结果（解析失败）
+                    if isinstance(result, Exception) or not result:
+                        # 解析失败，添加失败节点
+                        from astrbot.api.message_components import Plain, Node
+                        failure_text = f"解析失败\n原始链接：{url}"
+                        if is_auto_pack:
+                            failure_node = Node(
+                                name=sender_name,
+                                uin=sender_id,
+                                content=[Plain(failure_text)]
+                            )
+                            nodes.append(failure_node)
+                        else:
+                            nodes.append(Plain(failure_text))
                         continue
                     
                     # 处理图片文件

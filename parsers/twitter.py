@@ -287,7 +287,12 @@ class TwitterParser(BaseVideoParser):
                         image_path = os.path.normpath(image_path)
                         if os.path.exists(image_path):
                             try:
-                                image_node = Image.fromFileSystem(image_path)
+                                image_node_content = Image.fromFileSystem(image_path)
+                                image_node = Node(
+                                    name=sender_name,
+                                    uin=sender_id,
+                                    content=[image_node_content]
+                                )
                                 gallery_node_content.append(image_node)
                             except Exception:
                                 # 如果加载失败，清理临时文件
@@ -306,13 +311,7 @@ class TwitterParser(BaseVideoParser):
                         )
                         nodes.append(parent_gallery_node)
                     else:
-                        for image_node in gallery_node_content:
-                            node = Node(
-                                name=sender_name,
-                                uin=sender_id,
-                                content=[image_node]
-                            )
-                            nodes.append(node)
+                        nodes.extend(gallery_node_content)
             else:
                 for image_path in result['image_files']:
                     if image_path:
