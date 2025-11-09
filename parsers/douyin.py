@@ -199,6 +199,68 @@ class DouyinParser(BaseVideoParser):
         async with session.head(url, allow_redirects=True) as response:
             return str(response.url)
     
+    async def get_video_size(self, video_url: str, session: aiohttp.ClientSession, referer: str = None) -> Optional[float]:
+        """
+        获取视频文件大小(MB)（抖音专用，需要Referer请求头）
+        
+        Args:
+            video_url: 视频URL
+            session: aiohttp会话
+            referer: 引用页面URL（可选，默认使用douyin.com）
+            
+        Returns:
+            Optional[float]: 视频大小(MB)，如果无法获取则返回None
+        """
+        try:
+            # 使用抖音的请求头，包含Referer
+            headers = self.headers.copy()
+            if referer:
+                headers["Referer"] = referer
+            else:
+                headers["Referer"] = 'https://www.douyin.com/'
+            
+            # 先尝试HEAD请求
+            async with session.head(video_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                # 优先检查Content-Range（无论状态码，因为它包含完整文件大小）
+                content_range = resp.headers.get("Content-Range")
+                if content_range:
+                    # Content-Range格式: bytes 286523392-286526818/286526819
+                    # 提取最后一个数字（完整文件大小）
+                    match = re.search(r'/\s*(\d+)', content_range)
+                    if match:
+                        size_bytes = int(match.group(1))
+                        size_mb = size_bytes / (1024 * 1024)
+                        return size_mb
+                
+                # 如果没有Content-Range，检查Content-Length
+                content_length = resp.headers.get("Content-Length")
+                if content_length:
+                    size_bytes = int(content_length)
+                    size_mb = size_bytes / (1024 * 1024)
+                    return size_mb
+            
+            # 如果HEAD请求失败或没有Content-Length，尝试使用Range请求
+            # 发送一个Range请求来获取Content-Range头
+            headers["Range"] = "bytes=0-1"
+            async with session.get(video_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                content_range = resp.headers.get("Content-Range")
+                if content_range:
+                    match = re.search(r'/\s*(\d+)', content_range)
+                    if match:
+                        size_bytes = int(match.group(1))
+                        size_mb = size_bytes / (1024 * 1024)
+                        return size_mb
+                
+                # 如果仍然没有Content-Range，检查Content-Length
+                content_length = resp.headers.get("Content-Length")
+                if content_length:
+                    size_bytes = int(content_length)
+                    size_mb = size_bytes / (1024 * 1024)
+                    return size_mb
+        except Exception:
+            pass
+        return None
+    
     async def _download_image_to_file(self, session: aiohttp.ClientSession, image_url: str, image_index: int = 0, referer: str = None) -> Optional[str]:
         """
         下载图片到临时文件
@@ -362,8 +424,9 @@ class DouyinParser(BaseVideoParser):
                 
                 video_url = result.get('video_url')
                 if video_url:
-                    # 检查视频大小
-                    video_size = await self.get_video_size(video_url, session)
+                    # 检查视频大小（传递页面URL作为referer）
+                    page_referer = url if not is_note else (f"https://www.douyin.com/note/{note_id}" if note_id else url)
+                    video_size = await self.get_video_size(video_url, session, referer=page_referer)
                     
                     # 首先检查是否超过最大允许大小（max_video_size_mb）
                     # 如果超过，跳过该视频，不下载
