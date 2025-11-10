@@ -1,0 +1,117 @@
+{
+    "is_auto_pack": {
+        "description": "是否将解析结果打包为消息集合",
+        "type": "bool",
+        "hint": "需要在任何wechat平台使用请禁用此项",
+        "default": true
+    },
+    "trigger_settings": {
+        "description": "触发设置",
+        "type": "object",
+        "items": {
+            "is_auto_parse": {
+                "description": "是否自动解析视频链接",
+                "type": "bool",
+                "default": true
+            },
+            "trigger_keywords": {
+                "description": "手动触发解析的关键词列表",
+                "type": "list",
+                "hint": "当禁用'是否自动解析视频链接'时，消息头使用这些关键词才会触发解析",
+                "default": ["视频解析", "解析视频"]
+            }
+        }
+    },
+    "media_size_settings": {
+        "description": "媒体大小设置",
+        "type": "object",
+        "items": {
+            "max_media_size_mb": {
+                "description": "最大允许发送的媒体大小(MB)",
+                "type": "float",
+                "hint": "超过此大小的媒体（视频和图片）将被跳过，不下载也不发送。设置为0表示不限制",
+                "default": 0.0
+            },
+            "large_media_threshold_mb": {
+                "description": "大媒体阈值(MB)",
+                "type": "float",
+                "hint": "当媒体大小（视频和图片）超过此阈值时，将下载到缓存目录。媒体会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制",
+                "default": 100.0
+            }
+        }
+    },
+    "download_settings": {
+        "description": "下载和缓存设置",
+        "type": "object",
+        "items": {
+            "cache_dir": {
+                "description": "媒体缓存目录",
+                "type": "string",
+                "hint": "媒体文件缓存目录，用于Twitter视频和所有超过阈值的大媒体（视频和图片）",
+                "default": "/app/sharedFolder/video_parser/cache"
+            },
+            "pre_download_all_media": {
+                "description": "是否预先下载所有媒体到本地",
+                "type": "bool",
+                "hint": "启用后，所有媒体文件将并发下载到缓存目录，发送时使用本地路径。可以提高发送成功率，减少总下载时间，但会短时间增加磁盘占用",
+                "default": false
+            },
+            "max_concurrent_downloads": {
+                "description": "最大并发下载数",
+                "type": "int",
+                "hint": "当启用预先下载所有媒体到本地时，同时下载的媒体文件数量上限。建议值：3-5",
+                "default": 3
+            }
+        }
+    },
+    "parser_enable_settings": {
+        "description": "解析器启用设置",
+        "type": "object",
+        "items": {
+            "enable_bilibili": {
+                "description": "是否启用B站解析器",
+                "type": "bool",
+                "default": true
+            },
+            "enable_douyin": {
+                "description": "是否启用抖音解析器",
+                "type": "bool",
+                "default": true
+            },
+            "enable_kuaishou": {
+                "description": "是否启用快手解析器",
+                "type": "bool",
+                "default": true
+            },
+            "enable_twitter": {
+                "description": "是否启用Twitter/X解析器",
+                "type": "bool",
+                "default": true
+            }
+        }
+    },
+    "twitter_proxy_settings": {
+        "description": "Twitter代理设置",
+        "type": "object",
+        "items": {
+            "twitter_use_image_proxy": {
+                "description": "Twitter图片下载是否使用代理",
+                "type": "bool",
+                "hint": "启用后，Twitter图片下载将通过代理进行。图片CDN大多被墙，建议开启以提升成功率",
+                "default": false
+            },
+            "twitter_use_video_proxy": {
+                "description": "Twitter视频下载是否使用代理",
+                "type": "bool",
+                "hint": "启用后，Twitter视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量",
+                "default": false
+            },
+            "twitter_proxy_url": {
+                "description": "Twitter代理地址",
+                "type": "string",
+                "hint": "代理地址格式：http://host:port 或 socks5://host:port。图片和视频共用此代理地址",
+                "default": ""
+            }
+        }
+    }
+}
