@@ -109,7 +109,8 @@ astrbot_plugin_video_parser/
 
 - **TwitterParser** (`twitter.py`): 解析Twitter/X视频/图片
   - 支持视频和图片解析
-  - 支持代理配置（用于访问 Twitter API 和下载媒体）
+  - 支持代理配置（图片和视频可分别控制是否使用代理，共用同一个代理地址）
+  - fxtwitter API 接口不需要代理，会自动直连
   - 所有视频都会下载到缓存目录（因为 Twitter 视频无法直接通过 URL 发送）
   - 支持预先下载所有媒体到缓存目录（优先检查预下载开关）
   - 支持重试机制（API 调用和媒体下载）
@@ -229,8 +230,15 @@ AstrBot插件主类：
 - **enable_kuaishou**: 是否启用快手解析器（bool，默认 true）
 
 ### 6. twitter_proxy_settings (Twitter代理设置)
-- **twitter_use_proxy**: Twitter解析是否使用代理（bool，默认 false）
-- **twitter_proxy_url**: Twitter代理地址（string，默认 ""，格式：http://host:port）
+- **twitter_use_image_proxy**: Twitter图片下载是否使用代理（bool，默认 false）
+- **twitter_use_video_proxy**: Twitter视频下载是否使用代理（bool，默认 false）
+- **twitter_proxy_url**: Twitter代理地址（string，默认 ""，格式：http://host:port 或 socks5://host:port），图片和视频共用此代理地址
+
+**说明**：
+- 图片和视频可以分别控制是否使用代理
+- 图片和视频共用同一个代理地址（`twitter_proxy_url`）
+- fxtwitter API 接口不需要代理，会自动直连
+- 推荐配置：仅开启图片代理（图片 CDN 大多被墙），视频代理通常无需开启（视频 CDN 几乎不受影响）
 
 ## 核心特性
 
@@ -448,8 +456,11 @@ AstrBot插件主类：
 ### 4. 文件下载
 
 - 使用 aiohttp 异步下载
-- 支持代理（Twitter）
-- 支持重试机制（Twitter）
+- 支持代理（Twitter，图片和视频可分别控制）
+  - Twitter 图片和视频共用同一个代理地址
+  - 图片和视频可以分别控制是否使用代理
+  - fxtwitter API 接口不需要代理，会自动直连
+- 支持重试机制（Twitter API 调用和媒体下载）
 - 支持并发下载（预先下载功能）
   - 优先检查预下载开关，避免重复下载
   - 使用 `max_concurrent_downloads` 控制并发数
@@ -480,9 +491,14 @@ AstrBot插件主类：
 在 `run_local.py` 中配置代理（用于 Twitter 链接）：
 
 ```python
-use_proxy = True
+use_proxy = True  # 是否使用代理（同时用于图片和视频，测试用）
 proxy_url = "http://127.0.0.1:7890"  # 或 "socks5://127.0.0.1:1080"
 ```
+
+**说明**：
+- 本地测试版本中，如果设置了 `use_proxy=True`，图片和视频都会使用同一个代理地址
+- 生产环境中，可以通过配置项分别控制图片和视频是否使用代理
+- fxtwitter API 接口在本地测试和生产环境中都不需要代理
 
 ## 已知问题
 
