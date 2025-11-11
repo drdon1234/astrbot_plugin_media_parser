@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import os
-import re
 from typing import Any
 
 from astrbot.api import logger
@@ -174,14 +173,6 @@ class VideoParserPlugin(Star):
             return True
         for keyword in self.trigger_keywords:
             if keyword in message_str:
-                return True
-        platform_triggers = [
-            r'.?B站解析|b站解析|bilibili解析',
-            r'.?抖音解析',
-            r'.?快手解析'
-        ]
-        for pattern in platform_triggers:
-            if re.search(pattern, message_str):
                 return True
         return False
 
@@ -448,16 +439,18 @@ class VideoParserPlugin(Star):
         if not links_with_parser:
             return
         await event.send(event.plain_result("视频解析bot为您服务 ٩( 'ω' )و"))
+        sender_name, sender_id = self._get_sender_info(event)
         result = await self.parser_manager.build_nodes(
             event,
-            self.is_auto_pack
+            self.is_auto_pack,
+            sender_name,
+            sender_id
         )
         if result is None:
             return
         all_link_nodes, link_metadata, temp_files, video_files, \
             normal_link_count = result
         try:
-            sender_name, sender_id = self._get_sender_info(event)
             if self.is_auto_pack:
                 await self._send_packed_results(
                     event,

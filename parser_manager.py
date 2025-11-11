@@ -257,13 +257,17 @@ class ParserManager:
     async def build_nodes(
         self,
         event,
-        is_auto_pack: bool
+        is_auto_pack: bool,
+        sender_name: str,
+        sender_id: Any
     ) -> Optional[tuple]:
         """构建消息节点。
 
         Args:
             event: 消息事件对象
             is_auto_pack: 是否打包为Node
+            sender_name: 发送者名称
+            sender_id: 发送者ID
 
         Returns:
             包含(all_link_nodes, link_metadata, temp_files, video_files,
@@ -280,14 +284,6 @@ class ParserManager:
             all_link_nodes = []
             link_metadata = []
             normal_link_count = 0
-            sender_name = "视频解析bot"
-            platform = event.get_platform_name()
-            sender_id = event.get_self_id()
-            if platform not in ("wechatpadpro", "webchat", "gewechat"):
-                try:
-                    sender_id = int(sender_id)
-                except (ValueError, TypeError):
-                    sender_id = 10000
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 parse_results = await self._execute_parse_tasks(
