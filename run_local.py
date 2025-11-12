@@ -1,880 +1,127 @@
 # -*- coding: utf-8 -*-
 """
 本地测试脚本
-用于测试视频链接解析功能
+用于测试视频链接解析和下载功能
+只导入 parsers 模块，完全独立的本地测试项目
 """
 import sys
 import os
-import importlib.util
-import types
-import re
 import logging
-from typing import List, Any, Optional, Dict
+import asyncio
+import aiohttp
+import re
+from typing import List, Dict, Any, Optional, Tuple
+from urllib.parse import urlparse
 
-# 获取项目根目录
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 _project_root = os.path.dirname(os.path.abspath(__file__))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# 包名称
-_package_name = "astrbot_plugin_video_parser"
-
-# 创建 astrbot 模拟模块（必须在任何导入之前执行）
-def _setup_astrbot_mock():
-    """创建 astrbot 模拟模块以支持本地测试"""
-    # 创建 astrbot 模块
-    if "astrbot" not in sys.modules:
-        _astrbot_module = types.ModuleType("astrbot")
-        sys.modules["astrbot"] = _astrbot_module
-    
-    # 创建 astrbot.api 模块（作为包）
-    if "astrbot.api" not in sys.modules:
-        _astrbot_api_module = types.ModuleType("astrbot.api")
-        _astrbot_api_module.__path__ = []  # 设置为包
-        sys.modules["astrbot.api"] = _astrbot_api_module
-        setattr(sys.modules["astrbot"], "api", _astrbot_api_module)
-    
-    # 创建 astrbot.api.event 模块
-    if "astrbot.api.event" not in sys.modules:
-        _event_module = types.ModuleType("astrbot.api.event")
-        
-        # 定义 AstrMessageEvent 类
-        class AstrMessageEvent:
-            def __init__(self):
-                self.message_str = ""
-            
-            def get_platform_name(self):
-                return "test"
-            
-            def get_self_id(self):
-                return "test_id"
-            
-            def send(self, result):
-                print(f"[模拟发送] {result}")
-                return None
-            
-            def plain_result(self, text):
-                return text
-            
-            def chain_result(self, components):
-                return components
-        
-        # 定义 filter 装饰器
-        class Filter:
-            @staticmethod
-            def event_message_type(message_type):
-                def decorator(func):
-                    return func
-                return decorator
-        
-        _event_module.AstrMessageEvent = AstrMessageEvent
-        _event_module.filter = Filter()
-        sys.modules["astrbot.api.event"] = _event_module
-        setattr(sys.modules["astrbot.api"], "event", _event_module)
-    
-    # 创建 astrbot.api.star 模块
-    if "astrbot.api.star" not in sys.modules:
-        _star_module = types.ModuleType("astrbot.api.star")
-        
-        class Context:
-            pass
-        
-        class Star:
-            def __init__(self, context):
-                self.context = context
-        
-        def register(name, author, description, version):
-            def decorator(cls):
-                return cls
-            return decorator
-        
-        _star_module.Context = Context
-        _star_module.Star = Star
-        _star_module.register = register
-        sys.modules["astrbot.api.star"] = _star_module
-        setattr(sys.modules["astrbot.api"], "star", _star_module)
-    
-    # 创建 astrbot.core 模块
-    if "astrbot.core" not in sys.modules:
-        _core_module = types.ModuleType("astrbot.core")
-        _core_module.__path__ = []
-        sys.modules["astrbot.core"] = _core_module
-        setattr(sys.modules["astrbot"], "core", _core_module)
-    
-    # 创建 astrbot.core.star 模块
-    if "astrbot.core.star" not in sys.modules:
-        _core_star_module = types.ModuleType("astrbot.core.star")
-        _core_star_module.__path__ = []
-        sys.modules["astrbot.core.star"] = _core_star_module
-        setattr(sys.modules["astrbot.core"], "star", _core_star_module)
-    
-    # 创建 astrbot.core.star.filter 模块
-    if "astrbot.core.star.filter" not in sys.modules:
-        _filter_module = types.ModuleType("astrbot.core.star.filter")
-        _filter_module.__path__ = []
-        sys.modules["astrbot.core.star.filter"] = _filter_module
-        setattr(sys.modules["astrbot.core.star"], "filter", _filter_module)
-    
-    # 创建 astrbot.core.star.filter.event_message_type 模块
-    if "astrbot.core.star.filter.event_message_type" not in sys.modules:
-        _event_message_type_module = types.ModuleType("astrbot.core.star.filter.event_message_type")
-        
-        class EventMessageType:
-            ALL = "all"
-        
-        _event_message_type_module.EventMessageType = EventMessageType
-        sys.modules["astrbot.core.star.filter.event_message_type"] = _event_message_type_module
-        setattr(sys.modules["astrbot.core.star.filter"], "event_message_type", _event_message_type_module)
-    
-    # 创建 astrbot.api.message_components 模块
-    if "astrbot.api.message_components" not in sys.modules:
-        _message_components_module = types.ModuleType("astrbot.api.message_components")
-        
-        # 定义占位符类
-        class Plain:
-            def __init__(self, text: str):
-                self.text = text
-            def __repr__(self):
-                return f"Plain({self.text!r})"
-        
-        class Image:
-            def __init__(self, url: str = None, file: str = None, **kwargs):
-                self.url = url
-                self.file = file
-                self.__dict__.update(kwargs)
-            def __repr__(self):
-                if self.file:
-                    return f"Image(file={self.file!r})"
-                return f"Image(url={self.url!r})"
-        
-        class Video:
-            def __init__(self, url: str = None, file: str = None, **kwargs):
-                self.url = url
-                self.file = file
-                self.__dict__.update(kwargs)
-            def __repr__(self):
-                if self.file:
-                    return f"Video(file={self.file!r})"
-                return f"Video(url={self.url!r})"
-        
-        class Node:
-            def __init__(self, name: str = None, uin: Any = None, content: List = None, **kwargs):
-                self.name = name
-                self.uin = uin
-                self.content = content or []
-                self.__dict__.update(kwargs)
-            def __repr__(self):
-                return f"Node(name={self.name}, content={len(self.content) if self.content else 0})"
-        
-        class Nodes:
-            def __init__(self, nodes: List):
-                self.nodes = nodes
-            def __repr__(self):
-                return f"Nodes(count={len(self.nodes)})"
-        
-        # 将类添加到模块
-        _message_components_module.Plain = Plain
-        _message_components_module.Image = Image
-        _message_components_module.Video = Video
-        _message_components_module.Node = Node
-        _message_components_module.Nodes = Nodes
-        
-        sys.modules["astrbot.api.message_components"] = _message_components_module
-        setattr(sys.modules["astrbot.api"], "message_components", _message_components_module)
-    
-    # 创建 astrbot.api.logger 模拟对象
-    if not hasattr(sys.modules["astrbot.api"], "logger"):
-        _logger = logging.getLogger("astrbot.api")
-        _logger.setLevel(logging.INFO)
-        if not _logger.handlers:
-            _handler = logging.StreamHandler()
-            _handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            _logger.addHandler(_handler)
-        setattr(sys.modules["astrbot.api"], "logger", _logger)
-
-# 立即设置 astrbot 模拟模块（在任何其他导入之前）
-_setup_astrbot_mock()
-
-# 创建包模块结构
-def _setup_package_structure():
-    """设置包结构以支持相对导入"""
-    # 注意：astrbot 模拟模块已经在脚本开始时设置好了
-    # 这里不需要再次调用 _setup_astrbot_mock()
-    
-    # 创建主包
-    if _package_name not in sys.modules:
-        _main_package = types.ModuleType(_package_name)
-        _main_package.__path__ = [_project_root]
-        _main_package.__file__ = os.path.join(_project_root, "__init__.py")
-        sys.modules[_package_name] = _main_package
-    
-    # 创建 parsers 子包
-    _parsers_pkg_name = f"{_package_name}.parsers"
-    _parsers_dir = os.path.join(_project_root, "parsers")
-    
-    if _parsers_pkg_name not in sys.modules:
-        _parsers_package = types.ModuleType(_parsers_pkg_name)
-        _parsers_package.__path__ = [_parsers_dir]
-        _parsers_package.__file__ = os.path.join(_parsers_dir, "__init__.py")
-        _parsers_package.__package__ = _parsers_pkg_name
-        sys.modules[_parsers_pkg_name] = _parsers_package
-        setattr(sys.modules[_package_name], "parsers", _parsers_package)
-    
-    # 加载 base_parser 模块
-    _base_parser_file = os.path.join(_parsers_dir, "base_parser.py")
-    if os.path.exists(_base_parser_file):
-        _base_parser_spec = importlib.util.spec_from_file_location(
-            f"{_parsers_pkg_name}.base_parser", _base_parser_file
-        )
-        _base_parser_module = importlib.util.module_from_spec(_base_parser_spec)
-        _base_parser_module.__package__ = _parsers_pkg_name
-        sys.modules[f"{_parsers_pkg_name}.base_parser"] = _base_parser_module
-        _base_parser_spec.loader.exec_module(_base_parser_module)
-        setattr(sys.modules[_parsers_pkg_name], "base_parser", _base_parser_module)
-    
-    # 加载所有解析器模块
-    _parser_files = {
-        "bilibili": "bilibili.py",
-        "douyin": "douyin.py",
-        "kuaishou": "kuaishou.py",
-        "xiaohongshu": "xiaohongshu.py",
-        "twitter": "twitter.py",
-    }
-    
-    for _parser_name, _parser_file in _parser_files.items():
-        _parser_path = os.path.join(_parsers_dir, _parser_file)
-        if os.path.exists(_parser_path):
-            _parser_module_name = f"{_parsers_pkg_name}.{_parser_name}"
-            _parser_spec = importlib.util.spec_from_file_location(
-                _parser_module_name, _parser_path
-            )
-            _parser_module = importlib.util.module_from_spec(_parser_spec)
-            _parser_module.__package__ = _parsers_pkg_name
-            sys.modules[_parser_module_name] = _parser_module
-            _parser_spec.loader.exec_module(_parser_module)
-            setattr(sys.modules[_parsers_pkg_name], _parser_name, _parser_module)
-    
-    # 加载 parsers/__init__.py（必须在所有解析器模块加载后）
-    _parsers_init_file = os.path.join(_parsers_dir, "__init__.py")
-    if os.path.exists(_parsers_init_file):
-        _parsers_init_spec = importlib.util.spec_from_file_location(
-            _parsers_pkg_name, _parsers_init_file
-        )
-        _parsers_init_module = importlib.util.module_from_spec(_parsers_init_spec)
-        _parsers_init_module.__package__ = _parsers_pkg_name
-        sys.modules[_parsers_pkg_name] = _parsers_init_module
-        _parsers_init_spec.loader.exec_module(_parsers_init_module)
-        # 将 parsers 模块添加到主包
-        setattr(sys.modules[_package_name], "parsers", _parsers_init_module)
-    
-    # 加载 core 模块
-    _core_dir = os.path.join(_project_root, "core")
-    if os.path.exists(_core_dir):
-        _core_pkg_name = f"{_package_name}.core"
-        # 创建 core 包模块
-        if _core_pkg_name not in sys.modules:
-            _core_module = types.ModuleType(_core_pkg_name)
-            _core_module.__package__ = _core_pkg_name
-            _core_module.__path__ = [_core_dir]
-            sys.modules[_core_pkg_name] = _core_module
-            setattr(sys.modules[_package_name], "core", _core_module)
-        
-        # 加载 core 目录下的所有模块
-        _core_init_file = os.path.join(_core_dir, "__init__.py")
-        if os.path.exists(_core_init_file):
-            _core_init_spec = importlib.util.spec_from_file_location(
-                f"{_core_pkg_name}.__init__", _core_init_file
-            )
-            _core_init_module = importlib.util.module_from_spec(_core_init_spec)
-            _core_init_module.__package__ = _core_pkg_name
-            sys.modules[f"{_core_pkg_name}.__init__"] = _core_init_module
-            _core_init_spec.loader.exec_module(_core_init_module)
-        
-        # 加载 core 下的其他模块（按依赖顺序加载）
-        # 先加载基础模块（constants, exceptions）
-        _base_core_files = ["constants.py", "exceptions.py"]
-        for _core_file in _base_core_files:
-            _core_file_path = os.path.join(_core_dir, _core_file)
-            if os.path.exists(_core_file_path):
-                _core_module_name = f"{_core_pkg_name}.{_core_file[:-3]}"
-                _core_spec = importlib.util.spec_from_file_location(
-                    _core_module_name, _core_file_path
-                )
-                _core_module = importlib.util.module_from_spec(_core_spec)
-                _core_module.__package__ = _core_pkg_name
-                sys.modules[_core_module_name] = _core_module
-                _core_spec.loader.exec_module(_core_module)
-    
-    # 加载 utils 模块（需要在 core.exceptions 之后，因为 utils.error_handler 依赖它）
-    _utils_dir = os.path.join(_project_root, "utils")
-    if os.path.exists(_utils_dir):
-        _utils_pkg_name = f"{_package_name}.utils"
-        # 创建 utils 包模块
-        if _utils_pkg_name not in sys.modules:
-            _utils_module = types.ModuleType(_utils_pkg_name)
-            _utils_module.__package__ = _utils_pkg_name
-            _utils_module.__path__ = [_utils_dir]
-            sys.modules[_utils_pkg_name] = _utils_module
-            setattr(sys.modules[_package_name], "utils", _utils_module)
-        
-        # 加载 utils 目录下的所有模块
-        _utils_init_file = os.path.join(_utils_dir, "__init__.py")
-        if os.path.exists(_utils_init_file):
-            _utils_init_spec = importlib.util.spec_from_file_location(
-                f"{_utils_pkg_name}.__init__", _utils_init_file
-            )
-            _utils_init_module = importlib.util.module_from_spec(_utils_init_spec)
-            _utils_init_module.__package__ = _utils_pkg_name
-            sys.modules[f"{_utils_pkg_name}.__init__"] = _utils_init_module
-            _utils_init_spec.loader.exec_module(_utils_init_module)
-        
-        # 加载 utils 下的其他模块
-        _utils_files = ["error_handler.py", "resource_manager.py", 
-                       "message_sender.py", "result_processor.py"]
-        for _utils_file in _utils_files:
-            _utils_file_path = os.path.join(_utils_dir, _utils_file)
-            if os.path.exists(_utils_file_path):
-                _utils_module_name = f"{_utils_pkg_name}.{_utils_file[:-3]}"
-                _utils_spec = importlib.util.spec_from_file_location(
-                    _utils_module_name, _utils_file_path
-                )
-                _utils_module = importlib.util.module_from_spec(_utils_spec)
-                _utils_module.__package__ = _utils_pkg_name
-                sys.modules[_utils_module_name] = _utils_module
-                _utils_spec.loader.exec_module(_utils_module)
-    
-    # 继续加载 core 的其他模块（需要在 utils 之后，因为 parser_manager 需要 utils.error_handler）
-    _core_dir = os.path.join(_project_root, "core")
-    if os.path.exists(_core_dir):
-        _core_pkg_name = f"{_package_name}.core"
-        # 然后加载其他模块
-        _other_core_files = ["config_manager.py", "parser_registry.py", 
-                            "parser_factory.py", "parser_manager.py", 
-                            "parser_initializer.py"]
-        for _core_file in _other_core_files:
-            _core_file_path = os.path.join(_core_dir, _core_file)
-            if os.path.exists(_core_file_path):
-                _core_module_name = f"{_core_pkg_name}.{_core_file[:-3]}"
-                # 如果模块已经加载，跳过
-                if _core_module_name not in sys.modules:
-                    _core_spec = importlib.util.spec_from_file_location(
-                        _core_module_name, _core_file_path
-                    )
-                    _core_module = importlib.util.module_from_spec(_core_spec)
-                    _core_module.__package__ = _core_pkg_name
-                    sys.modules[_core_module_name] = _core_module
-                    _core_spec.loader.exec_module(_core_module)
-        
-        # 为了向后兼容，将模块注册为可以直接导入
-        if f"{_core_pkg_name}.parser_manager" in sys.modules:
-            sys.modules["parser_manager"] = sys.modules[f"{_core_pkg_name}.parser_manager"]
-            sys.modules["core"] = sys.modules[_core_pkg_name]
-            sys.modules["core.parser_manager"] = sys.modules[f"{_core_pkg_name}.parser_manager"]
-        
-        # 注册 parsers 为可以直接导入（在函数开始处定义的变量）
-        _parsers_pkg_name = f"{_package_name}.parsers"
-        if _parsers_pkg_name in sys.modules:
-            sys.modules["parsers"] = sys.modules[_parsers_pkg_name]
-
-# 设置包结构
-_setup_package_structure()
-
-# 现在可以正常导入
-import asyncio
-import aiohttp
-import shutil
-import traceback
-import json
-from urllib.parse import urlparse
-
-# 导入解析器管理器（使用完整包路径）
-from astrbot_plugin_video_parser.core.parser_manager import ParserManager
-from astrbot_plugin_video_parser.parsers import (
-    BilibiliParser,
-    DouyinParser,
-    KuaishouParser,
-    XiaohongshuParser,
-    TwitterParser
-)
+try:
+    from parsers import (
+        BilibiliParser,
+        DouyinParser,
+        KuaishouParser,
+        XiaohongshuParser,
+        TwitterParser,
+        LinkRouter
+    )
+except ImportError as e:
+    logger.error(f"导入 parsers 模块失败: {e}")
+    logger.error("请确保 parsers 模块在正确的路径下")
+    sys.exit(1)
 
 
-class LocalTestDouyinParser(DouyinParser):
-    """本地测试用的抖音解析器包装器，解析时不下载文件，只保存URL信息"""
-
-    async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[Dict[str, Any]]:
-        """
-        解析抖音链接，但不下载文件，只保存URL信息
-        Args:
-            session: aiohttp会话
-            url: 抖音链接
-        Returns:
-            解析结果字典，包含视频/图片URL但不包含文件路径
-        """
-        try:
-            redirected_url = await self.get_redirected_url(session, url)
-            
-            is_note = '/note/' in redirected_url or '/note/' in url
-            note_id = None
-            if is_note:
-                note_match = re.search(r'/note/(\d+)', redirected_url)
-                if not note_match:
-                    note_match = re.search(r'/note/(\d+)', url)
-                if note_match:
-                    note_id = note_match.group(1)
-                    result = await self.fetch_video_info(session, note_id, is_note=True)
-                else:
-                    return None
-            else:
-                video_match = re.search(r'/video/(\d+)', redirected_url)
-                if video_match:
-                    video_id = video_match.group(1)
-                    result = await self.fetch_video_info(session, video_id, is_note=False)
-                else:
-                    match = re.search(r'(\d{19})', redirected_url)
-                    if match:
-                        item_id = match.group(1)
-                        result = await self.fetch_video_info(session, item_id, is_note=False)
-                    else:
-                        return None
-            if not result:
-                return None
-            
-            is_gallery = result.get('is_gallery', False)
-            images = result.get('images', [])
-            image_url_lists = result.get('image_url_lists', [])
-            
-            if is_gallery and images:
-                # 图集：只返回URL，不下载
-                if is_note and note_id:
-                    display_url = f"https://www.douyin.com/note/{note_id}"
-                else:
-                    display_url = url
-                parse_result = {
-                    "video_url": display_url,
-                    "title": result.get('title', ''),
-                    "author": result.get('author', result.get('nickname', '')),
-                    "timestamp": result.get('timestamp', ''),
-                    "thumb_url": result.get('thumb_url'),
-                    "images": images,
-                    "image_url_lists": image_url_lists,
-                    "is_gallery": True
-                }
-                return parse_result
-            
-            video_url = result.get('video_url')
-            if video_url:
-                # 本地测试版本跳过文件大小检查以加快速度
-                video_size = None  # 跳过文件大小检查
-                if self.max_media_size_mb > 0 and video_size is not None:
-                    if video_size > self.max_media_size_mb:
-                        return None
-                parse_result = {
-                    "video_url": url,
-                    "title": result.get('title', ''),
-                    "author": result.get('author', result.get('nickname', '')),
-                    "timestamp": result.get('timestamp', ''),
-                    "thumb_url": result.get('thumb_url'),
-                    "direct_url": video_url,
-                    "file_size_mb": video_size
-                }
-                return parse_result
-            return None
-        except Exception as e:
-            raise RuntimeError(f"解析失败：{str(e)}")
-
-
-class LocalTestKuaishouParser(KuaishouParser):
-    """本地测试用的快手解析器包装器，解析时不下载文件，只保存URL信息"""
-
-    async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[Dict[str, Any]]:
-        """
-        解析快手链接，但不下载文件，只保存URL信息
-        Args:
-            session: aiohttp会话
-            url: 快手链接
-        Returns:
-            解析结果字典，包含视频/图片URL但不包含文件路径
-        """
-        try:
-            is_short = 'v.kuaishou.com' in urlparse(url).netloc
-            if is_short:
-                async with session.get(url, headers=self.headers, allow_redirects=False) as r1:
-                    if r1.status != 302:
-                        return None
-                    loc = r1.headers.get('Location')
-                    if not loc:
-                        return None
-                async with session.get(loc, headers=self.headers) as r2:
-                    if r2.status != 200:
-                        return None
-                    html = await r2.text()
-            else:
-                async with session.get(url, headers=self.headers) as r:
-                    if r.status != 200:
-                        return None
-                    html = await r.text()
-            
-            metadata = self._extract_metadata(html)
-            userName = metadata.get('userName', '')
-            userId = metadata.get('userId', '')
-            if userName and userId:
-                author = f"{userName}(uid:{userId})"
-            elif userName:
-                author = userName
-            elif userId:
-                author = f"(uid:{userId})"
-            else:
-                author = ""
-            title = metadata.get('caption', '') or "快手视频"
-            if len(title) > 100:
-                title = title[:100]
-            
-            video_url = self._parse_video(html)
-            if video_url:
-                # 本地测试版本跳过文件大小检查以加快速度
-                video_size = None  # 跳过文件大小检查
-                if self.max_media_size_mb > 0 and video_size is not None:
-                    if video_size > self.max_media_size_mb:
-                        return None
-                upload_time = self._extract_upload_time(video_url)
-                parse_result = {
-                    "video_url": url,
-                    "title": title,
-                    "author": author,
-                    "timestamp": upload_time or "",
-                    "direct_url": video_url,
-                    "file_size_mb": video_size
-                }
-                return parse_result
-            
-            album = self._parse_album(html)
-            if album:
-                images = album.get('images', [])
-                image_url_lists = album.get('image_url_lists', [])
-                if images:
-                    image_url = self._extract_album_image_url(html)
-                    upload_time = self._extract_upload_time(image_url) if image_url else None
-                    parse_result = {
-                        "video_url": url,
-                        "title": title or "快手图集",
-                        "author": author,
-                        "timestamp": upload_time or "",
-                        "images": images,
-                        "image_url_lists": image_url_lists,
-                        "is_gallery": True
-                    }
-                    return parse_result
-            
-            # 尝试从 rawData 中解析
-            json_match = re.search(r'<script[^>]*>window\.rawData\s*=\s*({.*?});?</script>', html, re.DOTALL)
-            if json_match:
-                try:
-                    data = json.loads(json_match.group(1))
-                    if 'video' in data:
-                        vurl = data['video'].get('url') or data['video'].get('srcNoMark')
-                        if vurl and '.mp4' in vurl:
-                            video_url = self._min_mp4(vurl)
-                            # 跳过文件大小检查
-                            upload_time = self._extract_upload_time(video_url)
-                            return {
-                                "video_url": url,
-                                "title": title,
-                                "author": author,
-                                "timestamp": upload_time or "",
-                                "direct_url": video_url
-                            }
-                    elif 'photo' in data and data.get('type') == 1:
-                        cdn_raw = data['photo'].get('cdn', ['p3.a.yximgs.com'])
-                        if isinstance(cdn_raw, list):
-                            cdns = cdn_raw if len(cdn_raw) > 0 else ['p3.a.yximgs.com']
-                        elif isinstance(cdn_raw, str):
-                            cdns = [cdn_raw]
-                        else:
-                            cdns = ['p3.a.yximgs.com']
-                        music = data['photo'].get('music')
-                        img_list = data['photo'].get('list', [])
-                        album_data = self._build_album(cdns, music, img_list)
-                        if album_data:
-                            images = album_data.get('images', [])
-                            image_url_lists = album_data.get('image_url_lists', [])
-                            if images:
-                                image_url = self._extract_album_image_url(html)
-                                upload_time = self._extract_upload_time(image_url) if image_url else None
-                                parse_result = {
-                                    "video_url": url,
-                                    "title": title or "快手图集",
-                                    "author": author,
-                                    "timestamp": upload_time or "",
-                                    "images": images,
-                                    "image_url_lists": image_url_lists,
-                                    "is_gallery": True
-                                }
-                                return parse_result
-                except json.JSONDecodeError:
-                    pass
-            
-            if metadata.get('userName') or metadata.get('userId') or metadata.get('caption'):
-                return {
-                    "video_url": url,
-                    "title": title,
-                    "author": author,
-                    "timestamp": "",
-                    "direct_url": None
-                }
-            return None
-        except Exception as e:
-            raise RuntimeError(f"解析失败：{str(e)}")
-
-
-class LocalTestXiaohongshuParser(XiaohongshuParser):
-    """本地测试用的小红书解析器包装器，解析时不下载文件，只保存URL信息"""
-
-    async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[Dict[str, Any]]:
-        """
-        解析小红书链接，但不下载文件，只保存URL信息
-        Args:
-            session: aiohttp会话
-            url: 小红书链接
-        Returns:
-            解析结果字典，包含视频/图片URL但不包含文件路径
-        """
-        try:
-            normalized_url = self._normalize_url(url)
-
-            if normalized_url is None:
-                full_url = await self._get_redirect_url(session, url)
-            else:
-                full_url = normalized_url
-
-            html = await self._fetch_page(session, full_url)
-            initial_state = self._extract_initial_state(html)
-            note_info = self._parse_note_data(initial_state)
-
-            note_type = note_info.get("type", "normal")
-            author = note_info.get("author_name", "")
-            author_id = note_info.get("author_id", "")
-            if author and author_id:
-                author = f"{author}(主页id:{author_id})"
-            elif author:
-                author = author
-            elif author_id:
-                author = f"(主页id:{author_id})"
-
-            if note_type == "video":
-                video_url = note_info.get("video_url")
-                if video_url:
-                    # 本地测试版本跳过文件大小检查以加快速度
-                    video_size = None  # 跳过文件大小检查
-                    parse_result = {
-                        "video_url": url,  # 原始URL（可能是短链接）
-                        "page_url": full_url,  # 完整的小红书页面URL，用于下载时的referer
-                        "title": note_info.get("title", ""),
-                        "desc": note_info.get("desc", ""),
-                        "author": author,
-                        "timestamp": note_info.get("publish_time", ""),
-                        "direct_url": video_url,
-                        "file_size_mb": video_size
-                    }
-                    return parse_result
-            else:
-                images = note_info.get("image_urls", [])
-                if images:
-                    parse_result = {
-                        "video_url": url,  # 原始URL（可能是短链接）
-                        "page_url": full_url,  # 完整的小红书页面URL，用于下载时的referer
-                        "title": note_info.get("title", ""),
-                        "desc": note_info.get("desc", ""),
-                        "author": author,
-                        "timestamp": note_info.get("publish_time", ""),
-                        "images": images,
-                        "is_gallery": True
-                    }
-                    return parse_result
-            return None
-        except Exception as e:
-            raise RuntimeError(f"解析失败：{str(e)}")
-
-
-class LocalTestTwitterParser(TwitterParser):
-    """本地测试用的Twitter解析器包装器，解析时不下载文件，只保存URL信息"""
-
-    async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[Dict[str, Any]]:
-        """
-        解析Twitter链接，但不下载文件，只保存URL信息
-        Args:
-            session: aiohttp会话
-            url: Twitter链接
-        Returns:
-            解析结果字典，包含视频/图片URL但不包含文件路径
-        """
-        try:
-            tweet_id_match = re.search(r'/status/(\d+)', url)
-            if not tweet_id_match:
-                return None
-            tweet_id = tweet_id_match.group(1)
-            media_info = await self._fetch_media_info(session, tweet_id)
-            
-            if not media_info.get('images') and not media_info.get('videos'):
-                raise RuntimeError("解析失败：推文不包含图片或视频")
-            
-            video_files = []
-            has_large_video = False
-            max_video_size = None
-            
-            # 处理视频：只保存URL信息，不下载
-            if media_info.get('videos'):
-                for idx, video_info in enumerate(media_info['videos']):
-                    video_url = video_info.get('url')
-                    if video_url:
-                        # 本地测试版本跳过文件大小检查以加快速度
-                        video_size = None  # 跳过文件大小检查
-                        if self.max_media_size_mb > 0 and video_size is not None:
-                            if video_size > self.max_media_size_mb:
-                                continue
-                        exceeds_large_threshold = False
-                        if self.large_media_threshold_mb > 0 and video_size is not None and video_size > self.large_media_threshold_mb:
-                            if self.max_media_size_mb <= 0 or video_size <= self.max_media_size_mb:
-                                exceeds_large_threshold = True
-                                has_large_video = True
-                        # 不下载文件，只保存URL信息
-                        video_files.append({
-                            'url': video_url,
-                            'thumbnail': video_info.get('thumbnail', ''),
-                            'duration': video_info.get('duration', 0),
-                            'exceeds_large_threshold': exceeds_large_threshold,
-                            'file_size_mb': video_size
-                        })
-                        if video_size is not None:
-                            if max_video_size is None or video_size > max_video_size:
-                                max_video_size = video_size
-            
-            # 处理图片：只保存URL信息，不下载
-            image_urls = []
-            if media_info.get('images'):
-                image_urls = media_info['images']
-            
-            if not video_files and not image_urls:
-                raise RuntimeError("解析失败：无有效的媒体内容")
-            
-            result = {
-                "video_url": url,
-                "title": media_info.get('text', '')[:100] or "Twitter 推文",
-                "author": media_info.get('author', ''),
-                "desc": media_info.get('text', ''),
-            }
-            
-            if video_files:
-                result['video_files'] = video_files
-                result['is_twitter_video'] = True
-                result['has_large_video'] = has_large_video
-                if has_large_video:
-                    result['force_separate_send'] = True
-                if max_video_size is not None:
-                    result['file_size_mb'] = max_video_size
-                # 保存第一个视频的URL作为direct_url，用于下载
-                if video_files:
-                    result['direct_url'] = video_files[0].get('url')
-            
-            if image_urls:
-                result['images'] = image_urls
-                result['is_twitter_images'] = True
-                if len(image_urls) > 1:
-                    result['is_gallery'] = True
-            
-            return result
-        except RuntimeError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"解析失败：{str(e)}")
-
-
-def init_parsers(use_proxy=False, proxy_url=None):
+def init_parsers(use_proxy: bool = False, proxy_url: str = None) -> List:
     """
-    初始化解析器
+    初始化解析器列表
     Args:
         use_proxy: 是否使用代理（Twitter/X需要代理才能访问）
         proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port）
     Returns:
-        ParserManager: 解析器管理器
+        解析器列表
     """
-    # 本地测试时，所有解析器都不使用缓存目录
-    # 解析结果只保存在内存中，包含URL信息
-    # 用户选择下载时，再从URL下载到download目录
-    
-    # 如果提供了代理，默认同时用于图片和视频（测试用）
-    use_image_proxy = use_proxy
-    use_video_proxy = use_proxy
-    
     parsers = [
-        BilibiliParser(
-            max_media_size_mb=0.0,
-            large_media_threshold_mb=50.0,
-            cache_dir=None
-        ),
-        LocalTestDouyinParser(
-            max_media_size_mb=0.0,
-            large_media_threshold_mb=50.0,
-            cache_dir=None
-        ),
-        LocalTestKuaishouParser(
-            max_media_size_mb=0.0,
-            large_media_threshold_mb=50.0,
-            cache_dir=None
-        ),
-        LocalTestXiaohongshuParser(
-            max_media_size_mb=0.0,
-            large_media_threshold_mb=50.0,
-            cache_dir=None
-        ),
-        LocalTestTwitterParser(
-            max_media_size_mb=0.0,
-            large_media_threshold_mb=50.0,
-            use_image_proxy=use_image_proxy,
-            use_video_proxy=use_video_proxy,
-            proxy_url=proxy_url,
-            cache_dir=None
-        )
+        BilibiliParser(),
+        DouyinParser(),
+        KuaishouParser(),
+        XiaohongshuParser(),
+        TwitterParser(
+            use_image_proxy=use_proxy,
+            use_video_proxy=use_proxy,
+            proxy_url=proxy_url
+        ) if use_proxy and proxy_url else TwitterParser(),
     ]
-    return ParserManager(parsers)
+    return parsers
 
 
-def print_metadata(result: dict, url: str, parser_name: str):
-    """打印解析后的元数据"""
+def print_metadata(metadata: Dict[str, Any], url: str, parser_name: str):
+    """打印解析后的元数据。
+
+    Args:
+        metadata: 元数据字典
+        url: 原始URL
+        parser_name: 解析器名称
+    """
     print("\n" + "=" * 80)
     print(f"解析器: {parser_name} | 链接: {url}")
     print("-" * 80)
-    print(f"标题: {result.get('title', 'N/A')}")
-    print(f"作者: {result.get('author', 'N/A')}")
     
-    if result.get('video_files'):
-        print(f"\n视频: {len(result['video_files'])} 个")
-        for idx, vf in enumerate(result['video_files'], 1):
-            url_or_path = vf.get('url') or vf.get('direct_url') or vf.get('file_path', 'N/A')
-            size = f" ({vf.get('file_size_mb', 0):.2f} MB)" if vf.get('file_size_mb') else ""
-            print(f"  [{idx}] {url_or_path}{size}")
+    if metadata.get('error'):
+        print(f"❌ 解析失败: {metadata['error']}")
+        print("=" * 80)
+        return
     
-    if result.get('images'):
-        image_count = len(result['images'])
-        is_gallery = result.get('is_gallery', False)
-        gallery_type = "图集" if is_gallery else "图片"
-        print(f"\n{gallery_type}: {image_count} 张")
-        image_url_lists = result.get('image_url_lists', [])
-        for idx, img_url in enumerate(result['images'][:5], 1):
+    print(f"标题: {metadata.get('title', 'N/A')}")
+    print(f"作者: {metadata.get('author', 'N/A')}")
+    print(f"简介: {metadata.get('desc', 'N/A')}")
+    print(f"发布时间: {metadata.get('timestamp', 'N/A')}")
+    
+    media_type = metadata.get('media_type', 'unknown')
+    media_urls = metadata.get('media_urls', [])
+    
+    if media_type == 'video':
+        print(f"\n视频: {len(media_urls)} 个")
+        for idx, video_url in enumerate(media_urls, 1):
+            print(f"  [{idx}] {video_url}")
+        if metadata.get('thumb_url'):
+            print(f"封面: {metadata.get('thumb_url')}")
+    elif media_type == 'gallery':
+        print(f"\n图集: {len(media_urls)} 张")
+        for idx, img_url in enumerate(media_urls[:5], 1):
             backup_count = 0
+            image_url_lists = metadata.get('image_url_lists', [])
             if idx <= len(image_url_lists) and image_url_lists[idx - 1]:
                 backup_count = len(image_url_lists[idx - 1]) - 1
             backup_info = f" (备用URL: {backup_count}个)" if backup_count > 0 else ""
             print(f"  [{idx}] {img_url}{backup_info}")
-        if len(result['images']) > 5:
-            print(f"  ... 还有 {len(result['images']) - 5} 张")
+        if len(media_urls) > 5:
+            print(f"  ... 还有 {len(media_urls) - 5} 张")
     
-    if result.get('direct_url'):
-        print(f"\n直链: {result.get('direct_url')}")
+    if metadata.get('is_twitter_video'):
+        print("标记: Twitter视频（需要下载）")
+    if metadata.get('page_url'):
+        print(f"页面URL: {metadata.get('page_url')}")
     
     print("=" * 80)
 
 
-async def download_file(session: aiohttp.ClientSession, url: str, filepath: str, referer: str = None, proxy: str = None, headers: dict = None, max_retries: int = 2, retry_delay: float = 0.5) -> bool:
+async def download_file(
+    session: aiohttp.ClientSession,
+    url: str,
+    filepath: str,
+    referer: str = None,
+    proxy: str = None,
+    headers: dict = None,
+    max_retries: int = 2,
+    retry_delay: float = 0.5
+) -> bool:
     """
     下载文件到指定路径（带重试机制）
     Args:
@@ -889,47 +136,31 @@ async def download_file(session: aiohttp.ClientSession, url: str, filepath: str,
     Returns:
         bool: 下载是否成功
     """
-    # 默认请求头
     default_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
-        'Sec-Fetch-Dest': 'image',
-        'Sec-Fetch-Mode': 'no-cors',
-        'Sec-Fetch-Site': 'cross-site',
     }
     
-    # 合并自定义请求头
     if headers:
         default_headers.update(headers)
     
-    # 设置Referer
     if referer:
         default_headers['Referer'] = referer
     
-    # 对于Twitter图片/视频，如果没有提供Referer，使用默认值
     if 'pbs.twimg.com' in url or 'video.twimg.com' in url:
         if 'Referer' not in default_headers:
             default_headers['Referer'] = 'https://x.com/'
     
-    # 对于小红书图片/视频，确保使用正确的referer
     if 'xhscdn.com' in url:
         if 'Referer' not in default_headers:
             default_headers['Referer'] = 'https://www.xiaohongshu.com/'
     
-    # 判断是否为视频（根据URL或文件扩展名）
     is_video = '.mp4' in url.lower() or filepath.endswith('.mp4')
     
-    # 对于视频，调整Sec-Fetch-Dest
-    if is_video:
-        default_headers['Sec-Fetch-Dest'] = 'video'
-    else:
-        default_headers['Sec-Fetch-Dest'] = 'image'
-    
     for attempt in range(max_retries + 1):
-        file_path = None
         try:
             if is_video:
                 timeout = aiohttp.ClientTimeout(
@@ -960,7 +191,8 @@ async def download_file(session: aiohttp.ClientSession, url: str, filepath: str,
                     except Exception:
                         pass
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"下载失败 (尝试 {attempt + 1}/{max_retries + 1}): {url}, 错误: {e}")
             if os.path.exists(filepath):
                 try:
                     os.unlink(filepath)
@@ -974,70 +206,38 @@ async def download_file(session: aiohttp.ClientSession, url: str, filepath: str,
     return False
 
 
-async def download_media_concurrent(download_tasks: list, download_dir: str, session: aiohttp.ClientSession, max_concurrent: int = 5):
-    """并发下载多个媒体文件"""
-    os.makedirs(os.path.abspath(download_dir), exist_ok=True)
-    if not download_tasks:
-        return
-    
-    total_files = 0
-    for r, _, _ in download_tasks:
-        total_files += len(r.get('video_files', [])) or (1 if r.get('direct_url') else 0)
-        total_files += len(r.get('images', [])) or len([img for img in r.get('image_files', []) if isinstance(img, str) and os.path.exists(img)])
-    
-    print(f"\n开始并发下载 {len(download_tasks)} 个链接内的媒体（共 {total_files} 个文件，最大并发数: {max_concurrent}）...")
-    
-    semaphore = asyncio.Semaphore(max_concurrent)
-    
-    async def download_single_media(result, url, parser):
-        async with semaphore:
-            return await download_media(result, url, download_dir, session, parser)
-    
-    tasks = [download_single_media(r, u, p) for r, u, p in download_tasks]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    success_count = sum(1 for r in results if r is True)
-    failed_count = len(results) - success_count
-    print(f"\n下载完成: 共 {len(results)} 个链接，失败 {failed_count} 个")
-    if failed_count > 0:
-        print("提示: 部分媒体下载失败，请检查网络连接和代理配置")
-
-
-async def download_media(result: dict, url: str, download_dir: str, session: aiohttp.ClientSession, parser=None):
+async def download_media(
+    metadata: Dict[str, Any],
+    download_dir: str,
+    session: aiohttp.ClientSession,
+    proxy_url: str = None
+) -> bool:
     """
     下载媒体文件
     Args:
-        result: 解析结果
-        url: 原始链接
+        metadata: 解析结果元数据
         download_dir: 下载目录
         session: aiohttp会话
-        parser: 解析器实例（用于获取代理设置等）
+        proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port），用于Twitter媒体下载
     Returns:
         bool: 下载是否成功
     """
     try:
+        if metadata.get('error'):
+            logger.warning(f"跳过下载（解析失败）: {metadata.get('url')}")
+            return False
+        
+        url = metadata.get('url', '')
+        media_type = metadata.get('media_type', '')
+        media_urls = metadata.get('media_urls', [])
+        
+        if not media_urls:
+            logger.warning(f"跳过下载（无媒体URL）: {url}")
+            return False
+        
         download_dir = os.path.abspath(download_dir)
         os.makedirs(download_dir, exist_ok=True)
         
-        # 获取图片和视频代理
-        image_proxy = None
-        video_proxy = None
-        download_headers = None
-        if parser:
-            # 获取图片代理（使用统一的代理地址）
-            if hasattr(parser, 'use_image_proxy') and hasattr(parser, 'proxy_url') and parser.use_image_proxy and parser.proxy_url:
-                image_proxy = parser.proxy_url
-            # 获取视频代理（使用统一的代理地址）
-            if hasattr(parser, 'use_video_proxy') and hasattr(parser, 'proxy_url') and parser.use_video_proxy and parser.proxy_url:
-                video_proxy = parser.proxy_url
-            # 兼容旧代码：如果没有新的代理设置，尝试使用旧的
-            if not image_proxy and not video_proxy:
-                if hasattr(parser, 'use_proxy') and hasattr(parser, 'proxy_url') and parser.use_proxy and parser.proxy_url:
-                    image_proxy = parser.proxy_url
-                    video_proxy = parser.proxy_url
-            if hasattr(parser, 'headers'):
-                download_headers = parser.headers.copy()
-
         parsed_url = urlparse(url)
         domain = parsed_url.netloc.replace('.', '_').replace(':', '_')
         path_parts = [p for p in parsed_url.path.strip('/').split('/') if p]
@@ -1049,170 +249,269 @@ async def download_media(result: dict, url: str, download_dir: str, session: aio
         
         link_dir = os.path.normpath(os.path.join(download_dir, link_dir_name))
         os.makedirs(link_dir, exist_ok=True)
-
+        
         downloaded_files = []
         failed_count = 0
-        video_urls = []
         
-        if result.get('video_files'):
-            for idx, vf in enumerate(result['video_files'], 1):
-                video_url = vf.get('url') or vf.get('direct_url')
-                if video_url:
-                    video_urls.append((idx, video_url))
-                elif vf.get('file_path') and os.path.exists(vf['file_path']):
-                    dest = os.path.join(link_dir, f"video_{idx}.mp4")
-                    try:
-                        shutil.copy2(vf['file_path'], dest)
-                        downloaded_files.append(dest)
-                    except Exception:
-                        failed_count += 1
-                else:
-                    failed_count += 1
+        referer = metadata.get('page_url') or url
+        headers = {}
+        is_twitter = ('twitter.com' in url or 'x.com' in url)
         
-        if not video_urls and result.get('direct_url'):
-            video_urls.append((1, result['direct_url']))
-        
-        download_file_tasks = []
-        
-        for idx, video_url in video_urls:
-            dest_path = os.path.join(link_dir, f"video_{idx}.mp4")
-            headers = download_headers.copy() if download_headers else {}
+        if 'bilibili.com' in url:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.bilibili.com",
+                "Origin": "https://www.bilibili.com"
+            }
+        elif 'douyin.com' in url:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
+                'Referer': 'https://www.douyin.com/'
+            }
+        elif 'xiaohongshu.com' in url or 'xhslink.com' in url:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': referer if 'xiaohongshu.com' in referer else 'https://www.xiaohongshu.com/'
+            }
+        elif is_twitter:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
             referer = url
-            
-            if 'video.twimg.com' in video_url or 'pbs.twimg.com' in video_url:
-                m = re.search(r'/status/(\d+)', url)
-                referer = f'https://x.com/status/{m.group(1)}' if m else 'https://x.com/'
-            elif 'xhscdn.com' in video_url:
-                # 小红书视频需要正确的referer
-                # 优先使用page_url（完整的小红书页面URL），如果没有则使用原始URL
-                page_url = result.get('page_url')
-                if page_url:
-                    referer = page_url
-                elif 'xhslink.com' in url:
-                    referer = 'https://www.xiaohongshu.com/'
-                else:
-                    referer = url
-            
-            if parser and hasattr(parser, 'headers'):
-                # 优先使用parser的headers（包含正确的UA）
-                headers.update(parser.headers)
-            # 确保Referer被设置
-            if referer:
-                headers['Referer'] = referer
-            download_file_tasks.append(('video', idx, video_url, dest_path, referer, video_proxy, headers))
         
-        image_urls = result.get('images', [])
-        image_files = result.get('image_files', [])
-        valid_image_files = [img for img in image_files if isinstance(img, str) and os.path.exists(img)] if image_files else []
-        
-        if image_urls:
-            image_url_lists = result.get('image_url_lists', [])
-            for idx, primary_url in enumerate(image_urls):
-                ext = next((e for e in ['.png', '.webp', '.gif'] if e in primary_url.lower()), '.jpg')
-                dest_path = os.path.join(link_dir, f"image_{idx + 1}{ext}")
+        if media_type == 'video':
+            for idx, media_url in enumerate(media_urls, 1):
+                dest_path = os.path.join(link_dir, f"video_{idx}.mp4")
                 
-                url_list = [primary_url]
-                if idx < len(image_url_lists) and image_url_lists[idx]:
-                    backup_urls = image_url_lists[idx]
-                    url_list = backup_urls if backup_urls[0] == primary_url else [primary_url] + backup_urls
+                media_proxy = None
+                if proxy_url and ('pbs.twimg.com' in media_url or 'video.twimg.com' in media_url):
+                    media_proxy = proxy_url
                 
-                headers = download_headers.copy() if download_headers else {}
-                referer = url
-                
-                if 'pbs.twimg.com' in primary_url:
-                    m = re.search(r'/status/(\d+)', url)
-                    referer = f'https://x.com/status/{m.group(1)}' if m else 'https://x.com/'
-                elif 'douyinpic.com' in primary_url or 'p3-sign.douyinpic.com' in primary_url:
-                    referer = url
-                elif 'kuaishou.com' in url or any('kspkg.com' in u for u in url_list):
-                    referer = url
-                elif 'xhscdn.com' in primary_url:
-                    # 小红书图片需要正确的referer
-                    # 优先使用page_url（完整的小红书页面URL），如果没有则使用原始URL
-                    page_url = result.get('page_url')
-                    if page_url:
-                        referer = page_url
-                    elif 'xhslink.com' in url:
-                        # 短链接，使用默认的小红书referer
-                        referer = 'https://www.xiaohongshu.com/'
-                    else:
-                        # 长链接，使用原始URL作为referer
-                        referer = url
-                
-                if parser and hasattr(parser, 'headers'):
-                    # 优先使用parser的headers（包含正确的UA）
-                    headers.update(parser.headers)
-                # 确保Referer被设置
-                if referer:
-                    headers['Referer'] = referer
-                download_file_tasks.append(('image', idx + 1, url_list, dest_path, referer, image_proxy, headers))
-        elif valid_image_files:
-            for idx, img_file in enumerate(valid_image_files, 1):
-                dest_path = os.path.join(link_dir, f"image_{idx}{os.path.splitext(img_file)[1] or '.jpg'}")
-                try:
-                    shutil.copy2(img_file, dest_path)
+                success = await download_file(
+                    session,
+                    media_url,
+                    dest_path,
+                    referer=referer,
+                    proxy=media_proxy,
+                    headers=headers,
+                    max_retries=3,
+                    retry_delay=1.0
+                )
+                if success:
                     downloaded_files.append(dest_path)
-                except Exception:
+                else:
+                    failed_count += 1
+        elif media_type == 'gallery':
+            image_url_lists = metadata.get('image_url_lists', [])
+            for idx, media_url in enumerate(media_urls, 1):
+                url_list = [media_url]
+                if idx <= len(image_url_lists) and image_url_lists[idx - 1]:
+                    backup_urls = image_url_lists[idx - 1]
+                    if backup_urls and backup_urls[0] == media_url:
+                        url_list = backup_urls
+                    else:
+                        url_list = [media_url] + backup_urls
+                
+                ext = '.jpg'
+                for url_item in url_list:
+                    if '.png' in url_item.lower():
+                        ext = '.png'
+                        break
+                    elif '.webp' in url_item.lower():
+                        ext = '.webp'
+                        break
+                    elif '.gif' in url_item.lower():
+                        ext = '.gif'
+                        break
+                
+                dest_path = os.path.join(link_dir, f"image_{idx}{ext}")
+                success = False
+                for url_item in url_list:
+                    if url_item and isinstance(url_item, str) and url_item.startswith(('http://', 'https://')):
+                        media_proxy = None
+                        if proxy_url and ('pbs.twimg.com' in url_item or 'video.twimg.com' in url_item):
+                            media_proxy = proxy_url
+                        
+                        success = await download_file(
+                            session,
+                            url_item,
+                            dest_path,
+                            referer=referer,
+                            proxy=media_proxy,
+                            headers=headers,
+                            max_retries=1,
+                            retry_delay=0.5
+                        )
+                        if success:
+                            break
+                if success:
+                    downloaded_files.append(dest_path)
+                else:
                     failed_count += 1
         
-        if download_file_tasks:
-            semaphore = asyncio.Semaphore(3)
-            failed_count_list = [failed_count]
-            downloaded_files_list = [downloaded_files]
-            
-            async def download_with_info(media_type, idx, file_url_or_list, dest_path, referer, proxy, headers):
-                async with semaphore:
-                    try:
-                        if isinstance(file_url_or_list, list):
-                            success = False
-                            for url in file_url_or_list:
-                                if url and isinstance(url, str) and url.startswith(('http://', 'https://')):
-                                    success = await download_file(session, url, dest_path, referer=referer, proxy=proxy, headers=headers, max_retries=1, retry_delay=0.5)
-                                    if success:
-                                        break
-                        else:
-                            success = await download_file(session, file_url_or_list, dest_path, referer=referer, proxy=proxy, headers=headers, max_retries=3, retry_delay=1.0)
-                        
-                        if success:
-                            downloaded_files_list[0].append(dest_path)
-                        else:
-                            failed_count_list[0] += 1
-                    except Exception:
-                        failed_count_list[0] += 1
-            
-            tasks = [download_with_info(*task) for task in download_file_tasks]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            
-            failed_count = failed_count_list[0]
-            downloaded_files = downloaded_files_list[0]
-
         if failed_count == 0 and len(downloaded_files) > 0:
+            print(f"✓ {url} 下载成功 ({len(downloaded_files)} 个文件)")
             return True
-        print(f"{url} 下载失败！")
-        print("-" * 80)
+        else:
+            print(f"✗ {url} 下载失败 (成功: {len(downloaded_files)}, 失败: {failed_count})")
+            return False
+    except Exception as e:
+        logger.exception(f"下载媒体失败: {metadata.get('url', '')}, 错误: {e}")
+        print(f"✗ {metadata.get('url', '')} 下载失败: {e}")
         return False
-    except Exception:
-        print(f"{url} 下载失败！")
-        print("-" * 80)
-        return False
+
+
+async def download_media_concurrent(
+    metadata_list: List[Dict[str, Any]],
+    download_dir: str,
+    session: aiohttp.ClientSession,
+    proxy_url: str = None,
+    max_concurrent: int = 5
+):
+    """并发下载多个媒体文件。
+
+    Args:
+        metadata_list: 元数据列表
+        download_dir: 下载目录
+        session: aiohttp会话
+        proxy_url: 代理地址（可选）
+        max_concurrent: 最大并发数
+    """
+    os.makedirs(os.path.abspath(download_dir), exist_ok=True)
+    if not metadata_list:
+        return
+    
+    total_files = sum(len(meta.get('media_urls', [])) for meta in metadata_list)
+    print(f"\n开始并发下载 {len(metadata_list)} 个链接内的媒体（共 {total_files} 个文件，最大并发数: {max_concurrent}）...")
+    if proxy_url:
+        print(f"使用代理: {proxy_url}")
+    
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def download_single_metadata(metadata):
+        """下载单个元数据的媒体。
+
+        Args:
+            metadata: 元数据字典
+
+        Returns:
+            下载是否成功
+        """
+        async with semaphore:
+            return await download_media(metadata, download_dir, session, proxy_url)
+    
+    tasks = [download_single_metadata(meta) for meta in metadata_list if meta.get('media_urls')]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    success_count = sum(1 for r in results if r is True)
+    failed_count = len(results) - success_count
+    print(f"\n下载完成: 共 {len(results)} 个链接，成功 {success_count} 个，失败 {failed_count} 个")
+    if failed_count > 0:
+        print("提示: 部分媒体下载失败，请检查网络连接和代理配置")
+
+
+async def parse_text(
+    text: str,
+    parsers: List,
+    session: aiohttp.ClientSession
+) -> List[Dict[str, Any]]:
+    """
+    解析文本中的所有链接
+    Args:
+        text: 输入文本
+        parsers: 解析器列表
+        session: aiohttp会话
+    Returns:
+        解析结果元数据列表
+    """
+    link_router = LinkRouter(parsers)
+    links_with_parser = link_router.extract_links_with_parser(text)
+    
+    if not links_with_parser:
+        return []
+    
+    seen_links = set()
+    unique_links_with_parser = []
+    for link, parser in links_with_parser:
+        if link not in seen_links:
+            seen_links.add(link)
+            unique_links_with_parser.append((link, parser))
+    
+    async def parse_one_link(url: str, parser) -> Tuple[str, Dict[str, Any], Optional[str]]:
+        """解析单个链接。
+
+        Args:
+            url: 链接URL
+            parser: 解析器实例
+
+        Returns:
+            包含(url, metadata, error)的元组
+        """
+        try:
+            result = await parser.parse(session, url)
+            if result:
+                return (url, result, None)
+            else:
+                return (url, None, "解析失败：未返回结果")
+        except RuntimeError as e:
+            error_msg = str(e)
+            return (url, None, error_msg)
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            return (url, None, f"{error_type}: {error_msg}")
+    
+    tasks = [parse_one_link(url, parser) for url, parser in unique_links_with_parser]
+    parse_results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    metadata_list = []
+    for i, result in enumerate(parse_results):
+        if isinstance(result, Exception):
+            url, parser = unique_links_with_parser[i]
+            metadata_list.append({
+                'url': url,
+                'error': str(result),
+                'media_type': 'error',
+                'media_urls': []
+            })
+        else:
+            url, metadata, error = result
+            if error:
+                metadata_list.append({
+                    'url': url,
+                    'error': error,
+                    'media_type': 'error',
+                    'media_urls': []
+                })
+            elif metadata:
+                metadata_list.append(metadata)
+            else:
+                metadata_list.append({
+                    'url': url,
+                    'error': '解析失败：未返回结果',
+                    'media_type': 'error',
+                    'media_urls': []
+                })
+    
+    return metadata_list
 
 
 async def main():
-    """主函数"""
+    """主函数，运行交互式测试工具。"""
     print("=" * 80)
     print("视频链接解析测试工具")
     print("支持的平台: B站、抖音、快手、小红书、Twitter/X")
     print("输入 'q' 退出程序")
     print("=" * 80)
     
-    use_proxy = True
-    proxy_url = "http://127.0.0.1:7897"
+    use_proxy = False
+    proxy_url = "http://127.0.0.1:7897" # 这是 clash verge 的默认端口
     
-    parser_manager = init_parsers(use_proxy=use_proxy, proxy_url=proxy_url)
+    parsers = init_parsers(use_proxy=use_proxy, proxy_url=proxy_url)
     download_dir = os.path.join(os.path.dirname(__file__), "download")
     os.makedirs(download_dir, exist_ok=True)
     
-    if use_proxy:
+    if use_proxy and proxy_url:
         print(f"✓ 代理: {proxy_url}\n")
 
     timeout = aiohttp.ClientTimeout(total=60)
@@ -1237,9 +536,7 @@ async def main():
                             continue
                     else:
                         empty_line_count = 0
-                        # 检查是否包含多行（可能是直接粘贴的）
                         if '\n' in line or '\r' in line:
-                            # 分割多行
                             multilines = [l.strip() for l in line.replace('\r\n', '\n').replace('\r', '\n').split('\n') if l.strip()]
                             lines.extend(multilines)
                         else:
@@ -1256,7 +553,6 @@ async def main():
             
             text = '\n'.join(lines)
             print(f"\n正在解析... ({len(text)} 字符, {len(lines)} 行)")
-            print(f"调试: 提取到的文本前100字符: {text[:100]}...")
             print("-" * 80)
 
             connector = aiohttp.TCPConnector(
@@ -1267,77 +563,52 @@ async def main():
                 enable_cleanup_closed=True
             )
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                # 提取链接
-                links_with_parser = parser_manager.extract_all_links(text)
-                if not links_with_parser:
-                    print("未找到可解析的链接")
+                metadata_list = await parse_text(text, parsers, session)
+                
+                if not metadata_list:
+                    print("未找到可解析的链接或解析失败")
                     continue
 
-                print(f"找到 {len(links_with_parser)} 个链接")
-                if len(links_with_parser) > 0:
-                    print("链接列表:")
-                    for idx, (url, parser) in enumerate(links_with_parser, 1):
-                        parser_name = parser.name if hasattr(parser, 'name') else type(parser).__name__
-                        print(f"  [{idx}] {parser_name}: {url}")
-                print()
+                print(f"找到 {len(metadata_list)} 个链接的解析结果\n")
                 
-                print("正在并发解析所有链接...")
-                # 并发解析所有链接
-                async def parse_one_link(url, parser):
-                    """解析单个链接"""
-                    try:
-                        result = await parser.parse(session, url)
-                        return (url, parser, result, None if result else "解析失败：未返回结果")
-                    except RuntimeError as e:
-                        # RuntimeError 是业务逻辑错误，直接使用错误消息
-                        error_msg = str(e)
-                        return (url, parser, None, error_msg)
-                    except Exception as e:
-                        # 其他异常，返回异常信息
-                        error_type = type(e).__name__
-                        error_msg = str(e)
-                        return (url, parser, None, f"{error_type}: {error_msg}")
-                
-                # 创建所有解析任务
-                tasks = [parse_one_link(url, parser) for url, parser in links_with_parser]
-                # 并发执行所有任务
-                parse_results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # 处理结果，将异常转换为错误结果
-                processed_results = []
-                for i, result in enumerate(parse_results):
-                    if isinstance(result, Exception):
-                        url, parser = links_with_parser[i]
-                        processed_results.append((url, parser, None, f"异常: {str(result)}"))
-                    else:
-                        processed_results.append(result)
-                
-                # 显示解析结果
                 success_count = 0
                 fail_count = 0
-                for url, parser, result, error in processed_results:
-                    if result:
-                        success_count += 1
-                        parser_name = parser.name if hasattr(parser, 'name') else type(parser).__name__
-                        print_metadata(result, url, parser_name)
-                    else:
+                for metadata in metadata_list:
+                    if metadata.get('error'):
                         fail_count += 1
-                        parser_name = parser.name if hasattr(parser, 'name') else type(parser).__name__
-                        print(f"\n⚠️ 解析失败: {parser_name}")
+                        url = metadata.get('url', '未知')
+                        print(f"\n⚠️ 解析失败")
                         print(f"   链接: {url}")
-                        if error:
-                            print(f"   错误: {error}")
+                        print(f"   错误: {metadata.get('error')}")
+                    else:
+                        success_count += 1
+                        parser_name = "未知解析器"
+                        try:
+                            link_router = LinkRouter(parsers)
+                            parser = link_router.find_parser(metadata.get('url', ''))
+                            parser_name = parser.name if parser else "未知解析器"
+                        except ValueError:
+                            pass
+                        print_metadata(metadata, metadata.get('url', ''), parser_name)
                 
                 print(f"\n解析完成: 成功 {success_count} 个, 失败 {fail_count} 个")
                 
-                if processed_results:
+                if metadata_list:
                     choice = input("\n是否下载所有媒体到本地? (y/n/q退出): ").strip().lower()
                     if choice == 'q':
                         return
                     elif choice in ('y', 'yes', '是'):
-                        download_tasks = [(r, u, p) for u, p, r, e in processed_results if r]
-                        if download_tasks:
-                            await download_media_concurrent(download_tasks, download_dir, session)
+                        valid_metadata_list = [
+                            meta for meta in metadata_list
+                            if not meta.get('error') and meta.get('media_urls')
+                        ]
+                        if valid_metadata_list:
+                            await download_media_concurrent(
+                                valid_metadata_list,
+                                download_dir,
+                                session,
+                                proxy_url=proxy_url if use_proxy else None
+                            )
                 
                 print("\n" + "=" * 80 + "\n")
 
@@ -1346,6 +617,7 @@ async def main():
             break
         except Exception as e:
             print(f"\n错误: {e}")
+            import traceback
             traceback.print_exc()
 
 

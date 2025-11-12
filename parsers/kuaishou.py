@@ -25,31 +25,9 @@ MOBILE_HEADERS = {
 class KuaishouParser(BaseVideoParser):
     """快手视频解析器"""
 
-    def __init__(
-        self,
-        max_media_size_mb: float = 0.0,
-        large_media_threshold_mb: float = 50.0,
-        cache_dir: str = "/app/sharedFolder/video_parser/cache",
-        pre_download_all_media: bool = False,
-        max_concurrent_downloads: int = 3
-    ):
-        """初始化快手解析器。
-
-        Args:
-            max_media_size_mb: 最大允许的媒体大小(MB)
-            large_media_threshold_mb: 大媒体阈值(MB)
-            cache_dir: 媒体缓存目录
-            pre_download_all_media: 是否预先下载所有媒体到本地
-            max_concurrent_downloads: 最大并发下载数
-        """
-        super().__init__(
-            "快手",
-            max_media_size_mb,
-            large_media_threshold_mb,
-            cache_dir,
-            pre_download_all_media,
-            max_concurrent_downloads
-        )
+    def __init__(self):
+        """初始化快手解析器。"""
+        super().__init__("快手")
         self.headers = MOBILE_HEADERS
         self.semaphore = asyncio.Semaphore(10)
 
@@ -337,33 +315,6 @@ class KuaishouParser(BaseVideoParser):
             return self._min_mp4(m.group(2))
         return None
 
-    async def _download_image_to_file(
-        self,
-        session: aiohttp.ClientSession,
-        image_url: str,
-        index: int = 0
-    ) -> Optional[str]:
-        """下载图片到临时文件（使用基类方法）。
-
-        Args:
-            session: aiohttp会话
-            image_url: 图片URL
-            index: 图片索引
-
-        Returns:
-            临时文件路径，失败返回None
-        """
-        kuaishou_headers = {
-            'Referer': 'https://www.kuaishou.com/',
-        }
-        return await super()._download_image_to_file(
-            session,
-            image_url,
-            index,
-            kuaishou_headers,
-            None,
-            'https://www.kuaishou.com/'
-        )
 
     async def _fetch_html(
         self,
@@ -445,466 +396,6 @@ class KuaishouParser(BaseVideoParser):
                 return None
         return None
 
-    async def _process_video_from_html(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        html: str,
-        title: str,
-        author: str,
-        downloaded_files: List[str]
-    ) -> Optional[Dict[str, Any]]:
-        """从HTML解析视频。
-
-        Args:
-            session: aiohttp会话
-            url: 快手链接
-            html: HTML内容
-            title: 标题
-            author: 作者
-            downloaded_files: 下载的文件列表（用于跟踪清理）
-
-        Returns:
-            解析结果字典，如果解析失败返回None
-
-        Raises:
-            RuntimeError: 当本地缓存路径无效时
-        """
-        video_url = self._parse_video(html)
-        if not video_url:
-            return None
-
-        video_size = await self.get_video_size(video_url, session)
-        if self.max_media_size_mb > 0 and video_size is not None:
-            if video_size > self.max_media_size_mb:
-                return None
-
-        has_large_video = False
-        video_file_path = None
-        if (self.large_media_threshold_mb > 0 and
-                video_size is not None and
-                video_size > self.large_media_threshold_mb):
-            if not self.cache_dir_available:
-                raise RuntimeError("解析失败：本地缓存路径无效")
-            if (self.max_media_size_mb <= 0 or
-                    video_size <= self.max_media_size_mb):
-                has_large_video = True
-                video_id = self._extract_media_id(url)
-                video_file_path = await self._download_large_media_to_cache(
-                    session,
-                    video_url,
-                    video_id,
-                    index=0,
-                    headers=self.headers,
-                    is_video=True,
-                    referer=url
-                )
-                if video_file_path:
-                    downloaded_files.append(video_file_path)
-
-        upload_time = self._extract_upload_time(video_url)
-        parse_result = {
-            "video_url": url,
-            "title": title,
-            "author": author,
-            "timestamp": upload_time or "",
-            "direct_url": video_url,
-            "file_size_mb": video_size
-        }
-
-        if has_large_video:
-            parse_result['force_separate_send'] = True
-            if video_file_path:
-                parse_result['video_files'] = [
-                    {'file_path': video_file_path}
-                ]
-
-        if (self.pre_download_all_media and
-                self.cache_dir_available and
-                not has_large_video):
-            media_items = []
-            if video_url:
-                video_id = self._extract_media_id(url)
-                media_items.append({
-                    'url': video_url,
-                    'media_id': video_id,
-                    'index': 0,
-                    'is_video': True,
-                    'headers': self.headers,
-                    'referer': url
-                })
-            if media_items:
-                download_results = await self._pre_download_media(
-                    session,
-                    media_items,
-                    self.headers
-                )
-                for download_result in download_results:
-                    if (download_result.get('success') and
-                            download_result.get('file_path')):
-                        parse_result['video_files'] = [{
-                            'file_path': download_result['file_path']
-                        }]
-                        parse_result['direct_url'] = None
-                        downloaded_files.append(
-                            download_result['file_path']
-                        )
-                        break
-
-        return parse_result
-
-    async def _download_album_images(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        images: List[str],
-        image_url_lists: List[List[str]],
-        downloaded_files: List[str]
-    ) -> List[str]:
-        """下载图集图片。
-
-        Args:
-            session: aiohttp会话
-            url: 快手链接
-            images: 图片URL列表
-            image_url_lists: 图片URL列表（包含备用URL）
-            downloaded_files: 下载的文件列表（用于跟踪清理）
-
-        Returns:
-            下载的图片文件路径列表
-        """
-        image_files = []
-
-        if (self.pre_download_all_media and
-                self.cache_dir_available):
-            media_items = []
-            for idx, img_url in enumerate(images):
-                if (img_url and isinstance(img_url, str) and
-                        img_url.startswith(('http://', 'https://'))):
-                    image_size = await self.get_image_size(
-                        img_url,
-                        session
-                    )
-                    if (self.max_media_size_mb > 0 and
-                            image_size is not None):
-                        if image_size > self.max_media_size_mb:
-                            continue
-                    image_id = self._extract_media_id(url)
-                    backup_urls = []
-                    if (idx < len(image_url_lists) and
-                            image_url_lists[idx]):
-                        backup_urls = (
-                            image_url_lists[idx][1:]
-                            if len(image_url_lists[idx]) > 1
-                            else []
-                        )
-                    media_items.append({
-                        'url': img_url,
-                        'media_id': image_id,
-                        'index': idx,
-                        'is_video': False,
-                        'headers': self.headers,
-                        'backup_urls': backup_urls,
-                        'referer': url,
-                        'default_referer': 'https://www.kuaishou.com/'
-                    })
-            if media_items:
-                download_results = await self._pre_download_media(
-                    session,
-                    media_items,
-                    self.headers
-                )
-                for idx, download_result in enumerate(download_results):
-                    if (download_result.get('success') and
-                            download_result.get('file_path')):
-                        image_files.append(
-                            download_result['file_path']
-                        )
-                        downloaded_files.append(
-                            download_result['file_path']
-                        )
-                    else:
-                        item = media_items[idx]
-                        backup_urls = item.get('backup_urls', [])
-                        if backup_urls:
-                            image_id = self._extract_media_id(url)
-                            cache_path = (
-                                await self._retry_download_with_backup_urls(
-                                    session,
-                                    download_result,
-                                    backup_urls,
-                                    image_id,
-                                    item['index'],
-                                    headers=self.headers,
-                                    default_referer='https://www.kuaishou.com/'
-                                )
-                            )
-                            if cache_path:
-                                image_files.append(cache_path)
-                                downloaded_files.append(cache_path)
-        else:
-            for idx, primary_url in enumerate(images):
-                if (not primary_url or
-                        not isinstance(primary_url, str) or
-                        not primary_url.startswith(
-                            ('http://', 'https://')
-                        )):
-                    continue
-                image_size = await self.get_image_size(
-                    primary_url,
-                    session
-                )
-                if (self.max_media_size_mb > 0 and
-                        image_size is not None):
-                    if image_size > self.max_media_size_mb:
-                        continue
-                backup_urls = []
-                if (idx < len(image_url_lists) and
-                        image_url_lists[idx]):
-                    backup_urls = image_url_lists[idx][1:]
-                    all_urls = image_url_lists[idx]
-                else:
-                    all_urls = [primary_url]
-                image_file = None
-                if (self.large_media_threshold_mb > 0 and
-                        image_size is not None and
-                        image_size > self.large_media_threshold_mb):
-                    if (self.max_media_size_mb <= 0 or
-                            image_size <= self.max_media_size_mb):
-                        image_id = self._extract_media_id(url)
-                        image_file = (
-                            await self._download_large_media_to_cache(
-                                session,
-                                primary_url,
-                                image_id,
-                                index=idx,
-                                headers=self.headers,
-                                is_video=False,
-                                referer=url,
-                                default_referer='https://www.kuaishou.com/'
-                            )
-                        )
-                        if image_file:
-                            downloaded_files.append(image_file)
-                        elif backup_urls:
-                            for backup_url in backup_urls:
-                                image_file = (
-                                    await self._download_large_media_to_cache(
-                                        session,
-                                        backup_url,
-                                        image_id,
-                                        index=idx,
-                                        headers=self.headers,
-                                        is_video=False,
-                                        referer=url,
-                                        default_referer='https://www.kuaishou.com/'
-                                    )
-                                )
-                                if image_file:
-                                    downloaded_files.append(image_file)
-                                    break
-                if not image_file:
-                    for url_item in all_urls:
-                        image_file = await self._download_image_to_file(
-                            session,
-                            url_item,
-                            index=idx
-                        )
-                        if image_file:
-                            downloaded_files.append(image_file)
-                            break
-                if image_file:
-                    image_files.append(image_file)
-
-        return image_files
-
-    async def _process_album_from_html(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        html: str,
-        title: str,
-        author: str,
-        downloaded_files: List[str]
-    ) -> Optional[Dict[str, Any]]:
-        """从HTML解析图集。
-
-        Args:
-            session: aiohttp会话
-            url: 快手链接
-            html: HTML内容
-            title: 标题
-            author: 作者
-            downloaded_files: 下载的文件列表（用于跟踪清理）
-
-        Returns:
-            解析结果字典，如果解析失败返回None
-
-        Raises:
-            RuntimeError: 当本地缓存路径无效时
-        """
-        album = self._parse_album(html)
-        if not album:
-            return None
-
-        if not self.cache_dir_available:
-            raise RuntimeError("解析失败：本地缓存路径无效")
-
-        images = album.get('images', [])
-        image_url_lists = album.get('image_url_lists', [])
-        if not images:
-            return None
-
-        image_url = self._extract_album_image_url(html)
-        upload_time = (
-            self._extract_upload_time(image_url)
-            if image_url
-            else None
-        )
-
-        image_files = await self._download_album_images(
-            session,
-            url,
-            images,
-            image_url_lists,
-            downloaded_files
-        )
-        if not image_files:
-            return None
-
-        if image_files and self.pre_download_all_media:
-            images = []
-
-        return {
-            "video_url": url,
-            "title": title or "快手图集",
-            "author": author,
-            "timestamp": upload_time or "",
-            "images": images,
-            "image_files": image_files,
-            "is_gallery": True
-        }
-
-    async def _process_album_from_rawdata(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        html: str,
-        title: str,
-        author: str,
-        data: Dict[str, Any],
-        downloaded_files: List[str]
-    ) -> Optional[Dict[str, Any]]:
-        """从rawData JSON解析图集。
-
-        Args:
-            session: aiohttp会话
-            url: 快手链接
-            html: HTML内容
-            title: 标题
-            author: 作者
-            data: rawData JSON数据
-            downloaded_files: 下载的文件列表（用于跟踪清理）
-
-        Returns:
-            解析结果字典，如果解析失败返回None
-        """
-        if 'photo' not in data or data.get('type') != 1:
-            return None
-
-        cdn_raw = data['photo'].get('cdn', ['p3.a.yximgs.com'])
-        if isinstance(cdn_raw, list):
-            cdns = (
-                cdn_raw if len(cdn_raw) > 0 else ['p3.a.yximgs.com']
-            )
-        elif isinstance(cdn_raw, str):
-            cdns = [cdn_raw]
-        else:
-            cdns = ['p3.a.yximgs.com']
-
-        music = data['photo'].get('music')
-        img_list = data['photo'].get('list', [])
-        album_data = self._build_album(cdns, music, img_list)
-        if not album_data:
-            return None
-
-        images = album_data.get('images', [])
-        image_url_lists = album_data.get('image_url_lists', [])
-        if not images:
-            return None
-
-        if not self.cache_dir_available:
-            raise RuntimeError("解析失败：本地缓存路径无效")
-
-        image_url = self._extract_album_image_url(html)
-        upload_time = (
-            self._extract_upload_time(image_url)
-            if image_url
-            else None
-        )
-
-        image_files = await self._download_album_images(
-            session,
-            url,
-            images,
-            image_url_lists,
-            downloaded_files
-        )
-        if not image_files:
-            return None
-
-        if image_files and self.pre_download_all_media:
-            images = []
-        
-        return {
-            "video_url": url,
-            "title": title or "快手图集",
-            "author": author,
-            "timestamp": upload_time or "",
-            "images": images,
-            "image_files": image_files,
-            "is_gallery": True
-        }
-
-    async def _process_video_from_rawdata(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        title: str,
-        author: str,
-        data: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """从rawData JSON解析视频。
-
-        Args:
-            session: aiohttp会话
-            url: 快手链接
-            title: 标题
-            author: 作者
-            data: rawData JSON数据
-
-        Returns:
-            解析结果字典，如果解析失败返回None
-        """
-        if 'video' not in data:
-            return None
-        
-        vurl = data['video'].get('url') or data['video'].get('srcNoMark')
-        if not vurl or '.mp4' not in vurl:
-            return None
-        
-        video_url = self._min_mp4(vurl)
-        if not await self.check_media_size(video_url, session, is_video=True):
-            return None
-        
-        upload_time = self._extract_upload_time(video_url)
-        return {
-            "video_url": url,
-            "title": title,
-            "author": author,
-            "timestamp": upload_time or "",
-            "direct_url": video_url
-        }
 
     async def parse(
         self,
@@ -918,150 +409,115 @@ class KuaishouParser(BaseVideoParser):
             url: 快手链接
 
         Returns:
-            解析结果字典，如果解析失败返回None
+            解析结果字典，包含标准化的元数据格式
+
+        Raises:
+            RuntimeError: 当解析失败时
         """
         async with self.semaphore:
-            downloaded_files = []
-            try:
-                html = await self._fetch_html(session, url)
-                if not html:
-                    return None
+            html = await self._fetch_html(session, url)
+            if not html:
+                raise RuntimeError(f"无法获取HTML内容: {url}")
 
-                metadata = self._extract_metadata(html)
-                author = self._build_author_info(metadata)
-                title = metadata.get('caption', '') or "快手视频"
-                if len(title) > 100:
-                    title = title[:100]
+            metadata = self._extract_metadata(html)
+            author = self._build_author_info(metadata)
+            title = metadata.get('caption', '') or "快手视频"
+            if len(title) > 100:
+                title = title[:100]
 
-                video_result = await self._process_video_from_html(
-                    session,
-                    url,
-                    html,
-                    title,
-                    author,
-                    downloaded_files
-                )
-                if video_result:
-                    downloaded_files = []
-                    return video_result
+            video_url = self._parse_video(html)
+            if video_url:
+                upload_time = self._extract_upload_time(video_url)
+                return {
+                    "url": url,
+                    "media_type": "video",
+                    "title": title,
+                    "author": author,
+                    "desc": "",  # 快手API不返回描述
+                    "timestamp": upload_time or "",
+                    "media_urls": [video_url],
+                    "thumb_url": None,
+                }
 
-                album_result = await self._process_album_from_html(
-                    session,
-                    url,
-                    html,
-                    title,
-                    author,
-                    downloaded_files
-                )
-                if album_result:
-                    downloaded_files = []
-                    return album_result
-
-                rawdata = self._parse_rawdata_json(html)
-                if rawdata:
-                    video_result = (
-                        await self._process_video_from_rawdata(
-                            session,
-                            url,
-                            title,
-                            author,
-                            rawdata
-                        )
+            album = self._parse_album(html)
+            if album:
+                images = album.get('images', [])
+                image_url_lists = album.get('image_url_lists', [])
+                if images:
+                    image_url = self._extract_album_image_url(html)
+                    upload_time = (
+                        self._extract_upload_time(image_url)
+                        if image_url
+                        else None
                     )
-                    if video_result:
-                        return video_result
-
-                    album_result = (
-                        await self._process_album_from_rawdata(
-                            session,
-                            url,
-                            html,
-                            title,
-                            author,
-                            rawdata,
-                            downloaded_files
-                        )
-                    )
-                    if album_result:
-                        downloaded_files = []
-                        return album_result
-
-                if (metadata.get('userName') or
-                        metadata.get('userId') or
-                        metadata.get('caption')):
                     return {
-                        "video_url": url,
-                        "title": title,
+                        "url": url,
+                        "media_type": "gallery",
+                        "title": title or "快手图集",
                         "author": author,
-                        "timestamp": "",
-                        "direct_url": None
+                        "desc": "",  # 快手API不返回描述
+                        "timestamp": upload_time or "",
+                        "media_urls": images,
+                        "thumb_url": None,
+                        "image_url_lists": image_url_lists,
                     }
 
-                return None
-            finally:
-                if downloaded_files:
-                    for file_path in downloaded_files:
-                        if file_path and os.path.exists(file_path):
-                            try:
-                                os.unlink(file_path)
-                            except Exception:
-                                pass
+            rawdata = self._parse_rawdata_json(html)
+            if rawdata:
+                if 'video' in rawdata:
+                    vurl = rawdata['video'].get('url') or rawdata['video'].get('srcNoMark')
+                    if vurl and '.mp4' in vurl:
+                        video_url = self._min_mp4(vurl)
+                        upload_time = self._extract_upload_time(video_url)
+                        return {
+                            "url": url,
+                            "media_type": "video",
+                            "title": title,
+                            "author": author,
+                            "desc": "",  # 快手API不返回描述
+                            "timestamp": upload_time or "",
+                            "media_urls": [video_url],
+                            "thumb_url": None,
+                        }
+                
+                if 'photo' in rawdata and rawdata.get('type') == 1:
+                    cdn_raw = rawdata['photo'].get('cdn', ['p3.a.yximgs.com'])
+                    if isinstance(cdn_raw, list):
+                        cdns = cdn_raw if len(cdn_raw) > 0 else ['p3.a.yximgs.com']
+                    elif isinstance(cdn_raw, str):
+                        cdns = [cdn_raw]
+                    else:
+                        cdns = ['p3.a.yximgs.com']
+                    
+                    img_paths = rawdata['photo'].get('path', [])
+                    if isinstance(img_paths, str):
+                        img_paths = [img_paths]
+                    
+                    music_path = rawdata['photo'].get('music')
+                    album_data = self._build_album(cdns, music_path, img_paths)
+                    if album_data:
+                        images = album_data.get('images', [])
+                        image_url_lists = album_data.get('image_url_lists', [])
+                        if images:
+                            upload_time = None
+                            if images[0]:
+                                upload_time = self._extract_upload_time(images[0])
+                            return {
+                                "url": url,
+                                "media_type": "gallery",
+                                "title": title or "快手图集",
+                                "author": author,
+                                "desc": "",  # 快手API不返回描述
+                                "timestamp": upload_time or "",
+                                "media_urls": images,
+                                "thumb_url": None,
+                                "image_url_lists": image_url_lists,
+                            }
 
-    def build_media_nodes(
-        self,
-        result: Dict[str, Any],
-        sender_name: str,
-        sender_id: Any,
-        is_auto_pack: bool
-    ) -> List:
-        """构建媒体节点（视频或图片）。
+            if (metadata.get('userName') or
+                    metadata.get('userId') or
+                    metadata.get('caption')):
+                raise RuntimeError(f"无法获取媒体URL: {url}")
 
-        优先使用下载的图片文件，避免发送时下载失败。
-        使用下载的图片文件而不是URL，以避免QQ/NapCat无法识别文件类型的问题。
-        如果解析结果中有video_files（大视频已下载到缓存目录），
-        优先使用文件方式构建节点。
+            raise RuntimeError(f"无法解析此URL: {url}")
 
-        Args:
-            result: 解析结果
-            sender_name: 发送者名称
-            sender_id: 发送者ID
-            is_auto_pack: 是否打包为Node
-
-        Returns:
-            媒体节点列表
-        """
-        nodes = []
-        if result.get('video_files'):
-            return self._build_video_gallery_nodes_from_files(
-                result['video_files'],
-                sender_name,
-                sender_id,
-                is_auto_pack
-            )
-        if result.get('is_gallery') and result.get('image_files'):
-            gallery_nodes = self._build_gallery_nodes_from_files(
-                result['image_files'],
-                sender_name,
-                sender_id,
-                is_auto_pack
-            )
-            nodes.extend(gallery_nodes)
-        elif result.get('is_gallery') and result.get('images'):
-            gallery_nodes = self._build_gallery_nodes_from_urls(
-                result['images'],
-                sender_name,
-                sender_id,
-                is_auto_pack
-            )
-            nodes.extend(gallery_nodes)
-        elif result.get('direct_url'):
-            video_node = self._build_video_node_from_url(
-                result['direct_url'],
-                sender_name,
-                sender_id,
-                is_auto_pack,
-                result.get('thumb_url')
-            )
-            if video_node:
-                nodes.append(video_node)
-        return nodes

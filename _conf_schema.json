@@ -10,7 +10,7 @@
         "type": "object",
         "items": {
             "is_auto_parse": {
-                "description": "是否自动解析视频链接",
+                "description": "是否自动解析链接",
                 "type": "bool",
                 "default": true
             },
@@ -22,20 +22,20 @@
             }
         }
     },
-    "media_size_settings": {
-        "description": "媒体大小设置",
+    "video_size_settings": {
+        "description": "视频大小设置",
         "type": "object",
         "items": {
-            "max_media_size_mb": {
-                "description": "最大允许发送的媒体大小(MB)",
+            "max_video_size_mb": {
+                "description": "最大允许发送的视频大小(MB)",
                 "type": "float",
-                "hint": "超过此大小的媒体（视频和图片）将被跳过，不下载也不发送。设置为0表示不限制",
+                "hint": "超过此大小的视频将被跳过，不下载也不发送。设置为0表示不限制",
                 "default": 0.0
             },
-            "large_media_threshold_mb": {
-                "description": "大媒体阈值(MB)",
+            "large_video_threshold_mb": {
+                "description": "大视频阈值(MB)",
                 "type": "float",
-                "hint": "当媒体大小（视频和图片）超过此阈值时，将下载到缓存目录。媒体会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制",
+                "hint": "当视频大小超过此阈值时，将下载到缓存目录。视频会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制",
                 "default": 100.0
             }
         }
@@ -47,7 +47,7 @@
             "cache_dir": {
                 "description": "媒体缓存目录",
                 "type": "string",
-                "hint": "媒体文件缓存目录，用于Twitter视频和所有超过阈值的大媒体（视频和图片）",
+                "hint": "媒体文件缓存目录，用于Twitter视频和所有超过阈值的大视频",
                 "default": "/app/sharedFolder/video_parser/cache"
             },
             "pre_download_all_media": {

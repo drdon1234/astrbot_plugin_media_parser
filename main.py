@@ -1,20 +1,34 @@
 # -*- coding: utf-8 -*-
 import os
+import json
+import asyncio
+import aiohttp
+from typing import Any, Dict
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.message_components import Nodes, Plain, Image, Video, Node
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
-from .core import ParserManager, ParserFactory, ConfigManager
-from .utils import ResourceManager, MessageSender, ResultProcessor
+from .core.parser_manager import ParserManager
+from .core.download_manager import DownloadManager
+from .core.node_builder import build_all_nodes, is_pure_image_gallery
+from .core.file_manager import cleanup_files
+from .parsers import (
+    BilibiliParser,
+    DouyinParser,
+    KuaishouParser,
+    XiaohongshuParser,
+    TwitterParser
+)
 
 
 @register(
     "astrbot_plugin_video_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "2.0.0"
+    "2.1.0"
 )
 class VideoParserPlugin(Star):
 
@@ -30,61 +44,90 @@ class VideoParserPlugin(Star):
         """
         super().__init__(context)
         self.logger = logger
+        self.is_auto_pack = config.get("is_auto_pack", True)
+        trigger_settings = config.get("trigger_settings", {})
+        self.is_auto_parse = trigger_settings.get("is_auto_parse", True)
+        self.trigger_keywords = trigger_settings.get(
+            "trigger_keywords",
+            ["视频解析", "解析视频"]
+        )
+        video_size_settings = config.get("video_size_settings", {})
+        max_video_size_mb = video_size_settings.get("max_video_size_mb", 0.0)
+        large_video_threshold_mb = video_size_settings.get(
+            "large_video_threshold_mb",
+            100.0
+        )
+        if large_video_threshold_mb > 0:
+            large_video_threshold_mb = min(large_video_threshold_mb, 100.0)
+        self.large_video_threshold_mb = large_video_threshold_mb
+        download_settings = config.get("download_settings", {})
+        cache_dir = download_settings.get(
+            "cache_dir",
+            "/app/sharedFolder/video_parser/cache"
+        )
+        pre_download_all_media = download_settings.get(
+            "pre_download_all_media",
+            False
+        )
+        max_concurrent_downloads = download_settings.get(
+            "max_concurrent_downloads",
+            3
+        )
+        parser_enable_settings = config.get("parser_enable_settings", {})
+        enable_bilibili = parser_enable_settings.get("enable_bilibili", True)
+        enable_douyin = parser_enable_settings.get("enable_douyin", True)
+        enable_kuaishou = parser_enable_settings.get(
+            "enable_kuaishou",
+            True
+        )
+        enable_xiaohongshu = parser_enable_settings.get(
+            "enable_xiaohongshu",
+            True
+        )
+        enable_twitter = parser_enable_settings.get("enable_twitter", True)
+        twitter_proxy_settings = config.get("twitter_proxy_settings", {})
+        use_image_proxy = twitter_proxy_settings.get(
+            "twitter_use_image_proxy",
+            False
+        )
+        use_video_proxy = twitter_proxy_settings.get(
+            "twitter_use_video_proxy",
+            False
+        )
+        proxy_url = twitter_proxy_settings.get("twitter_proxy_url", "")
         
-        # 使用配置管理器统一管理配置
-        self.config_manager = ConfigManager(config)
-        self.is_auto_pack = self.config_manager.is_auto_pack
-        self.is_auto_parse = self.config_manager.is_auto_parse
-        self.trigger_keywords = self.config_manager.trigger_keywords
-        self.large_media_threshold_mb = self.config_manager.large_media_threshold_mb
+        parsers = []
+        if enable_bilibili:
+            parsers.append(BilibiliParser())
+        if enable_douyin:
+            parsers.append(DouyinParser())
+        if enable_kuaishou:
+            parsers.append(KuaishouParser())
+        if enable_xiaohongshu:
+            parsers.append(XiaohongshuParser())
+        if enable_twitter:
+            parsers.append(TwitterParser(
+                use_image_proxy=use_image_proxy,
+                use_video_proxy=use_video_proxy,
+                proxy_url=proxy_url
+            ))
+        if not parsers:
+            raise ValueError(
+                "至少需要启用一个视频解析器。"
+                "请检查配置中的 parser_enable_settings 设置。"
+            )
         
-        # 检查缓存目录
-        cache_dir = self.config_manager.cache_dir
-        self.cache_dir_available = self._check_cache_dir_available(cache_dir)
-        if self.cache_dir_available:
-            os.makedirs(cache_dir, exist_ok=True)
-        
-        # 使用工厂模式创建解析器（传入ConfigManager实例）
-        parsers = ParserFactory.create_parsers(self.config_manager)
         self.parser_manager = ParserManager(parsers)
         
-        # 创建消息发送器和结果处理器
-        self.message_sender = MessageSender(
-            self.logger,
-            is_auto_pack=self.is_auto_pack,
-            large_media_threshold_mb=self.large_media_threshold_mb
+        self.download_manager = DownloadManager(
+            max_video_size_mb=max_video_size_mb,
+            large_video_threshold_mb=large_video_threshold_mb,
+            cache_dir=cache_dir,
+            pre_download_all_media=pre_download_all_media,
+            max_concurrent_downloads=max_concurrent_downloads
         )
-        self.result_processor = ResultProcessor(
-            self.logger,
-            message_sender=self.message_sender,
-            is_auto_pack=self.is_auto_pack
-        )
-
-    def _check_cache_dir_available(self, cache_dir: str) -> bool:
-        """检查缓存目录是否可用（可写）。
-
-        Args:
-            cache_dir: 缓存目录路径
-
-        Returns:
-            如果目录可用返回True，否则返回False
-        """
-        if not cache_dir:
-            return False
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            test_file = os.path.join(cache_dir, ".test_write")
-            try:
-                with open(test_file, 'w') as f:
-                    f.write("test")
-                os.unlink(test_file)
-                return True
-            except Exception as e:
-                self.logger.error(f"检查缓存目录写入权限失败: {e}")
-                return False
-        except Exception as e:
-            self.logger.error(f"检查缓存目录可用性失败: {e}")
-            return False
+        
+        self.twitter_proxy_url = proxy_url if (use_image_proxy or use_video_proxy) else None
 
     async def terminate(self):
         """插件终止时的清理工作。"""
@@ -106,27 +149,272 @@ class VideoParserPlugin(Star):
                 return True
         return False
 
-    def _cleanup_files(self, file_paths: list):
-        """清理文件列表（兼容旧接口，建议使用ResourceManager）。
+    def _get_sender_info(self, event: AstrMessageEvent) -> tuple:
+        """获取发送者信息。
 
         Args:
-            file_paths: 文件路径列表
-        """
-        resource_manager = ResourceManager(self.logger)
-        resource_manager.register_files(file_paths, is_cache=False)
-        resource_manager.cleanup_all()
+            event: 消息事件对象
 
-    def _cleanup_all_files(self, temp_files: list, video_files: list):
-        """清理所有临时文件和视频文件（兼容旧接口，建议使用ResourceManager）。
+        Returns:
+            包含发送者名称和ID的元组 (sender_name, sender_id)
+        """
+        sender_name = "视频解析bot"
+        platform = event.get_platform_name()
+        sender_id = event.get_self_id()
+        if platform not in ("wechatpadpro", "webchat", "gewechat"):
+            try:
+                sender_id = int(sender_id)
+            except (ValueError, TypeError):
+                sender_id = 10000
+        return sender_name, sender_id
+
+    def _get_headers_and_referer(
+        self,
+        metadata: Dict[str, Any]
+    ) -> tuple:
+        """根据元数据获取请求头和Referer。
 
         Args:
-            temp_files: 临时文件列表
-            video_files: 视频文件列表
+            metadata: 元数据字典
+
+        Returns:
+            包含(headers, referer, proxy)的元组
         """
-        resource_manager = ResourceManager(self.logger)
-        resource_manager.register_files(temp_files, is_cache=False)
-        resource_manager.register_files(video_files, is_cache=True)
-        resource_manager.cleanup_all()
+        url = metadata.get('url', '')
+        headers = None
+        referer = url
+        proxy = None
+        
+        if 'bilibili.com' in url or 'b23.tv' in url:
+            page_url = metadata.get('page_url', url)
+            referer_url = page_url if page_url else url
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Referer": referer_url,
+                "Origin": "https://www.bilibili.com"
+            }
+            referer = referer_url
+        elif 'douyin.com' in url:
+            headers = {
+                'User-Agent': (
+                    'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/116.0.0.0 Mobile Safari/537.36'
+                ),
+                'Referer': 'https://www.douyin.com/'
+            }
+            referer = url
+        elif 'xiaohongshu.com' in url or 'xhslink.com' in url:
+            page_url = metadata.get('page_url', url)
+            headers = {
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                ),
+                'Referer': page_url if page_url else 'https://www.xiaohongshu.com/'
+            }
+            referer = page_url if page_url else url
+        elif 'twitter.com' in url or 'x.com' in url:
+            if self.twitter_proxy_url:
+                proxy = self.twitter_proxy_url
+            headers = {
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                )
+            }
+            referer = url
+        
+        return headers, referer, proxy
+
+    async def _send_packed_results(
+        self,
+        event: AstrMessageEvent,
+        link_metadata: list,
+        sender_name: str,
+        sender_id: Any
+    ):
+        """发送打包的结果（使用Nodes）。
+
+        Args:
+            event: 消息事件对象
+            link_metadata: 链接元数据列表
+            sender_name: 发送者名称
+            sender_id: 发送者ID
+        """
+        normal_metadata = [
+            meta for meta in link_metadata if meta.get('is_normal', True)
+        ]
+        large_media_metadata = [
+            meta for meta in link_metadata if meta.get('is_large_media', False)
+        ]
+        normal_link_nodes = [
+            meta['link_nodes'] for meta in normal_metadata
+        ]
+        large_media_link_nodes = [
+            meta['link_nodes'] for meta in large_media_metadata
+        ]
+        separator = "-------------------------------------"
+
+        if normal_link_nodes:
+            flat_nodes = []
+            normal_video_files_to_cleanup = []
+            for link_idx, link_nodes in enumerate(normal_link_nodes):
+                if link_idx < len(normal_metadata):
+                    link_video_files = normal_metadata[link_idx].get(
+                        'video_files',
+                        []
+                    )
+                    if link_video_files:
+                        normal_video_files_to_cleanup.extend(
+                            link_video_files
+                        )
+                if is_pure_image_gallery(link_nodes):
+                    texts = [
+                        node for node in link_nodes
+                        if isinstance(node, Plain)
+                    ]
+                    images = [
+                        node for node in link_nodes
+                        if isinstance(node, Image)
+                    ]
+                    for text in texts:
+                        flat_nodes.append(Node(
+                            name=sender_name,
+                            uin=sender_id,
+                            content=[text]
+                        ))
+                    if images:
+                        flat_nodes.append(Node(
+                            name=sender_name,
+                            uin=sender_id,
+                            content=images
+                        ))
+                else:
+                    for node in link_nodes:
+                        if node is not None:
+                            flat_nodes.append(Node(
+                                name=sender_name,
+                                uin=sender_id,
+                                content=[node]
+                            ))
+                if link_idx < len(normal_link_nodes) - 1:
+                    flat_nodes.append(Node(
+                        name=sender_name,
+                        uin=sender_id,
+                        content=[Plain(separator)]
+                    ))
+            if flat_nodes:
+                try:
+                    await event.send(event.chain_result([Nodes(flat_nodes)]))
+                finally:
+                    if normal_video_files_to_cleanup:
+                        cleanup_files(normal_video_files_to_cleanup)
+
+        if large_media_link_nodes:
+            await self._send_large_media_results(
+                event,
+                large_media_metadata,
+                large_media_link_nodes,
+                sender_name,
+                sender_id
+            )
+
+    async def _send_large_media_results(
+        self,
+        event: AstrMessageEvent,
+        metadata: list,
+        link_nodes_list: list,
+        sender_name: str,
+        sender_id: Any
+    ):
+        """发送大媒体结果（单独发送）。
+
+        Args:
+            event: 消息事件对象
+            metadata: 元数据列表
+            link_nodes_list: 链接节点列表
+            sender_name: 发送者名称
+            sender_id: 发送者ID
+        """
+        separator = "-------------------------------------"
+        threshold_mb = (
+            int(self.large_video_threshold_mb)
+            if self.large_video_threshold_mb > 0
+            else 50
+        )
+        notice_text = (
+            f"⚠️ 链接中包含超过{threshold_mb}MB的视频时"
+            f"将单独发送所有媒体"
+        )
+        await event.send(event.plain_result(notice_text))
+        for link_idx, link_nodes in enumerate(link_nodes_list):
+            link_video_files = []
+            if link_idx < len(metadata):
+                link_video_files = metadata[link_idx].get('video_files', [])
+            try:
+                for node in link_nodes:
+                    if node is not None:
+                        try:
+                            await event.send(event.chain_result([node]))
+                        except Exception as e:
+                            self.logger.warning(f"发送大媒体节点失败: {e}")
+            finally:
+                if link_video_files:
+                    cleanup_files(link_video_files)
+            if link_idx < len(link_nodes_list) - 1:
+                await event.send(event.plain_result(separator))
+
+    async def _send_unpacked_results(
+        self,
+        event: AstrMessageEvent,
+        all_link_nodes: list,
+        link_metadata: list
+    ):
+        """发送非打包的结果（独立发送）。
+
+        Args:
+            event: 消息事件对象
+            all_link_nodes: 所有链接节点列表
+            link_metadata: 链接元数据列表
+        """
+        separator = "-------------------------------------"
+        for link_idx, (link_nodes, metadata) in enumerate(
+            zip(all_link_nodes, link_metadata)
+        ):
+            link_video_files = metadata.get('video_files', [])
+            try:
+                if is_pure_image_gallery(link_nodes):
+                    texts = [
+                        node for node in link_nodes
+                        if isinstance(node, Plain)
+                    ]
+                    images = [
+                        node for node in link_nodes
+                        if isinstance(node, Image)
+                    ]
+                    for text in texts:
+                        await event.send(event.chain_result([text]))
+                    if images:
+                        await event.send(event.chain_result(images))
+                else:
+                    for node in link_nodes:
+                        if node is not None:
+                            try:
+                                await event.send(event.chain_result([node]))
+                            except Exception as e:
+                                self.logger.warning(f"发送节点失败: {e}")
+            finally:
+                if link_video_files:
+                    cleanup_files(link_video_files)
+            if link_idx < len(all_link_nodes) - 1:
+                await event.send(event.plain_result(separator))
 
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse(self, event: AstrMessageEvent):
@@ -135,30 +423,110 @@ class VideoParserPlugin(Star):
         Args:
             event: 消息事件对象
         """
-        if not self._should_parse(event.message_str):
+        message_text = event.message_str
+        try:
+            messages = event.get_messages()
+            if messages and len(messages) > 0:
+                curl_link = json.loads(messages[0].data).get("meta").get("detail_1").get("qqdocurl")
+                if curl_link:
+                    message_text = curl_link
+        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError) as e:
+            pass
+        
+        if not self._should_parse(message_text):
             return
+        
         links_with_parser = self.parser_manager.extract_all_links(
-            event.message_str
+            message_text
         )
         if not links_with_parser:
             return
-        await event.send(event.plain_result("流媒体解析bot为您服务 ٩( 'ω' )و"))
-        sender_name, sender_id = self.result_processor._get_sender_info(event)
-        result = await self.parser_manager.build_nodes(
-            event,
-            self.is_auto_pack,
-            sender_name,
-            sender_id
-        )
         
-        # 使用ResourceManager统一管理资源
-        with ResourceManager(self.logger) as resource_manager:
+        await event.send(event.plain_result("流媒体解析bot为您服务 ٩( 'ω' )و"))
+        sender_name, sender_id = self._get_sender_info(event)
+        
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            metadata_list = await self.parser_manager.parse_text(
+                message_text,
+                session
+            )
+            if not metadata_list:
+                return
+            
+            async def process_single_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+                """处理单个元数据。
+
+                Args:
+                    metadata: 元数据字典
+
+                Returns:
+                    处理后的元数据字典
+                """
+                if metadata.get('error'):
+                    return metadata
+                
+                headers, referer, proxy = self._get_headers_and_referer(metadata)
+                
+                try:
+                    processed_metadata = await self.download_manager.process_metadata(
+                        session,
+                        metadata,
+                        headers,
+                        referer,
+                        proxy
+                    )
+                    return processed_metadata
+                except Exception as e:
+                    self.logger.exception(f"处理元数据失败: {metadata.get('url', '')}, 错误: {e}")
+                    metadata['error'] = str(e)
+                    return metadata
+            
+            tasks = [process_single_metadata(metadata) for metadata in metadata_list]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            processed_metadata_list = []
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    metadata = metadata_list[i] if i < len(metadata_list) else {}
+                    self.logger.exception(f"处理元数据失败: {metadata.get('url', '')}, 错误: {result}")
+                    metadata['error'] = str(result)
+                    processed_metadata_list.append(metadata)
+                elif isinstance(result, dict):
+                    processed_metadata_list.append(result)
+                else:
+                    metadata = metadata_list[i] if i < len(metadata_list) else {}
+                    metadata['error'] = 'Unknown error'
+                    processed_metadata_list.append(metadata)
+            
+            all_link_nodes, link_metadata, temp_files, video_files = build_all_nodes(
+                processed_metadata_list,
+                self.is_auto_pack,
+                sender_name,
+                sender_id,
+                self.large_video_threshold_mb
+            )
+            
+            if not all_link_nodes:
+                cleanup_files(temp_files + video_files)
+                return
+            
             try:
-                await self.result_processor.process_and_send(
-                    event,
-                    result,
-                    resource_manager
-                )
+                if self.is_auto_pack:
+                    await self._send_packed_results(
+                        event,
+                        link_metadata,
+                        sender_name,
+                        sender_id
+                    )
+                else:
+                    await self._send_unpacked_results(
+                        event,
+                        all_link_nodes,
+                        link_metadata
+                    )
+                cleanup_files(temp_files + video_files)
             except Exception as e:
                 self.logger.exception(f"auto_parse方法执行失败: {e}")
+                cleanup_files(temp_files + video_files)
                 raise

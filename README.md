@@ -134,7 +134,7 @@
 </tbody>
 </table>
 
-### 媒体大小设置
+### 视频大小设置
 
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
 <thead>
@@ -147,16 +147,16 @@
 </thead>
 <tbody>
 <tr>
-<td>最大允许发送的媒体大小(MB)</td>
+<td>最大允许发送的视频大小(MB)</td>
 <td>float</td>
 <td>0.0</td>
-<td>超过此大小的媒体（视频和图片）将被跳过，不下载也不发送。设置为0表示不限制</td>
+<td>超过此大小的视频将被跳过，不下载也不发送。设置为0表示不限制</td>
 </tr>
 <tr>
-<td>大媒体阈值(MB)</td>
+<td>大视频阈值(MB)</td>
 <td>float</td>
 <td>100.0</td>
-<td>当媒体大小（视频和图片）超过此阈值时，将下载到缓存目录。媒体会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制</td>
+<td>当视频大小超过此阈值时，将下载到缓存目录。视频会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制</td>
 </tr>
 </tbody>
 </table>
@@ -274,9 +274,11 @@
 
 ---
 
-## 已知问题
+## 注意事项
 
-- 微信无法正确推送视频消息（疑似消息平台问题）  
+- 小红书的所有链接均有身份验证和时效性，在有效期内发送完整链接才能成功解析
+- 小红书分享长短链均有水印，explore 类型链接无水印
+- 推特链接无法解析第三方网站关联媒体
 
 ---
 
@@ -284,6 +286,8 @@
 
 - B站解析端点参考自：GitHub 项目 bilibili-API-collect  
   https://github.com/SocialSisterYi/bilibili-API-collect
+- B站小程序卡片(QQ)链接提取方法参考自：GitHub 用户 [tianger-mckz](https://github.com/tianger-mckz)  
+  https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034
 - 抖音解析方法参考自：CSDN 博客文章  
   https://blog.csdn.net/qq_53153535/article/details/141297614
 - 推特解析使用免费第三方服务：fxtwitter（GitHub 项目 FxEmbed）  

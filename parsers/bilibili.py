@@ -7,7 +7,6 @@ from urllib.parse import urlparse, parse_qs
 import aiohttp
 
 from .base_parser import BaseVideoParser
-from astrbot.api import logger
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -53,33 +52,10 @@ def av2bv(av: int) -> str:
 class BilibiliParser(BaseVideoParser):
     """B站视频解析器。"""
 
-    def __init__(
-        self,
-        max_media_size_mb: float = 0.0,
-        large_media_threshold_mb: float = 50.0,
-        cache_dir: str = "/app/sharedFolder/video_parser/cache",
-        pre_download_all_media: bool = False,
-        max_concurrent_downloads: int = 3
-    ):
-        """初始化B站解析器。
-
-        Args:
-            max_media_size_mb: 最大允许的媒体大小(MB)
-            large_media_threshold_mb: 大媒体阈值(MB)
-            cache_dir: 媒体缓存目录
-            pre_download_all_media: 是否预先下载所有媒体到本地
-            max_concurrent_downloads: 最大并发下载数
-        """
-        super().__init__(
-            "B站",
-            max_media_size_mb,
-            large_media_threshold_mb,
-            cache_dir,
-            pre_download_all_media,
-            max_concurrent_downloads
-        )
+    def __init__(self):
+        """初始化B站解析器。"""
+        super().__init__("B站")
         self.semaphore = asyncio.Semaphore(10)
-        self.logger = logger
         self._default_headers = {
             "User-Agent": UA,
             "Referer": "https://www.bilibili.com",
@@ -733,29 +709,6 @@ class BilibiliParser(BaseVideoParser):
         v = self.pick_best_video(dash_try.get("dash") or {})
         return (v.get("baseUrl") or v.get("base_url")) if v else None
 
-    async def get_video_size(
-        self,
-        video_url: str,
-        session: aiohttp.ClientSession,
-        referer: str = None
-    ) -> Optional[float]:
-        """获取视频文件大小(MB)（B站专用，需要Referer请求头）。
-
-        Args:
-            video_url: 视频URL
-            session: aiohttp会话
-            referer: 引用页面URL（可选，默认使用bilibili.com）
-
-        Returns:
-            视频大小(MB)，如果无法获取返回None
-        """
-        return await super().get_video_size(
-            video_url,
-            session,
-            headers=self._default_headers,
-            referer=referer,
-            default_referer="https://www.bilibili.com"
-        )
 
     async def parse(
         self,
@@ -769,16 +722,13 @@ class BilibiliParser(BaseVideoParser):
             url: B站链接
 
         Returns:
-            解析结果字典，如果解析失败返回None
+            解析结果字典，包含标准化的元数据格式
+
+        Raises:
+            RuntimeError: 当解析失败时
         """
         async with self.semaphore:
-            try:
-                return await self.parse_bilibili_minimal(url, session=session)
-            except Exception as e:
-                self.logger.exception(
-                    f"Bilibili parse失败: {url}, 错误: {e}"
-                )
-                return None
+            return await self.parse_bilibili_minimal(url, session=session)
 
     async def parse_bilibili_minimal(
         self,
@@ -794,10 +744,10 @@ class BilibiliParser(BaseVideoParser):
             session: aiohttp会话（可选）
 
         Returns:
-            解析结果字典，如果解析失败返回None
+            解析结果字典，包含标准化的元数据格式
 
         Raises:
-            RuntimeError: 当本地缓存路径无效时
+            RuntimeError: 当解析失败时
         """
         if session is None:
             timeout = aiohttp.ClientTimeout(total=10)
@@ -809,11 +759,11 @@ class BilibiliParser(BaseVideoParser):
         original_url = url
         page_url = await self.expand_b23(url, session)
         if not self.can_parse(page_url):
-            return None
+            raise RuntimeError(f"无法解析此URL: {url}")
         p_index = max(1, int(p or self.extract_p(page_url)))
         vtype, ident = self.detect_target(page_url)
         if not vtype:
-            return None
+            raise RuntimeError(f"无法识别视频类型: {url}")
         if vtype == "ugc":
             bvid = ident.get("bvid")
             aid = ident.get("aid")
@@ -824,9 +774,9 @@ class BilibiliParser(BaseVideoParser):
                 info = await self.get_ugc_info(aid=aid, session=session)
                 pages = await self.get_pagelist(aid=aid, session=session)
             else:
-                return None
+                raise RuntimeError(f"无法获取视频信息: {url}")
             if p_index > len(pages):
-                return None
+                raise RuntimeError(f"分P序号超出范围: {p_index}")
             cid = pages[p_index - 1]["cid"]
             direct_url = await self._get_ugc_direct_url(
                 bvid=bvid,
@@ -836,7 +786,7 @@ class BilibiliParser(BaseVideoParser):
                 session=session
             )
             if not direct_url:
-                return None
+                raise RuntimeError(f"无法获取视频直链: {url}")
         elif vtype == "pgc":
             FNVAL_MAX = 4048
             ep_id = ident["ep_id"]
@@ -875,124 +825,21 @@ class BilibiliParser(BaseVideoParser):
                     (v.get("baseUrl") or v.get("base_url")) if v else ""
                 )
         else:
-            return None
+            raise RuntimeError(f"无法识别视频类型: {url}")
         if not direct_url:
-            return None
-        video_size = await self.get_video_size(
-            direct_url,
-            session,
-            referer=page_url
-        )
-        if self.max_media_size_mb > 0 and video_size is not None:
-            if video_size > self.max_media_size_mb:
-                return None
+            raise RuntimeError(f"无法获取视频直链: {url}")
         is_b23_short = urlparse(original_url).netloc.lower() == B23_HOST
         display_url = original_url if is_b23_short else page_url
-        result = {
-            "video_url": display_url,
-            "author": info["author"],
-            "title": info["title"],
-            "desc": info["desc"],
-            "direct_url": direct_url,
-            "file_size_mb": video_size
+        
+        return {
+            "url": display_url,
+            "media_type": "video",
+            "title": info.get("title", ""),
+            "author": info.get("author", ""),
+            "desc": info.get("desc", ""),
+            "timestamp": "",  # B站API不返回发布时间
+            "media_urls": [direct_url],
+            "thumb_url": None,  # B站视频没有单独的封面图URL
+            "page_url": page_url,  # 完整页面URL，用于检测视频大小时的referer
         }
-        video_file_path = None
-        if (self.large_media_threshold_mb > 0 and
-                video_size is not None and
-                video_size > self.large_media_threshold_mb):
-            if not self.cache_dir_available:
-                raise RuntimeError("解析失败：本地缓存路径无效")
-            if (self.max_media_size_mb <= 0 or
-                    video_size <= self.max_media_size_mb):
-                result['force_separate_send'] = True
-                if vtype == "ugc":
-                    video_id = (
-                        ident.get("bvid") or
-                        ident.get("aid") or
-                        "bilibili"
-                    )
-                else:
-                    video_id = f"ep_{ident.get('ep_id', 'pgc')}"
-                video_file_path = await self._download_large_media_to_cache(
-                    session,
-                    direct_url,
-                    video_id,
-                    index=p_index - 1,
-                    headers=self._default_headers,
-                    is_video=True,
-                    referer=page_url
-                )
-                if video_file_path:
-                    result['video_files'] = [
-                        {'file_path': video_file_path}
-                    ]
-        if (self.pre_download_all_media and
-                self.cache_dir_available and
-                not result.get('video_files')):
-            if result.get('direct_url'):
-                media_items = []
-                if vtype == "ugc":
-                    video_id = (
-                        ident.get("bvid") or
-                        ident.get("aid") or
-                        "bilibili"
-                    )
-                else:
-                    video_id = f"ep_{ident.get('ep_id', 'pgc')}"
-                media_items.append({
-                    'url': result['direct_url'],
-                    'media_id': video_id,
-                    'index': p_index - 1,
-                    'is_video': True,
-                    'headers': self._default_headers
-                })
-                if media_items:
-                    download_results = await self._pre_download_media(
-                        session,
-                        media_items,
-                        self._default_headers
-                    )
-                    for download_result in download_results:
-                        if (download_result.get('success') and
-                                download_result.get('file_path')):
-                            result['video_files'] = [{
-                                'file_path': download_result['file_path']
-                            }]
-                            result['direct_url'] = None
-                            break
-        return result
 
-    def build_media_nodes(
-        self,
-        result: Dict[str, Any],
-        sender_name: str,
-        sender_id: Any,
-        is_auto_pack: bool
-    ) -> List:
-        """构建媒体节点（视频或图片）。
-
-        如果解析结果中有video_files（大视频已下载到缓存目录），
-        优先使用文件方式构建节点。
-
-        Args:
-            result: 解析结果
-            sender_name: 发送者名称
-            sender_id: 发送者ID
-            is_auto_pack: 是否打包为Node
-
-        Returns:
-            媒体节点列表
-        """
-        if result.get('video_files'):
-            return self._build_video_gallery_nodes_from_files(
-                result['video_files'],
-                sender_name,
-                sender_id,
-                is_auto_pack
-            )
-        return super().build_media_nodes(
-            result,
-            sender_name,
-            sender_id,
-            is_auto_pack
-        )
