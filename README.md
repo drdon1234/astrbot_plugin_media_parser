@@ -65,12 +65,12 @@
 1) 通过 插件市场 安装  
 - 打开 “AstrBot WebUI” -> “插件市场” -> “右上角 Search”  
 - 搜索与本项目相关的关键词，找到插件后点击安装  
-- 推荐通过唯一标识符搜索：`astrbot_plugin_video_parser`  
+- 推荐通过唯一标识符搜索：`astrbot_plugin_media_parser`  
 
 2) 通过 GitHub 仓库链接 安装  
 - 打开 “AstrBot WebUI” -> “插件市场” -> “右下角 ‘+’ 按钮”  
 - 输入以下地址并点击安装：  
-  https://github.com/drdon1234/astrbot_plugin_video_parser
+  https://github.com/drdon1234/astrbot_plugin_media_parser
 
 ---
 
@@ -286,7 +286,7 @@
 
 - B站解析端点参考自：GitHub 项目 bilibili-API-collect  
   https://github.com/SocialSisterYi/bilibili-API-collect
-- B站小程序卡片(QQ)链接提取方法参考自：GitHub 用户 [tianger-mckz](https://github.com/tianger-mckz)  
+- QQ小程序卡片链接提取方法参考自：GitHub 用户 [tianger-mckz](https://github.com/tianger-mckz)  
   https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034
 - 抖音解析方法参考自：CSDN 博客文章  
   https://blog.csdn.net/qq_53153535/article/details/141297614

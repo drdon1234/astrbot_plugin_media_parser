@@ -1,6 +1,6 @@
-name: astrbot_plugin_video_parser
+name: astrbot_plugin_media_parser
 desc: 聚合解析流媒体平台链接，转换为媒体直链发送
-version: v2.1.0
+version: v2.1.1
 author: drdon1234
-repo: https://github.com/drdon1234/astrbot_plugin_video_parser
+repo: https://github.com/drdon1234/astrbot_plugin_media_parser
 

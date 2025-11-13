@@ -25,10 +25,10 @@ from .parsers import (
 
 
 @register(
-    "astrbot_plugin_video_parser",
+    "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "2.1.0"
+    "2.1.1"
 )
 class VideoParserPlugin(Star):
 
