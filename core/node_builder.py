@@ -10,11 +10,12 @@ from astrbot.api import logger
 from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
 
 
-def build_text_node(metadata: Dict[str, Any]) -> Optional[Plain]:
+def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0) -> Optional[Plain]:
     """构建文本节点
 
     Args:
         metadata: 元数据字典
+        max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
 
     Returns:
         Plain文本节点，如果无内容返回None
@@ -31,15 +32,15 @@ def build_text_node(metadata: Dict[str, Any]) -> Optional[Plain]:
     media_type = metadata.get('media_type', 'video')
     if media_type in ('video', 'mixed'):
         video_count = metadata.get('video_count', 0)
-        max_video_size_mb = metadata.get('max_video_size_mb')
+        actual_max_video_size_mb = metadata.get('max_video_size_mb')
         total_video_size_mb = metadata.get('total_video_size_mb', 0.0)
         
-        if max_video_size_mb is not None and video_count > 0:
+        if actual_max_video_size_mb is not None and video_count > 0:
             if video_count == 1:
-                text_parts.append(f"视频大小：{max_video_size_mb:.1f} MB")
+                text_parts.append(f"视频大小：{actual_max_video_size_mb:.1f} MB")
             else:
                 text_parts.append(
-                    f"视频大小：最大 {max_video_size_mb:.1f} MB "
+                    f"视频大小：最大 {actual_max_video_size_mb:.1f} MB "
                     f"(共 {video_count} 个视频, 总计 {total_video_size_mb:.1f} MB)"
                 )
     
@@ -53,11 +54,21 @@ def build_text_node(metadata: Dict[str, Any]) -> Optional[Plain]:
         metadata.get('timestamp')
     )
     
-    if has_valid_media is False and media_urls and has_text_metadata:
-        text_parts.append("解析失败：直链内未找到有效媒体")
-    
     if metadata.get('error'):
         text_parts.append(f"解析失败：{metadata['error']}")
+
+    if has_valid_media is False and media_urls and has_text_metadata and not metadata.get('exceeds_max_size'):
+        text_parts.append("解析失败：直链内未找到有效媒体")
+    
+    if metadata.get('exceeds_max_size'):
+        actual_video_size = metadata.get('max_video_size_mb')
+        if actual_video_size is not None:
+            if max_video_size_mb > 0:
+                text_parts.append(
+                    f"解析失败：视频大小超过管理员设定的限制（{actual_video_size:.1f}MB > {max_video_size_mb:.1f}MB）"
+                )
+            else:
+                text_parts.append(f"解析失败：视频大小超过限制（{actual_video_size:.1f}MB）")
     
     if metadata.get('url'):
         text_parts.append(f"原始链接：{metadata['url']}")
@@ -233,7 +244,8 @@ def build_nodes_for_link(
     metadata: Dict[str, Any],
     use_local_files: bool = False,
     sender_name: str = "",
-    sender_id: Any = None
+    sender_id: Any = None,
+    max_video_size_mb: float = 0.0
 ) -> List[Union[Plain, Image, Video]]:
     """构建单个链接的节点列表
 
@@ -242,13 +254,14 @@ def build_nodes_for_link(
         use_local_files: 是否使用本地文件
         sender_name: 发送者名称（未使用，保留兼容性）
         sender_id: 发送者ID（未使用，保留兼容性）
+        max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
 
     Returns:
         节点列表（Plain、Image、Video对象）
     """
     nodes = []
     
-    text_node = build_text_node(metadata)
+    text_node = build_text_node(metadata, max_video_size_mb)
     if text_node:
         nodes.append(text_node)
     
@@ -283,7 +296,8 @@ def build_all_nodes(
     is_auto_pack: bool,
     sender_name: str,
     sender_id: Any,
-    large_video_threshold_mb: float = 0.0
+    large_video_threshold_mb: float = 0.0,
+    max_video_size_mb: float = 0.0
 ) -> Tuple[List[List[Node]], List[Dict], List[str], List[str]]:
     """构建所有链接的节点，处理消息打包逻辑
 
@@ -293,6 +307,7 @@ def build_all_nodes(
         sender_name: 发送者名称
         sender_id: 发送者ID
         large_video_threshold_mb: 大视频阈值(MB)
+        max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
 
     Returns:
         包含(all_link_nodes, link_metadata, temp_files, video_files)的元组
@@ -305,23 +320,11 @@ def build_all_nodes(
     
     for metadata in metadata_list:
         max_video_size = metadata.get('max_video_size_mb')
+        exceeds_max_size = metadata.get('exceeds_max_size', False)
         is_large_media = False
-        if large_video_threshold_mb > 0 and max_video_size is not None:
+        if large_video_threshold_mb > 0 and max_video_size is not None and not exceeds_max_size:
             if max_video_size > large_video_threshold_mb:
                 is_large_media = True
-        
-        if metadata.get('exceeds_max_size'):
-            error_text = f"解析失败：视频大小超过限制\n原始链接：{metadata.get('url', '')}"
-            link_nodes = [Plain(error_text)]
-            all_link_nodes.append(link_nodes)
-            link_metadata.append({
-                'link_nodes': link_nodes,
-                'is_large_media': False,
-                'is_normal': False,
-                'video_files': [],
-                'temp_files': []
-            })
-            continue
         
         use_local_files = metadata.get('use_local_files', False)
         
@@ -329,7 +332,8 @@ def build_all_nodes(
             metadata,
             use_local_files,
             sender_name,
-            sender_id
+            sender_id,
+            max_video_size_mb
         )
         
         link_file_paths = metadata.get('file_paths', [])

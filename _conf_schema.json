@@ -30,7 +30,7 @@
                 "description": "最大允许发送的视频大小(MB)",
                 "type": "float",
                 "hint": "超过此大小的视频将被跳过，不下载也不发送。设置为0表示不限制",
-                "default": 0.0
+                "default": 500.0
             },
             "large_video_threshold_mb": {
                 "description": "大视频阈值(MB)",

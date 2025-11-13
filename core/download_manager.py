@@ -18,7 +18,8 @@ from .downloader import (
     validate_media_url
 )
 from .file_manager import (
-    check_cache_dir_available
+    check_cache_dir_available,
+    cleanup_files
 )
 
 
@@ -381,6 +382,58 @@ class DownloadManager:
             return metadata
 
         if self.pre_download_all_media and self.cache_dir_available:
+            pre_check_video_sizes = None
+            if media_type in ('video', 'mixed'):
+                if media_type == 'mixed':
+                    video_urls = metadata.get('video_urls', [])
+                elif media_type == 'video':
+                    video_urls = metadata.get('video_urls', media_urls)
+                else:
+                    video_urls = []
+                
+                if video_urls and self.max_video_size_mb > 0:
+                    async def get_video_size_task(video_url: str) -> Optional[float]:
+                        try:
+                            size = await get_video_size(session, video_url, headers, proxy)
+                            return size
+                        except Exception:
+                            return None
+                    
+                    tasks = [
+                        get_video_size_task(video_url)
+                        for video_url in video_urls
+                    ]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    video_sizes = []
+                    for result in results:
+                        if isinstance(result, Exception):
+                            video_sizes.append(None)
+                        elif isinstance(result, (int, float)) or result is None:
+                            video_sizes.append(result)
+                        else:
+                            video_sizes.append(None)
+                    
+                    valid_sizes = [s for s in video_sizes if s is not None]
+                    if valid_sizes:
+                        max_video_size = max(valid_sizes)
+                        if max_video_size > self.max_video_size_mb:
+                            logger.warning(
+                                f"视频大小超过限制: {max_video_size:.2f}MB > {self.max_video_size_mb}MB, "
+                                f"URL: {url}，跳过下载"
+                            )
+                            metadata['exceeds_max_size'] = True
+                            metadata['has_valid_media'] = False
+                            metadata['video_sizes'] = video_sizes
+                            metadata['max_video_size_mb'] = max_video_size
+                            metadata['total_video_size_mb'] = sum(valid_sizes) if valid_sizes else 0.0
+                            metadata['video_count'] = len(video_urls)
+                            metadata['file_paths'] = [None] * len(media_urls)
+                            metadata['use_local_files'] = False
+                            metadata['is_large_media'] = False
+                            return metadata
+                        pre_check_video_sizes = video_sizes
+            
             media_id = self._generate_media_id(url)
             media_items = self._build_media_items(
                 metadata,
@@ -440,9 +493,21 @@ class DownloadManager:
                 has_valid_images = False
 
                 if video_urls:
-                    video_sizes = self._extract_sizes_from_download_results(
+                    download_video_sizes = self._extract_sizes_from_download_results(
                         download_results, video_urls, media_urls
                     )
+                    
+                    if pre_check_video_sizes is not None:
+                        video_sizes = []
+                        for i, download_size in enumerate(download_video_sizes):
+                            if download_size is not None:
+                                video_sizes.append(download_size)
+                            elif i < len(pre_check_video_sizes):
+                                video_sizes.append(pre_check_video_sizes[i])
+                            else:
+                                video_sizes.append(None)
+                    else:
+                        video_sizes = download_video_sizes
                     
                     valid_sizes = [s for s in video_sizes if s is not None]
                     has_valid_videos = len(valid_sizes) > 0
@@ -454,6 +519,30 @@ class DownloadManager:
                     metadata['max_video_size_mb'] = max_video_size
                     metadata['total_video_size_mb'] = total_video_size
                     metadata['video_count'] = video_count
+                    
+                    need_check = True
+                    if pre_check_video_sizes is not None:
+                        pre_valid_sizes = [s for s in pre_check_video_sizes if s is not None]
+                        if pre_valid_sizes:
+                            pre_max_size = max(pre_valid_sizes)
+                            if pre_max_size <= self.max_video_size_mb:
+                                if all(s is not None for s in video_sizes):
+                                    need_check = False
+                    
+                    if need_check and self.max_video_size_mb > 0 and max_video_size is not None:
+                        if max_video_size > self.max_video_size_mb:
+                            logger.warning(
+                                f"视频大小超过限制: {max_video_size:.2f}MB > {self.max_video_size_mb}MB, "
+                                f"URL: {url}"
+                            )
+                            cleanup_files(file_paths)
+                            metadata['exceeds_max_size'] = True
+                            metadata['has_valid_media'] = False
+                            metadata['use_local_files'] = False
+                            metadata['file_paths'] = [None] * len(media_urls)
+                            metadata['is_large_media'] = False
+                            metadata['max_video_size_mb'] = max_video_size
+                            return metadata
                 else:
                     metadata['video_sizes'] = []
                     metadata['max_video_size_mb'] = None
@@ -583,6 +672,7 @@ class DownloadManager:
                 )
                 metadata['exceeds_max_size'] = True
                 metadata['has_valid_media'] = False
+                metadata['max_video_size_mb'] = max_video_size
                 return metadata
 
         metadata['exceeds_max_size'] = False
@@ -616,6 +706,31 @@ class DownloadManager:
             )
             
             file_paths = self._process_download_results(download_results)
+            
+            if video_urls and self.max_video_size_mb > 0:
+                download_video_sizes = self._extract_sizes_from_download_results(
+                    download_results, video_urls, media_urls
+                )
+                valid_download_sizes = [s for s in download_video_sizes if s is not None]
+                if valid_download_sizes:
+                    actual_max_video_size = max(valid_download_sizes)
+                    if actual_max_video_size > self.max_video_size_mb:
+                        logger.warning(
+                            f"视频大小超过限制: {actual_max_video_size:.2f}MB > {self.max_video_size_mb}MB, "
+                            f"URL: {url}，清理已下载的文件"
+                        )
+                        cleanup_files(file_paths)
+                        metadata['exceeds_max_size'] = True
+                        metadata['has_valid_media'] = False
+                        metadata['use_local_files'] = False
+                        metadata['file_paths'] = [None] * len(media_urls)
+                        metadata['is_large_media'] = False
+                        metadata['video_sizes'] = download_video_sizes
+                        metadata['max_video_size_mb'] = actual_max_video_size
+                        return metadata
+                    metadata['video_sizes'] = download_video_sizes
+                    metadata['max_video_size_mb'] = actual_max_video_size
+                    metadata['total_video_size_mb'] = sum(valid_download_sizes)
             
             has_valid_media = self._check_has_valid_media(
                 download_results, media_urls, metadata

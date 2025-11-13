@@ -58,6 +58,7 @@ class VideoParserPlugin(Star):
         )
         if large_video_threshold_mb > 0:
             large_video_threshold_mb = min(large_video_threshold_mb, 100.0)
+        self.max_video_size_mb = max_video_size_mb
         self.large_video_threshold_mb = large_video_threshold_mb
         download_settings = config.get("download_settings", {})
         cache_dir = download_settings.get(
@@ -503,7 +504,8 @@ class VideoParserPlugin(Star):
                 self.is_auto_pack,
                 sender_name,
                 sender_id,
-                self.large_video_threshold_mb
+                self.large_video_threshold_mb,
+                self.max_video_size_mb
             )
             
             if not all_link_nodes:

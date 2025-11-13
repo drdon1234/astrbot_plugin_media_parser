@@ -217,14 +217,15 @@ astrbot_plugin_video_parser/
 **职责**：管理媒体下载流程，根据配置决定使用网络直链还是本地文件。
 
 **主要功能**：
-- 检查视频大小（HEAD请求获取Content-Length）
+- 检查视频大小（HEAD请求获取Content-Length，或从实际文件大小获取）
 - 根据配置决定下载策略：
-  - 超过 `max_video_size_mb`：跳过，不下载
+  - 超过 `max_video_size_mb`：跳过，不下载（下载前和下载后都会检查）
   - 超过 `large_video_threshold_mb`：下载到缓存目录
   - 推特视频：强制下载到缓存
-  - 启用 `pre_download_all_media`：预先下载所有媒体
+  - 启用 `pre_download_all_media`：预先下载所有媒体（下载前会先检查大小）
 - 管理并发下载数量
 - 为元数据添加文件路径信息
+- 下载后再次验证视频大小，确保不超过限制
 
 **关键方法**：
 - `process_metadata()`: 处理单个元数据，决定下载策略
@@ -233,23 +234,42 @@ astrbot_plugin_video_parser/
 - `_generate_media_id()`: 生成媒体ID（用于文件命名）
 
 **下载策略决策流程**：
-```
-1. 检查是否启用 pre_download_all_media
-   ├─ 是 → 下载所有媒体到缓存
-   └─ 否 → 继续
 
-2. 检查媒体类型
+**预先下载模式（pre_download_all_media = True）**：
+```
+1. 检查媒体类型
+   ├─ gallery → 直接下载所有媒体到缓存
+   └─ video/mixed → 继续
+
+2. 下载前检查视频大小（HEAD请求）
+   ├─ 超过 max_video_size_mb → 标记 exceeds_max_size，跳过下载
+   └─ 未超过 → 继续
+
+3. 下载所有媒体到缓存
+
+4. 下载后检查视频大小（从实际文件大小获取）
+   ├─ 超过 max_video_size_mb → 清理已下载文件，标记 exceeds_max_size
+   └─ 未超过 → 使用本地文件
+```
+
+**非预先下载模式（pre_download_all_media = False）**：
+```
+1. 检查媒体类型
    ├─ gallery → 不检查大小，直接使用直链
    └─ video/mixed → 继续
 
-3. 获取视频大小（HEAD请求）
+2. 获取视频大小（HEAD请求）
    ├─ 超过 max_video_size_mb → 标记 exceeds_max_size，跳过
    └─ 未超过 → 继续
 
-4. 检查是否需要下载
+3. 检查是否需要下载
    ├─ 超过 large_video_threshold_mb → 下载到缓存
    ├─ 是推特视频 → 下载到缓存
    └─ 其他 → 使用直链
+
+4. 如果下载了视频，下载后再次检查大小（从实际文件大小获取）
+   ├─ 超过 max_video_size_mb → 清理已下载文件，标记 exceeds_max_size
+   └─ 未超过 → 使用本地文件
 ```
 
 ### 6. Downloader (core/downloader.py)
@@ -616,6 +636,8 @@ elif media_type == 'new_type':
 - 小文件使用直链，避免不必要的下载
 - 大文件下载到本地，提高发送成功率
 - 预先下载模式可提高总下载速度
+- 下载前和下载后双重检查视频大小，确保不超过限制
+- 优先使用实际文件大小（更准确），HEAD请求结果作为补充
 
 ### 4. 资源管理
 
@@ -641,6 +663,12 @@ elif media_type == 'new_type':
 3. **文件操作异常**：
    - 文件清理失败只记录警告，不抛出异常
    - 缓存目录不可用时自动降级到直链模式
+
+4. **视频大小检查异常**：
+   - 下载前通过HEAD请求检查大小，如果超过限制则跳过下载
+   - 下载后从实际文件大小再次检查，如果超过限制则清理已下载文件
+   - 如果HEAD请求无法获取大小，下载后会从实际文件大小检查
+   - 确保 `max_video_size_mb` 配置在所有情况下都能正确生效
 
 ### 日志记录
 
