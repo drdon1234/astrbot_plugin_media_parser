@@ -91,7 +91,7 @@
             "enable_twitter": {
                 "description": "是否启用Twitter/X解析器",
                 "type": "bool",
-                "default": true
+                "default": false
             }
         }
     },
