@@ -166,14 +166,12 @@ class BilibiliParser(BaseVideoParser):
         result_links_set = set()
         seen_ids = set()
         
-        # b23短链
         b23_pattern = r'https?://[Bb]23\.tv/[^\s<>"\'()]+'
         b23_links = re.findall(b23_pattern, text, re.IGNORECASE)
         result_links_set.update(b23_links)
         
         bilibili_domains = r'(?:www|m|mobile)\.bilibili\.com'
         
-        # BV URL匹配（从URL中直接提取BV号，避免重复搜索）
         bv_url_pattern = (
             rf'https?://{bilibili_domains}/video/'
             rf'([Bb][Vv][0-9A-Za-z]{{10,}})[^\s<>"\'()]*'
@@ -189,7 +187,6 @@ class BilibiliParser(BaseVideoParser):
                 normalized_url = f"https://www.bilibili.com/video/{bvid}"
                 result_links_set.add(normalized_url)
         
-        # AV URL匹配
         av_url_pattern = (
             rf'https?://{bilibili_domains}/video/'
             rf'[Aa][Vv](\d+)[^\s<>"\'()]*'
@@ -203,7 +200,6 @@ class BilibiliParser(BaseVideoParser):
                 av_url = f"https://www.bilibili.com/video/av{av_num}"
                 result_links_set.add(av_url)
         
-        # EP URL匹配
         ep_url_pattern = (
             rf'https?://{bilibili_domains}/bangumi/play/'
             rf'ep(\d+)[^\s<>"\'()]*'
@@ -217,7 +213,6 @@ class BilibiliParser(BaseVideoParser):
                 ep_url = f"https://www.bilibili.com/bangumi/play/ep{ep_id}"
                 result_links_set.add(ep_url)
         
-        # 独立BV号匹配
         bv_standalone_pattern = r'\b[Bb][Vv][0-9A-Za-z]{10,}\b'
         bv_standalone_matches = re.finditer(
             bv_standalone_pattern,
@@ -240,7 +235,6 @@ class BilibiliParser(BaseVideoParser):
                     bv_url = f"https://www.bilibili.com/video/{bvid}"
                     result_links_set.add(bv_url)
         
-        # 独立AV号匹配
         av_standalone_pattern = r'\b[Aa][Vv](\d+)\b'
         av_standalone_matches = re.finditer(
             av_standalone_pattern,
@@ -261,7 +255,6 @@ class BilibiliParser(BaseVideoParser):
                     av_url = f"https://www.bilibili.com/video/av{av_num}"
                     result_links_set.add(av_url)
 
-        # opus链接匹配
         opus_pattern = (
             rf'https?://(?:www|m|mobile)\.bilibili\.com/opus/'
             rf'(\d+)[^\s<>"\'()]*'
@@ -275,7 +268,6 @@ class BilibiliParser(BaseVideoParser):
                 opus_url = f"https://www.bilibili.com/opus/{opus_id}"
                 result_links_set.add(opus_url)
 
-        # t.bilibili.com链接匹配
         t_bilibili_pattern = (
             r'https?://t\.bilibili\.com/'
             r'(\d+)[^\s<>"\'()]*'
@@ -501,7 +493,14 @@ class BilibiliParser(BaseVideoParser):
             author = f"(uid:{mid})"
         else:
             author = ""
-        return {"title": title, "desc": desc, "author": author}
+        
+        timestamp = ""
+        pubdate = data.get("pubdate")
+        if pubdate:
+            dt = datetime.fromtimestamp(int(pubdate))
+            timestamp = dt.strftime("%Y-%m-%d")
+        
+        return {"title": title, "desc": desc, "author": author, "timestamp": timestamp}
 
     async def get_pgc_info_by_ep(
         self,
@@ -563,7 +562,15 @@ class BilibiliParser(BaseVideoParser):
             author = f"(uid:{mid})"
         else:
             author = result.get("season_title") or result.get("title") or ""
-        return {"title": title, "desc": desc, "author": author}
+        
+        timestamp = ""
+        if ep_obj:
+            pub_time = ep_obj.get("pub_time")
+            if pub_time:
+                dt = datetime.fromtimestamp(int(pub_time))
+                timestamp = dt.strftime("%Y-%m-%d")
+        
+        return {"title": title, "desc": desc, "author": author, "timestamp": timestamp}
 
     async def get_pagelist(
         self,
@@ -1219,9 +1226,9 @@ class BilibiliParser(BaseVideoParser):
             "title": info.get("title", ""),
             "author": info.get("author", ""),
             "desc": info.get("desc", ""),
-            "timestamp": "",  # B站API不返回发布时间
+            "timestamp": info.get("timestamp", ""),
             "media_urls": [direct_url],
-            "thumb_url": None,  # B站视频没有单独的封面图URL
-            "page_url": page_url,  # 完整页面URL，用于检测视频大小时的referer
+            "thumb_url": None,
+            "page_url": page_url,
         }
 

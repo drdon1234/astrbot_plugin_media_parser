@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import re
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import aiohttp
@@ -142,7 +143,8 @@ class TwitterParser(BaseVideoParser):
                         'images': [],
                         'videos': [],
                         'text': '',
-                        'author': ''
+                        'author': '',
+                        'timestamp': ''
                     }
                     if 'tweet' in data:
                         tweet = data['tweet']
@@ -159,6 +161,12 @@ class TwitterParser(BaseVideoParser):
                                 )
                             else:
                                 media_urls['author'] = author_username
+                        
+                        created_at = tweet.get('created_at')
+                        if created_at:
+                            dt = datetime.strptime(created_at, '%a %b %d %H:%M:%S %z %Y')
+                            media_urls['timestamp'] = dt.strftime('%Y-%m-%d')
+                        
                         if 'media' in tweet and 'photos' in tweet['media']:
                             for photo in tweet['media']['photos']:
                                 media_urls['images'].append(photo.get('url', ''))
@@ -215,6 +223,7 @@ class TwitterParser(BaseVideoParser):
             videos = media_info.get('videos', [])
             text = media_info.get('text', '')
             author = media_info.get('author', '')
+            timestamp = media_info.get('timestamp', '')
             
             if not images and not videos:
                 raise RuntimeError("解析失败：推文不包含图片或视频")
@@ -248,13 +257,13 @@ class TwitterParser(BaseVideoParser):
                     "title": text[:100] if text else "Twitter 推文",
                     "author": author,
                     "desc": text,
-                    "timestamp": "",  # Twitter API不返回发布时间
+                    "timestamp": timestamp,
                     "media_urls": media_urls,
-                    "video_urls": video_urls,  # 单独的视频URL列表
-                    "image_urls": image_urls,  # 单独的图片URL列表
+                    "video_urls": video_urls,
+                    "image_urls": image_urls,
                     "thumb_url": video_thumb_urls[0] if video_thumb_urls and video_thumb_urls[0] else (image_urls[0] if image_urls else None),
-                    "video_thumb_urls": video_thumb_urls,  # 每个视频的缩略图URL列表
-                    "media_types": media_types,  # 每个媒体对应的类型列表
+                    "video_thumb_urls": video_thumb_urls,
+                    "media_types": media_types,
                     "is_twitter_video": True,
                 }
             elif has_videos:
@@ -266,11 +275,11 @@ class TwitterParser(BaseVideoParser):
                     "title": text[:100] if text else "Twitter 推文",
                     "author": author,
                     "desc": text,
-                    "timestamp": "",  # Twitter API不返回发布时间
+                    "timestamp": timestamp,
                     "media_urls": media_urls,
-                    "video_urls": video_urls,  # 单独的视频URL列表（用于后续处理）
+                    "video_urls": video_urls,
                     "thumb_url": video_thumb_urls[0] if video_thumb_urls and video_thumb_urls[0] else None,
-                    "video_thumb_urls": video_thumb_urls,  # 每个视频的缩略图URL列表
+                    "video_thumb_urls": video_thumb_urls,
                     "is_twitter_video": True,
                 }
             else:
@@ -283,9 +292,9 @@ class TwitterParser(BaseVideoParser):
                     "title": text[:100] if text else "Twitter 推文",
                     "author": author,
                     "desc": text,
-                    "timestamp": "",  # Twitter API不返回发布时间
+                    "timestamp": timestamp,
                     "media_urls": image_urls,
-                    "image_urls": image_urls,  # 单独的图片URL列表（用于后续处理）
+                    "image_urls": image_urls,
                     "thumb_url": image_urls[0] if image_urls else None,
                     "is_twitter_video": False,
                 }

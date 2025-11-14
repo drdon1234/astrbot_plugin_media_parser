@@ -57,12 +57,10 @@ class KuaishouParser(BaseVideoParser):
         """
         result_links_set = set()
         
-        # 短链匹配
         short_pattern = r'https?://v\.kuaishou\.com/[^\s]+'
         short_links = re.findall(short_pattern, text)
         result_links_set.update(short_links)
         
-        # 长链匹配
         long_pattern = r'https?://(?:www\.)?kuaishou\.com/[^\s]+'
         long_links = re.findall(long_pattern, text)
         result_links_set.update(long_links)
@@ -437,7 +435,7 @@ class KuaishouParser(BaseVideoParser):
                     "media_type": "video",
                     "title": title,
                     "author": author,
-                    "desc": "",  # 快手API不返回描述
+                    "desc": "",
                     "timestamp": upload_time or "",
                     "media_urls": [video_url],
                     "thumb_url": None,
@@ -459,7 +457,7 @@ class KuaishouParser(BaseVideoParser):
                         "media_type": "gallery",
                         "title": title or "快手图集",
                         "author": author,
-                        "desc": "",  # 快手API不返回描述
+                        "desc": "",
                         "timestamp": upload_time or "",
                         "media_urls": images,
                         "thumb_url": None,
@@ -478,7 +476,7 @@ class KuaishouParser(BaseVideoParser):
                             "media_type": "video",
                             "title": title,
                             "author": author,
-                            "desc": "",  # 快手API不返回描述
+                            "desc": "",
                             "timestamp": upload_time or "",
                             "media_urls": [video_url],
                             "thumb_url": None,
@@ -511,7 +509,7 @@ class KuaishouParser(BaseVideoParser):
                                 "media_type": "gallery",
                                 "title": title or "快手图集",
                                 "author": author,
-                                "desc": "",  # 快手API不返回描述
+                                "desc": "",
                                 "timestamp": upload_time or "",
                                 "media_urls": images,
                                 "thumb_url": None,

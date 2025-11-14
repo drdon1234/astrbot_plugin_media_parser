@@ -56,12 +56,10 @@ class DouyinParser(BaseVideoParser):
         result_links_set = set()
         seen_ids = set()
         
-        # 短链匹配
         mobile_pattern = r'https?://v\.douyin\.com/[^\s]+'
         mobile_links = re.findall(mobile_pattern, text)
         result_links_set.update(mobile_links)
         
-        # note链接匹配
         note_pattern = r'https?://(?:www\.)?douyin\.com/note/(\d+)'
         note_matches = re.finditer(note_pattern, text)
         for match in note_matches:
@@ -70,7 +68,6 @@ class DouyinParser(BaseVideoParser):
                 seen_ids.add(note_id)
                 result_links_set.add(f"https://www.douyin.com/note/{note_id}")
         
-        # video链接匹配
         video_pattern = r'https?://(?:www\.)?douyin\.com/video/(\d+)'
         video_matches = re.finditer(video_pattern, text)
         for match in video_matches:
@@ -79,14 +76,12 @@ class DouyinParser(BaseVideoParser):
                 seen_ids.add(video_id)
                 result_links_set.add(f"https://www.douyin.com/video/{video_id}")
         
-        # 通用链接匹配（排除已匹配的note和video）
         web_pattern = r'https?://(?:www\.)?douyin\.com/[^\s]*?(\d{19})[^\s]*'
         web_matches = re.finditer(web_pattern, text)
         for match in web_matches:
             item_id = match.group(1)
             if item_id not in seen_ids:
                 matched_url = match.group(0)
-                # 排除已通过专门模式匹配的链接
                 if '/note/' not in matched_url and '/video/' not in matched_url:
                     seen_ids.add(item_id)
                     result_links_set.add(f"https://www.douyin.com/video/{item_id}")
@@ -369,7 +364,7 @@ class DouyinParser(BaseVideoParser):
                     "media_type": "gallery",
                     "title": title,
                     "author": author,
-                    "desc": "",  # 抖音API不返回描述
+                    "desc": "",
                     "timestamp": timestamp,
                     "media_urls": media_urls,
                     "thumb_url": thumb_url,
@@ -384,7 +379,7 @@ class DouyinParser(BaseVideoParser):
                     "media_type": "video",
                     "title": title,
                     "author": author,
-                    "desc": "",  # 抖音API不返回描述
+                    "desc": "",
                     "timestamp": timestamp,
                     "media_urls": [video_url],
                     "thumb_url": thumb_url,

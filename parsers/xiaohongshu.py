@@ -59,7 +59,6 @@ class XiaohongshuParser(BaseVideoParser):
         result_links_set = set()
         seen_urls = set()
         
-        # 短链匹配
         short_pattern = r'https?://xhslink\.com/[^\s<>"\'()]+'
         short_links = re.findall(short_pattern, text, re.IGNORECASE)
         for link in short_links:
@@ -68,7 +67,6 @@ class XiaohongshuParser(BaseVideoParser):
                 seen_urls.add(normalized)
                 result_links_set.add(link)
         
-        # 长链匹配（正则已确保包含协议，无需额外检查）
         long_pattern = (
             r'https?://(?:www\.)?xiaohongshu\.com/'
             r'(?:explore|discovery/item)/[^\s<>"\'()]+'
