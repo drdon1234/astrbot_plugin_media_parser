@@ -7,18 +7,18 @@ from .base_parser import BaseVideoParser
 
 
 class ExampleParser(BaseVideoParser):
-    """示例解析器。
+    """示例解析器
 
     这个类展示了如何实现一个新的视频解析器。
     可以复制此文件并修改以实现新的解析器。
     """
 
     def __init__(self):
-        """初始化示例解析器。"""
+        """初始化示例解析器"""
         super().__init__("示例平台")
 
     def can_parse(self, url: str) -> bool:
-        """判断是否可以解析此URL。
+        """判断是否可以解析此URL
 
         在此方法中实现URL识别逻辑，例如：检查URL是否包含特定域名。
 
@@ -33,7 +33,7 @@ class ExampleParser(BaseVideoParser):
         return False
 
     def extract_links(self, text: str) -> List[str]:
-        """从文本中提取该解析器可以处理的链接。
+        """从文本中提取该解析器可以处理的链接
 
         在此方法中实现链接提取逻辑，可以使用正则表达式匹配链接模式。
 
@@ -51,7 +51,7 @@ class ExampleParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         url: str
     ) -> Optional[Dict[str, Any]]:
-        """解析单个视频链接。
+        """解析单个视频链接
 
         在此方法中实现具体的解析逻辑：
         1. 获取视频信息（标题、作者、描述等）
@@ -60,14 +60,13 @@ class ExampleParser(BaseVideoParser):
 
         返回的字典应包含以下字段（根据实际情况选择）：
         - url: 原始url（必需）
-        - media_type: 媒体类型: "video", "image", "gallery"（必需）
         - title: 标题（可选）
         - author: 作者（可选）
         - desc: 简介（可选）
         - timestamp: 发布时间（可选）
-        - media_urls: 媒体直链列表（必需）
-        - thumb_url: 封面图URL（可选）
-        - 其他平台特定字段（如image_url_lists等）
+        - video_urls: 视频URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
+        - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
+        - 其他平台特定字段
 
         Args:
             session: aiohttp会话
@@ -86,14 +85,13 @@ class ExampleParser(BaseVideoParser):
             #     raise RuntimeError(f"无法解析此URL: {url}")
             # return {
             #     "url": url,
-            #     "media_type": "video",
             #     "title": result.get("title", ""),
             #     "author": result.get("author", ""),
             #     "desc": result.get("desc", ""),
             #     "timestamp": result.get("timestamp", ""),
-            #     "media_urls": [result.get("video_url")],
-            #     "thumb_url": result.get("thumb_url"),
+            #     "video_urls": [[result.get("video_url")]] if result.get("video_url") else [],
+            #     "image_urls": [],
             # }
             return None
         except Exception as e:
-            raise RuntimeError(f"解析失败：{str(e)}")
+            raise RuntimeError(str(e))

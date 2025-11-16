@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-import os
-import json
 import asyncio
-import aiohttp
+import json
 from typing import Any, Dict
+
+import aiohttp
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
@@ -15,25 +15,27 @@ from .core.parser_manager import ParserManager
 from .core.download_manager import DownloadManager
 from .core.node_builder import build_all_nodes, is_pure_image_gallery
 from .core.file_manager import cleanup_files
+from .core.constants import Config
 from .parsers import (
     BilibiliParser,
     DouyinParser,
     KuaishouParser,
+    WeiboParser,
     XiaohongshuParser,
     TwitterParser
 )
 
 
 @register(
-    "astrbot_plugin_video_parser",
+    "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "0.2.0"
+    "0.3.0"
 )
 class VideoParserPlugin(Star):
 
     def __init__(self, context: Context, config: dict):
-        """初始化插件。
+        """初始化插件
 
         Args:
             context: 上下文对象
@@ -55,10 +57,14 @@ class VideoParserPlugin(Star):
         max_video_size_mb = video_size_settings.get("max_video_size_mb", 0.0)
         large_video_threshold_mb = video_size_settings.get(
             "large_video_threshold_mb",
-            100.0
+            Config.MAX_LARGE_VIDEO_THRESHOLD_MB
         )
         if large_video_threshold_mb > 0:
-            large_video_threshold_mb = min(large_video_threshold_mb, 100.0)
+            large_video_threshold_mb = min(
+                large_video_threshold_mb,
+                Config.MAX_LARGE_VIDEO_THRESHOLD_MB
+            )
+        self.max_video_size_mb = max_video_size_mb
         self.large_video_threshold_mb = large_video_threshold_mb
         download_settings = config.get("download_settings", {})
         cache_dir = download_settings.get(
@@ -78,6 +84,10 @@ class VideoParserPlugin(Star):
         enable_douyin = parser_enable_settings.get("enable_douyin", True)
         enable_kuaishou = parser_enable_settings.get(
             "enable_kuaishou",
+            True
+        )
+        enable_weibo = parser_enable_settings.get(
+            "enable_weibo",
             True
         )
         enable_xiaohongshu = parser_enable_settings.get(
@@ -103,6 +113,8 @@ class VideoParserPlugin(Star):
             parsers.append(DouyinParser())
         if enable_kuaishou:
             parsers.append(KuaishouParser())
+        if enable_weibo:
+            parsers.append(WeiboParser())
         if enable_xiaohongshu:
             parsers.append(XiaohongshuParser())
         if enable_twitter:
@@ -130,11 +142,11 @@ class VideoParserPlugin(Star):
         self.twitter_proxy_url = proxy_url if (use_image_proxy or use_video_proxy) else None
 
     async def terminate(self):
-        """插件终止时的清理工作。"""
+        """插件终止时的清理工作"""
         pass
 
     def _should_parse(self, message_str: str) -> bool:
-        """判断是否应该解析消息。
+        """判断是否应该解析消息
 
         Args:
             message_str: 消息文本
@@ -150,7 +162,7 @@ class VideoParserPlugin(Star):
         return False
 
     def _get_sender_info(self, event: AstrMessageEvent) -> tuple:
-        """获取发送者信息。
+        """获取发送者信息
 
         Args:
             event: 消息事件对象
@@ -168,11 +180,95 @@ class VideoParserPlugin(Star):
                 sender_id = 10000
         return sender_name, sender_id
 
+    def _get_bilibili_headers(self, url: str, metadata: Dict[str, Any]) -> tuple:
+        """获取B站请求头和Referer
+
+        Args:
+            url: URL
+            metadata: 元数据字典
+
+        Returns:
+            (headers, referer) 元组
+        """
+        page_url = metadata.get('page_url', url)
+        referer_url = page_url if page_url else url
+        headers = {
+            "User-Agent": Config.USER_AGENT_DESKTOP,
+            "Referer": referer_url,
+            "Origin": "https://www.bilibili.com"
+        }
+        return headers, referer_url
+
+    def _get_douyin_headers(self, url: str) -> tuple:
+        """获取抖音请求头和Referer
+
+        Args:
+            url: URL
+
+        Returns:
+            (headers, referer) 元组
+        """
+        headers = {
+            'User-Agent': Config.USER_AGENT_MOBILE,
+            'Referer': 'https://www.douyin.com/'
+        }
+        return headers, url
+
+    def _get_weibo_headers(self, url: str) -> tuple:
+        """获取微博请求头和Referer
+
+        Args:
+            url: URL
+
+        Returns:
+            (headers, referer) 元组
+        """
+        headers = {
+            'User-Agent': Config.USER_AGENT_DESKTOP,
+            'Referer': 'https://weibo.com/'
+        }
+        return headers, url
+
+    def _get_xiaohongshu_headers(self, url: str, metadata: Dict[str, Any]) -> tuple:
+        """获取小红书请求头和Referer
+
+        Args:
+            url: URL
+            metadata: 元数据字典
+
+        Returns:
+            (headers, referer) 元组
+        """
+        page_url = metadata.get('page_url', url)
+        headers = {
+            'User-Agent': Config.USER_AGENT_DESKTOP,
+            'Referer': page_url if page_url else 'https://www.xiaohongshu.com/'
+        }
+        referer = page_url if page_url else url
+        return headers, referer
+
+    def _get_twitter_headers(self, url: str) -> tuple:
+        """获取Twitter请求头和Referer
+
+        Args:
+            url: URL
+
+        Returns:
+            (headers, referer, proxy) 元组
+        """
+        proxy = None
+        if self.twitter_proxy_url:
+            proxy = self.twitter_proxy_url
+        headers = {
+            'User-Agent': Config.USER_AGENT_DESKTOP
+        }
+        return headers, url, proxy
+
     def _get_headers_and_referer(
         self,
         metadata: Dict[str, Any]
     ) -> tuple:
-        """根据元数据获取请求头和Referer。
+        """根据元数据获取请求头和Referer
 
         Args:
             metadata: 元数据字典
@@ -186,50 +282,19 @@ class VideoParserPlugin(Star):
         proxy = None
         
         if 'bilibili.com' in url or 'b23.tv' in url:
-            page_url = metadata.get('page_url', url)
-            referer_url = page_url if page_url else url
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Referer": referer_url,
-                "Origin": "https://www.bilibili.com"
-            }
-            referer = referer_url
+            headers, referer = self._get_bilibili_headers(url, metadata)
         elif 'douyin.com' in url:
-            headers = {
-                'User-Agent': (
-                    'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/116.0.0.0 Mobile Safari/537.36'
-                ),
-                'Referer': 'https://www.douyin.com/'
-            }
-            referer = url
+            headers, referer = self._get_douyin_headers(url)
+        elif 'weibo.com' in url or 'weibo.cn' in url:
+            headers, referer = self._get_weibo_headers(url)
         elif 'xiaohongshu.com' in url or 'xhslink.com' in url:
-            page_url = metadata.get('page_url', url)
-            headers = {
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0.0.0 Safari/537.36'
-                ),
-                'Referer': page_url if page_url else 'https://www.xiaohongshu.com/'
-            }
-            referer = page_url if page_url else url
+            headers, referer = self._get_xiaohongshu_headers(url, metadata)
         elif 'twitter.com' in url or 'x.com' in url:
-            if self.twitter_proxy_url:
-                proxy = self.twitter_proxy_url
-            headers = {
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0.0.0 Safari/537.36'
-                )
-            }
-            referer = url
+            result = self._get_twitter_headers(url)
+            if len(result) == 3:
+                headers, referer, proxy = result
+            else:
+                headers, referer = result
         
         return headers, referer, proxy
 
@@ -240,7 +305,7 @@ class VideoParserPlugin(Star):
         sender_name: str,
         sender_id: Any
     ):
-        """发送打包的结果（使用Nodes）。
+        """发送打包的结果（使用Nodes）
 
         Args:
             event: 消息事件对象
@@ -334,7 +399,7 @@ class VideoParserPlugin(Star):
         sender_name: str,
         sender_id: Any
     ):
-        """发送大媒体结果（单独发送）。
+        """发送大媒体结果（单独发送）
 
         Args:
             event: 消息事件对象
@@ -377,7 +442,7 @@ class VideoParserPlugin(Star):
         all_link_nodes: list,
         link_metadata: list
     ):
-        """发送非打包的结果（独立发送）。
+        """发送非打包的结果（独立发送）
 
         Args:
             event: 消息事件对象
@@ -418,7 +483,7 @@ class VideoParserPlugin(Star):
 
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse(self, event: AstrMessageEvent):
-        """自动解析消息中的视频链接。
+        """自动解析消息中的视频链接
 
         Args:
             event: 消息事件对象
@@ -427,10 +492,11 @@ class VideoParserPlugin(Star):
         try:
             messages = event.get_messages()
             if messages and len(messages) > 0:
-                curl_link = json.loads(messages[0].data).get("meta").get("detail_1").get("qqdocurl")
+                message_data = json.loads(messages[0].data)
+                curl_link = message_data.get("meta").get("detail_1").get("qqdocurl")
                 if curl_link:
                     message_text = curl_link
-        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError) as e:
+        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError):
             pass
         
         if not self._should_parse(message_text):
@@ -445,7 +511,7 @@ class VideoParserPlugin(Star):
         await event.send(event.plain_result("流媒体解析bot为您服务 ٩( 'ω' )و"))
         sender_name, sender_id = self._get_sender_info(event)
         
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             metadata_list = await self.parser_manager.parse_text(
                 message_text,
@@ -455,7 +521,7 @@ class VideoParserPlugin(Star):
                 return
             
             async def process_single_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-                """处理单个元数据。
+                """处理单个元数据
 
                 Args:
                     metadata: 元数据字典
@@ -504,7 +570,8 @@ class VideoParserPlugin(Star):
                 self.is_auto_pack,
                 sender_name,
                 sender_id,
-                self.large_video_threshold_mb
+                self.large_video_threshold_mb,
+                self.max_video_size_mb
             )
             
             if not all_link_nodes:

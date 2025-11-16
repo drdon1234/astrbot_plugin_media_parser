@@ -28,6 +28,7 @@ try:
         BilibiliParser,
         DouyinParser,
         KuaishouParser,
+        WeiboParser,
         XiaohongshuParser,
         TwitterParser,
         LinkRouter
@@ -51,6 +52,7 @@ def init_parsers(use_proxy: bool = False, proxy_url: str = None) -> List:
         BilibiliParser(),
         DouyinParser(),
         KuaishouParser(),
+        WeiboParser(),
         XiaohongshuParser(),
         TwitterParser(
             use_image_proxy=use_proxy,
@@ -62,7 +64,7 @@ def init_parsers(use_proxy: bool = False, proxy_url: str = None) -> List:
 
 
 def print_metadata(metadata: Dict[str, Any], url: str, parser_name: str):
-    """打印解析后的元数据。
+    """打印解析后的元数据
 
     Args:
         metadata: 元数据字典
@@ -83,29 +85,31 @@ def print_metadata(metadata: Dict[str, Any], url: str, parser_name: str):
     print(f"简介: {metadata.get('desc', 'N/A')}")
     print(f"发布时间: {metadata.get('timestamp', 'N/A')}")
     
-    media_type = metadata.get('media_type', 'unknown')
-    media_urls = metadata.get('media_urls', [])
+    video_urls = metadata.get('video_urls', [])
+    image_urls = metadata.get('image_urls', [])
     
-    if media_type == 'video':
-        print(f"\n视频: {len(media_urls)} 个")
-        for idx, video_url in enumerate(media_urls, 1):
-            print(f"  [{idx}] {video_url}")
-        if metadata.get('thumb_url'):
-            print(f"封面: {metadata.get('thumb_url')}")
-    elif media_type == 'gallery':
-        print(f"\n图集: {len(media_urls)} 张")
-        for idx, img_url in enumerate(media_urls[:5], 1):
-            backup_count = 0
-            image_url_lists = metadata.get('image_url_lists', [])
-            if idx <= len(image_url_lists) and image_url_lists[idx - 1]:
-                backup_count = len(image_url_lists[idx - 1]) - 1
-            backup_info = f" (备用URL: {backup_count}个)" if backup_count > 0 else ""
-            print(f"  [{idx}] {img_url}{backup_info}")
-        if len(media_urls) > 5:
-            print(f"  ... 还有 {len(media_urls) - 5} 张")
+    if video_urls:
+        print(f"\n视频: {len(video_urls)} 个")
+        for idx, url_list in enumerate(video_urls, 1):
+            if url_list and isinstance(url_list, list) and len(url_list) > 0:
+                main_url = url_list[0]
+                backup_count = len(url_list) - 1
+                backup_info = f" (备用URL: {backup_count}个)" if backup_count > 0 else ""
+                print(f"  [{idx}] {main_url}{backup_info}")
+    
+    if image_urls:
+        print(f"\n图集: {len(image_urls)} 张")
+        for idx, url_list in enumerate(image_urls[:5], 1):
+            if url_list and isinstance(url_list, list) and len(url_list) > 0:
+                main_url = url_list[0]
+                backup_count = len(url_list) - 1
+                backup_info = f" (备用URL: {backup_count}个)" if backup_count > 0 else ""
+                print(f"  [{idx}] {main_url}{backup_info}")
+        if len(image_urls) > 5:
+            print(f"  ... 还有 {len(image_urls) - 5} 张")
     
     if metadata.get('is_twitter_video'):
-        print("标记: Twitter视频（需要下载）")
+        print("标记: Twitter视频")
     if metadata.get('page_url'):
         print(f"页面URL: {metadata.get('page_url')}")
     
@@ -228,10 +232,10 @@ async def download_media(
             return False
         
         url = metadata.get('url', '')
-        media_type = metadata.get('media_type', '')
-        media_urls = metadata.get('media_urls', [])
+        video_urls = metadata.get('video_urls', [])
+        image_urls = metadata.get('image_urls', [])
         
-        if not media_urls:
+        if not video_urls and not image_urls:
             logger.warning(f"跳过下载（无媒体URL）: {url}")
             return False
         
@@ -279,41 +283,53 @@ async def download_media(
             }
             referer = url
         
-        if media_type == 'video':
-            for idx, media_url in enumerate(media_urls, 1):
-                dest_path = os.path.join(link_dir, f"video_{idx}.mp4")
+        # 下载视频
+        for idx, url_list in enumerate(video_urls, 1):
+            if not url_list or not isinstance(url_list, list) or len(url_list) == 0:
+                continue
+            
+            dest_path = os.path.join(link_dir, f"video_{idx}.mp4")
+            success = False
+            
+            # 尝试每个URL（单条直链重试，多条直链遍历）
+            for url_item in url_list:
+                if not url_item or not isinstance(url_item, str) or not url_item.startswith(('http://', 'https://')):
+                    continue
                 
                 media_proxy = None
-                if proxy_url and ('pbs.twimg.com' in media_url or 'video.twimg.com' in media_url):
+                if proxy_url and ('pbs.twimg.com' in url_item or 'video.twimg.com' in url_item):
                     media_proxy = proxy_url
                 
+                # 单条直链：重试一次（总共2次）
+                # 多条直链：遍历列表直到成功，不对同一条URL重试
+                max_retries = 1 if len(url_list) == 1 else 0
                 success = await download_file(
                     session,
-                    media_url,
+                    url_item,
                     dest_path,
                     referer=referer,
                     proxy=media_proxy,
                     headers=headers,
-                    max_retries=3,
+                    max_retries=max_retries,
                     retry_delay=1.0
                 )
                 if success:
-                    downloaded_files.append(dest_path)
-                else:
-                    failed_count += 1
-        elif media_type == 'gallery':
-            image_url_lists = metadata.get('image_url_lists', [])
-            for idx, media_url in enumerate(media_urls, 1):
-                url_list = [media_url]
-                if idx <= len(image_url_lists) and image_url_lists[idx - 1]:
-                    backup_urls = image_url_lists[idx - 1]
-                    if backup_urls and backup_urls[0] == media_url:
-                        url_list = backup_urls
-                    else:
-                        url_list = [media_url] + backup_urls
-                
-                ext = '.jpg'
-                for url_item in url_list:
+                    break
+            
+            if success:
+                downloaded_files.append(dest_path)
+            else:
+                failed_count += 1
+        
+        # 下载图片
+        for idx, url_list in enumerate(image_urls, 1):
+            if not url_list or not isinstance(url_list, list) or len(url_list) == 0:
+                continue
+            
+            # 确定文件扩展名
+            ext = '.jpg'
+            for url_item in url_list:
+                if url_item and isinstance(url_item, str):
                     if '.png' in url_item.lower():
                         ext = '.png'
                         break
@@ -323,31 +339,39 @@ async def download_media(
                     elif '.gif' in url_item.lower():
                         ext = '.gif'
                         break
+            
+            dest_path = os.path.join(link_dir, f"image_{idx}{ext}")
+            success = False
+            
+            # 尝试每个URL（单条直链重试，多条直链遍历）
+            for url_item in url_list:
+                if not url_item or not isinstance(url_item, str) or not url_item.startswith(('http://', 'https://')):
+                    continue
                 
-                dest_path = os.path.join(link_dir, f"image_{idx}{ext}")
-                success = False
-                for url_item in url_list:
-                    if url_item and isinstance(url_item, str) and url_item.startswith(('http://', 'https://')):
-                        media_proxy = None
-                        if proxy_url and ('pbs.twimg.com' in url_item or 'video.twimg.com' in url_item):
-                            media_proxy = proxy_url
-                        
-                        success = await download_file(
-                            session,
-                            url_item,
-                            dest_path,
-                            referer=referer,
-                            proxy=media_proxy,
-                            headers=headers,
-                            max_retries=1,
-                            retry_delay=0.5
-                        )
-                        if success:
-                            break
+                media_proxy = None
+                if proxy_url and ('pbs.twimg.com' in url_item or 'video.twimg.com' in url_item):
+                    media_proxy = proxy_url
+                
+                # 单条直链：重试一次（总共2次）
+                # 多条直链：遍历列表直到成功，不对同一条URL重试
+                max_retries = 1 if len(url_list) == 1 else 0
+                success = await download_file(
+                    session,
+                    url_item,
+                    dest_path,
+                    referer=referer,
+                    proxy=media_proxy,
+                    headers=headers,
+                    max_retries=max_retries,
+                    retry_delay=0.5
+                )
                 if success:
-                    downloaded_files.append(dest_path)
-                else:
-                    failed_count += 1
+                    break
+            
+            if success:
+                downloaded_files.append(dest_path)
+            else:
+                failed_count += 1
         
         if failed_count == 0 and len(downloaded_files) > 0:
             print(f"✓ {url} 下载成功 ({len(downloaded_files)} 个文件)")
@@ -368,7 +392,7 @@ async def download_media_concurrent(
     proxy_url: str = None,
     max_concurrent: int = 5
 ):
-    """并发下载多个媒体文件。
+    """并发下载多个媒体文件
 
     Args:
         metadata_list: 元数据列表
@@ -381,7 +405,10 @@ async def download_media_concurrent(
     if not metadata_list:
         return
     
-    total_files = sum(len(meta.get('media_urls', [])) for meta in metadata_list)
+    total_files = sum(
+        len(meta.get('video_urls', [])) + len(meta.get('image_urls', []))
+        for meta in metadata_list
+    )
     print(f"\n开始并发下载 {len(metadata_list)} 个链接内的媒体（共 {total_files} 个文件，最大并发数: {max_concurrent}）...")
     if proxy_url:
         print(f"使用代理: {proxy_url}")
@@ -389,7 +416,7 @@ async def download_media_concurrent(
     semaphore = asyncio.Semaphore(max_concurrent)
     
     async def download_single_metadata(metadata):
-        """下载单个元数据的媒体。
+        """下载单个元数据的媒体
 
         Args:
             metadata: 元数据字典
@@ -400,7 +427,11 @@ async def download_media_concurrent(
         async with semaphore:
             return await download_media(metadata, download_dir, session, proxy_url)
     
-    tasks = [download_single_metadata(meta) for meta in metadata_list if meta.get('media_urls')]
+    tasks = [
+        download_single_metadata(meta) 
+        for meta in metadata_list 
+        if (meta.get('video_urls') or meta.get('image_urls'))
+    ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     success_count = sum(1 for r in results if r is True)
@@ -438,7 +469,7 @@ async def parse_text(
             unique_links_with_parser.append((link, parser))
     
     async def parse_one_link(url: str, parser) -> Tuple[str, Dict[str, Any], Optional[str]]:
-        """解析单个链接。
+        """解析单个链接
 
         Args:
             url: 链接URL
@@ -452,7 +483,7 @@ async def parse_text(
             if result:
                 return (url, result, None)
             else:
-                return (url, None, "解析失败：未返回结果")
+                return (url, None, "未返回结果")
         except RuntimeError as e:
             error_msg = str(e)
             return (url, None, error_msg)
@@ -471,8 +502,8 @@ async def parse_text(
             metadata_list.append({
                 'url': url,
                 'error': str(result),
-                'media_type': 'error',
-                'media_urls': []
+                'video_urls': [],
+                'image_urls': []
             })
         else:
             url, metadata, error = result
@@ -480,24 +511,24 @@ async def parse_text(
                 metadata_list.append({
                     'url': url,
                     'error': error,
-                    'media_type': 'error',
-                    'media_urls': []
+                    'video_urls': [],
+                    'image_urls': []
                 })
             elif metadata:
                 metadata_list.append(metadata)
             else:
                 metadata_list.append({
                     'url': url,
-                    'error': '解析失败：未返回结果',
-                    'media_type': 'error',
-                    'media_urls': []
+                    'error': '未返回结果',
+                    'video_urls': [],
+                    'image_urls': []
                 })
     
     return metadata_list
 
 
 async def main():
-    """主函数，运行交互式测试工具。"""
+    """主函数，运行交互式测试工具"""
     print("=" * 80)
     print("视频链接解析测试工具")
     print("支持的平台: B站、抖音、快手、小红书、Twitter/X")
@@ -600,7 +631,7 @@ async def main():
                     elif choice in ('y', 'yes', '是'):
                         valid_metadata_list = [
                             meta for meta in metadata_list
-                            if not meta.get('error') and meta.get('media_urls')
+                            if not meta.get('error') and (meta.get('video_urls') or meta.get('image_urls'))
                         ]
                         if valid_metadata_list:
                             await download_media_concurrent(

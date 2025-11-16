@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import re
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import aiohttp
@@ -17,7 +18,7 @@ class TwitterParser(BaseVideoParser):
         use_video_proxy: bool = False,
         proxy_url: str = None
     ):
-        """初始化Twitter解析器。
+        """初始化Twitter解析器
 
         Args:
             use_image_proxy: 是否使用图片代理
@@ -39,7 +40,7 @@ class TwitterParser(BaseVideoParser):
         }
 
     def can_parse(self, url: str) -> bool:
-        """判断是否可以解析此URL。
+        """判断是否可以解析此URL
 
         Args:
             url: 视频链接
@@ -56,7 +57,7 @@ class TwitterParser(BaseVideoParser):
         return False
 
     def extract_links(self, text: str) -> List[str]:
-        """从文本中提取Twitter链接。
+        """从文本中提取Twitter链接
 
         Args:
             text: 输入文本
@@ -64,7 +65,7 @@ class TwitterParser(BaseVideoParser):
         Returns:
             Twitter链接列表
         """
-        result_links = []
+        result_links_set = set()
         seen_ids = set()
         pattern = (
             r'https?://(?:twitter\.com|x\.com)/'
@@ -82,11 +83,11 @@ class TwitterParser(BaseVideoParser):
                     original_url,
                     flags=re.IGNORECASE
                 )
-                result_links.append(standardized_url)
-        return result_links
+                result_links_set.add(standardized_url)
+        return list(result_links_set)
 
     def _get_image_proxy(self) -> Optional[str]:
-        """获取图片代理地址。
+        """获取图片代理地址
 
         Returns:
             图片代理地址，如果未启用返回None
@@ -96,7 +97,7 @@ class TwitterParser(BaseVideoParser):
         return None
 
     def _get_video_proxy(self) -> Optional[str]:
-        """获取视频代理地址。
+        """获取视频代理地址
 
         Returns:
             视频代理地址，如果未启用返回None
@@ -112,7 +113,7 @@ class TwitterParser(BaseVideoParser):
         max_retries: int = 3,
         retry_delay: float = 1.0
     ) -> Dict[str, Any]:
-        """使用FxTwitter API获取推特媒体直链（带重试机制）。
+        """使用FxTwitter API获取推特媒体直链（带重试机制）
 
         Args:
             session: aiohttp会话
@@ -142,7 +143,8 @@ class TwitterParser(BaseVideoParser):
                         'images': [],
                         'videos': [],
                         'text': '',
-                        'author': ''
+                        'author': '',
+                        'timestamp': ''
                     }
                     if 'tweet' in data:
                         tweet = data['tweet']
@@ -159,6 +161,12 @@ class TwitterParser(BaseVideoParser):
                                 )
                             else:
                                 media_urls['author'] = author_username
+                        
+                        created_at = tweet.get('created_at')
+                        if created_at:
+                            dt = datetime.strptime(created_at, '%a %b %d %H:%M:%S %z %Y')
+                            media_urls['timestamp'] = dt.strftime('%Y-%m-%d')
+                        
                         if 'media' in tweet and 'photos' in tweet['media']:
                             for photo in tweet['media']['photos']:
                                 media_urls['images'].append(photo.get('url', ''))
@@ -172,19 +180,19 @@ class TwitterParser(BaseVideoParser):
                     return media_urls
             except aiohttp.ClientResponseError as e:
                 if e.status < 500:
-                    raise RuntimeError(f"解析失败：HTTP {e.status} {e.message}")
+                    raise RuntimeError(f"HTTP {e.status} {e.message}")
                 last_exception = e
             except (aiohttp.ClientError, asyncio.TimeoutError, aiohttp.ServerTimeoutError) as e:
                 last_exception = e
             except Exception as e:
-                raise RuntimeError(f"解析失败：{str(e)}")
+                raise RuntimeError(str(e))
 
             if attempt < max_retries:
                 delay = retry_delay * (2 ** attempt)
                 await asyncio.sleep(delay)
             else:
                 error_msg = str(last_exception) if last_exception else "未知错误"
-                raise RuntimeError(f"解析失败：{error_msg}（已重试{max_retries}次）")
+                raise RuntimeError(f"{error_msg}（已重试{max_retries}次）")
 
 
     async def parse(
@@ -192,7 +200,7 @@ class TwitterParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         url: str
     ) -> Optional[Dict[str, Any]]:
-        """解析单个Twitter链接。
+        """解析单个Twitter链接
 
         Args:
             session: aiohttp会话
@@ -215,23 +223,18 @@ class TwitterParser(BaseVideoParser):
             videos = media_info.get('videos', [])
             text = media_info.get('text', '')
             author = media_info.get('author', '')
+            timestamp = media_info.get('timestamp', '')
             
             if not images and not videos:
-                raise RuntimeError("解析失败：推文不包含图片或视频")
+                raise RuntimeError("推文不包含图片或视频")
             
             video_urls = []
-            video_thumb_urls = []
             image_urls = []
             
             for video_info in videos:
                 video_url = video_info.get('url')
                 if video_url:
                     video_urls.append(video_url)
-                    thumbnail = video_info.get('thumbnail', '')
-                    if thumbnail:
-                        video_thumb_urls.append(thumbnail)
-                    else:
-                        video_thumb_urls.append(None)
             
             image_urls = [img for img in images if img]
             
@@ -239,53 +242,38 @@ class TwitterParser(BaseVideoParser):
             has_images = len(image_urls) > 0
             
             if has_videos and has_images:
-                media_urls = video_urls + image_urls
-                media_types = ['video'] * len(video_urls) + ['image'] * len(image_urls)
-                
                 return {
                     "url": url,
-                    "media_type": "mixed",
                     "title": text[:100] if text else "Twitter 推文",
                     "author": author,
                     "desc": text,
-                    "timestamp": "",  # Twitter API不返回发布时间
-                    "media_urls": media_urls,
-                    "video_urls": video_urls,  # 单独的视频URL列表
-                    "image_urls": image_urls,  # 单独的图片URL列表
-                    "thumb_url": video_thumb_urls[0] if video_thumb_urls and video_thumb_urls[0] else (image_urls[0] if image_urls else None),
-                    "video_thumb_urls": video_thumb_urls,  # 每个视频的缩略图URL列表
-                    "media_types": media_types,  # 每个媒体对应的类型列表
+                    "timestamp": timestamp,
+                    "video_urls": [[url] for url in video_urls],
+                    "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": True,
                 }
             elif has_videos:
-                media_urls = video_urls
-                
                 return {
                     "url": url,
-                    "media_type": "video",
                     "title": text[:100] if text else "Twitter 推文",
                     "author": author,
                     "desc": text,
-                    "timestamp": "",  # Twitter API不返回发布时间
-                    "media_urls": media_urls,
-                    "video_urls": video_urls,  # 单独的视频URL列表（用于后续处理）
-                    "thumb_url": video_thumb_urls[0] if video_thumb_urls and video_thumb_urls[0] else None,
-                    "video_thumb_urls": video_thumb_urls,  # 每个视频的缩略图URL列表
+                    "timestamp": timestamp,
+                    "video_urls": [[url] for url in video_urls],
+                    "image_urls": [],
                     "is_twitter_video": True,
                 }
             else:
                 if not image_urls:
-                    raise RuntimeError("解析失败：推文不包含图片")
+                    raise RuntimeError("推文不包含图片")
                 
                 return {
                     "url": url,
-                    "media_type": "gallery",
                     "title": text[:100] if text else "Twitter 推文",
                     "author": author,
                     "desc": text,
-                    "timestamp": "",  # Twitter API不返回发布时间
-                    "media_urls": image_urls,
-                    "image_urls": image_urls,  # 单独的图片URL列表（用于后续处理）
-                    "thumb_url": image_urls[0] if image_urls else None,
+                    "timestamp": timestamp,
+                    "video_urls": [],
+                    "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": False,
                 }

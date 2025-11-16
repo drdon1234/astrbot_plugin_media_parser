@@ -15,10 +15,10 @@ from ..parsers.link_router import LinkRouter
 
 
 class ParserManager:
-    """解析器管理器，负责管理和调度解析器。"""
+    """解析器管理器，负责管理和调度解析器"""
 
     def __init__(self, parsers: List[BaseVideoParser]):
-        """初始化解析器管理器。
+        """初始化解析器管理器
 
         Args:
             parsers: 解析器列表
@@ -33,7 +33,7 @@ class ParserManager:
         self.link_router = LinkRouter(parsers)
 
     def register_parser(self, parser: BaseVideoParser):
-        """注册新的解析器。
+        """注册新的解析器
 
         Args:
             parser: 解析器实例
@@ -43,7 +43,7 @@ class ParserManager:
             self.link_router = LinkRouter(self.parsers)
 
     def find_parser(self, url: str) -> Optional[BaseVideoParser]:
-        """根据URL查找合适的解析器。
+        """根据URL查找合适的解析器
 
         Args:
             url: 视频链接
@@ -60,7 +60,7 @@ class ParserManager:
         self,
         text: str
     ) -> List[Tuple[str, BaseVideoParser]]:
-        """从文本中提取所有可解析的链接。
+        """从文本中提取所有可解析的链接
 
         Args:
             text: 输入文本
@@ -74,7 +74,7 @@ class ParserManager:
         self,
         links_with_parser: List[Tuple[str, BaseVideoParser]]
     ) -> Dict[str, BaseVideoParser]:
-        """对链接进行去重。
+        """对链接进行去重
 
         Args:
             links_with_parser: 链接和解析器的列表
@@ -93,7 +93,7 @@ class ParserManager:
         url: str,
         session: aiohttp.ClientSession
     ) -> Optional[Dict[str, Any]]:
-        """解析单个URL。
+        """解析单个URL
 
         Args:
             url: 视频链接
@@ -116,7 +116,7 @@ class ParserManager:
         text: str,
         session: aiohttp.ClientSession
     ) -> List[Dict[str, Any]]:
-        """解析文本中的所有链接。
+        """解析文本中的所有链接
 
         Args:
             text: 输入文本
@@ -142,8 +142,8 @@ class ParserManager:
                 metadata_list.append({
                     'url': url,
                     'error': str(result),
-                    'media_type': 'error',
-                    'media_urls': []
+                    'video_urls': [],
+                    'image_urls': []
                 })
             elif result:
                 metadata_list.append(result)

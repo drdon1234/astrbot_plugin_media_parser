@@ -6,14 +6,12 @@
 
 
 class Config:
-    """配置常量类。"""
+    """配置常量类"""
     
     DEFAULT_TIMEOUT = 30
     VIDEO_SIZE_CHECK_TIMEOUT = 10
     IMAGE_DOWNLOAD_TIMEOUT = 30
     VIDEO_DOWNLOAD_TIMEOUT = 300
-    
-    MAX_RETRIES = 3
     
     DEFAULT_MAX_CONCURRENT_DOWNLOADS = 3
     MAX_MAX_CONCURRENT_DOWNLOADS = 10

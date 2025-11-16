@@ -19,7 +19,7 @@
 
 ### 主要功能
 
-- **多平台支持**：支持 B站、抖音、快手、小红书、推特等主流平台
+- **多平台支持**：支持 B站、抖音、快手、微博、小红书、推特等主流平台
 - **自动识别**：自动识别会话中的视频或图片链接
 - **并行解析**：支持多平台并行解析与批量处理
 - **智能下载**：根据视频大小自动决定使用直链或本地缓存
@@ -29,11 +29,12 @@
 
 | 平台 | 支持的链接类型 | 可解析的媒体类型 |
 |------|--------------|----------------|
-| B站 | 短链、AV号、BV号 | 视频 |
-| 抖音 | 短链、视频长链、图集长链 | 视频、图集 |
-| 快手 | 短链、视频长链 | 视频、图集 |
-| 小红书 | 短链、笔记长链 | 视频、图集 |
-| 推特 | Twitter/X 链接 | 视频、图集 |
+| B站 | 短链、AV号、BV号、动态长链、动态短链 | 视频、图片 |
+| 抖音 | 短链、视频长链、图集长链 | 视频、图片 |
+| 快手 | 短链、视频长链 | 视频、图片 |
+| 微博 | weibo.com、weibo.cn、video.weibo.com 链接 | 视频、图片 |
+| 小红书 | 短链、笔记长链 | 视频、图片 |
+| 推特 | Twitter/X 链接 | 视频、图片 |
 
 ---
 
@@ -74,7 +75,8 @@
                     ▼                    ▼                    ▼
          ┌─────────────────┐  ┌─────────────────┐  ┌──────────────┐
          │ BilibiliParser  │  │ DouyinParser    │  │ TwitterParser│
-         │ KuaishouParser  │  │ XiaohongshuParser│ │ ...          │
+         │ KuaishouParser  │  │ WeiboParser     │  │ ...          │
+         │ XiaohongshuParser│ │                 │  │              │
          └─────────────────┘  └─────────────────┘  └──────────────┘
                     │                    │                    │
                     └────────────────────┼────────────────────┘
@@ -125,6 +127,7 @@ astrbot_plugin_video_parser/
     ├── bilibili.py            # B站解析器
     ├── douyin.py              # 抖音解析器
     ├── kuaishou.py            # 快手解析器
+    ├── weibo.py               # 微博解析器
     ├── xiaohongshu.py         # 小红书解析器
     └── twitter.py             # 推特解析器
 ```
@@ -199,58 +202,106 @@ astrbot_plugin_video_parser/
 ```python
 {
     'url': str,                    # 原始URL（必需）
-    'media_type': str,             # 媒体类型: "video", "image", "gallery", "mixed"（必需）
     'title': str,                  # 标题（可选）
     'author': str,                 # 作者（可选）
     'desc': str,                   # 简介（可选）
     'timestamp': str,              # 发布时间（可选）
-    'media_urls': List[str],       # 媒体直链列表（必需）
-    'video_urls': List[str],       # 视频URL列表（mixed类型需要）
-    'image_urls': List[str],       # 图片URL列表（mixed类型需要）
-    'thumb_url': str,              # 缩略图URL（可选）
+    'video_urls': List[List[str]], # 视频URL列表，每个元素是单个媒体的可用URL列表（必需，可为空列表）
+                                   # 即使只有一条直链也要是列表的列表，例如：[[url1], [url2, url3]]
+    'image_urls': List[List[str]], # 图片URL列表，每个元素是单个媒体的可用URL列表（必需，可为空列表）
+                                   # 即使只有一条直链也要是列表的列表，例如：[[url1], [url2, url3]]
     # 其他平台特定字段...
 }
 ```
+
+**说明**：
+- `video_urls` 和 `image_urls` 都是二维列表格式，外层列表的每个元素代表一个媒体项，内层列表包含该媒体项的可用直链URL
+- 如果某个媒体项只有一条直链，格式为 `[[url]]`（列表的列表）
+- 如果某个媒体项有多条直链（备用URL），格式为 `[[url1, url2, url3]]`
+- 多个媒体项时，格式为 `[[url1], [url2], [url3]]` 或 `[[url1, url2], [url3, url4]]`
+- 不再使用 `media_type` 字段，媒体类型通过 `video_urls` 和 `image_urls` 是否为空来判断
+- 不再使用 `thumb_url` 字段，缩略图功能已移除
 
 ### 5. DownloadManager (core/download_manager.py)
 
 **职责**：管理媒体下载流程，根据配置决定使用网络直链还是本地文件。
 
 **主要功能**：
-- 检查视频大小（HEAD请求获取Content-Length）
+- 检查视频大小（HEAD请求获取Content-Length，或从实际文件大小获取）
 - 根据配置决定下载策略：
-  - 超过 `max_video_size_mb`：跳过，不下载
+  - 超过 `max_video_size_mb`：跳过，不下载（下载前和下载后都会检查）
   - 超过 `large_video_threshold_mb`：下载到缓存目录
-  - 推特视频：强制下载到缓存
-  - 启用 `pre_download_all_media`：预先下载所有媒体
+  - 启用 `pre_download_all_media`：预先下载所有媒体（下载前会先检查大小）
+  - 图片文件：总是下载到临时文件（在非预下载模式下）
 - 管理并发下载数量
 - 为元数据添加文件路径信息
+- 下载后再次验证视频大小，确保不超过限制
 
 **关键方法**：
 - `process_metadata()`: 处理单个元数据，决定下载策略
-- `_determine_media_type()`: 判断媒体类型（视频/图片）
-- `_build_media_items()`: 构建媒体项列表
+- `_build_media_items()`: 构建媒体项列表（从 `video_urls` 和 `image_urls` 构建）
+- `_process_download_results()`: 处理下载结果，构建文件路径列表并统计失败数量
 - `_generate_media_id()`: 生成媒体ID（用于文件命名）
 
 **下载策略决策流程**：
+
+**预先下载模式（pre_download_all_media = True）**：
 ```
-1. 检查是否启用 pre_download_all_media
-   ├─ 是 → 下载所有媒体到缓存
-   └─ 否 → 继续
+1. 统计视频和图片数量
+   ├─ video_count = len(video_urls)
+   └─ image_count = len(image_urls)
 
-2. 检查媒体类型
-   ├─ gallery → 不检查大小，直接使用直链
-   └─ video/mixed → 继续
+2. 下载前检查视频大小（HEAD请求，尝试每个视频的第一个URL）
+   ├─ 超过 max_video_size_mb → 标记 exceeds_max_size，跳过下载
+   └─ 未超过 → 继续
 
-3. 获取视频大小（HEAD请求）
+3. 构建媒体项列表（_build_media_items）
+   ├─ 遍历 video_urls，为每个视频创建媒体项（包含 url_list）
+   └─ 遍历 image_urls，为每个图片创建媒体项（包含 url_list）
+
+4. 下载所有媒体到缓存（pre_download_media）
+   └─ 遍历URL列表，每个URL只尝试一次，直到成功或所有URL都失败
+
+5. 处理下载结果（_process_download_results）
+   ├─ 构建文件路径列表
+   └─ 统计失败的视频和图片数量
+
+6. 下载后检查视频大小（从实际文件大小获取）
+   ├─ 超过 max_video_size_mb → 清理已下载文件，标记 exceeds_max_size
+   └─ 未超过 → 使用本地文件
+```
+
+**非预先下载模式（pre_download_all_media = False）**：
+```
+1. 统计视频和图片数量
+   ├─ video_count = len(video_urls)
+   └─ image_count = len(image_urls)
+
+2. 获取视频大小（HEAD请求，尝试每个视频的第一个URL）
    ├─ 超过 max_video_size_mb → 标记 exceeds_max_size，跳过
    └─ 未超过 → 继续
 
-4. 检查是否需要下载
-   ├─ 超过 large_video_threshold_mb → 下载到缓存
-   ├─ 是推特视频 → 下载到缓存
-   └─ 其他 → 使用直链
+3. 验证图片URL（验证每个图片的第一个URL）
+   └─ 检查是否有有效的图片
+
+4. 检查是否需要下载视频
+   ├─ 超过 large_video_threshold_mb → 下载视频到缓存
+   └─ 其他 → 使用视频直链
+
+5. 下载图片到临时文件（无论是否需要下载视频）
+   └─ 所有图片都下载到临时文件，提高发送成功率
+
+6. 如果下载了视频，下载后再次检查大小（从实际文件大小获取）
+   ├─ 超过 max_video_size_mb → 清理已下载文件，标记 exceeds_max_size
+   └─ 未超过 → 使用本地文件
 ```
+
+**下载逻辑**：
+- 每个媒体项包含 `url_list`（可用URL列表）
+- 遍历 `url_list` 中的每个URL，每个URL只尝试一次
+- 如果某个URL下载成功，立即返回成功结果
+- 如果所有URL都失败，标记为下载失败，统计到失败计数中
+- 注意：当前实现中每个URL只尝试一次，没有重试机制
 
 ### 6. Downloader (core/downloader.py)
 
@@ -258,8 +309,8 @@ astrbot_plugin_video_parser/
 
 **主要功能**：
 - 通过 HEAD 请求获取视频大小
-- 下载媒体文件到临时目录
-- 将临时文件移动到缓存目录
+- 下载媒体文件到缓存目录或临时文件
+- 文件命名格式：`{media_id}_{index}_{timestamp}{suffix}`（使用时间戳确保唯一性）
 - 支持并发下载控制
 
 **关键函数**：
@@ -267,6 +318,9 @@ astrbot_plugin_video_parser/
 - `download_media_to_cache()`: 下载媒体到缓存目录
 - `download_image_to_file()`: 下载图片到文件
 - `pre_download_media()`: 预先下载多个媒体（并发）
+  - 每个媒体项包含 `url_list`（可用URL列表）
+  - 遍历 `url_list` 中的每个URL，每个URL只尝试一次
+  - 如果某个URL成功，立即返回；如果所有URL都失败，标记为失败
 
 ### 7. FileManager (core/file_manager.py)
 
@@ -276,13 +330,11 @@ astrbot_plugin_video_parser/
 - 检查缓存目录是否可用（可写）
 - 根据文件内容或URL确定文件扩展名
 - 清理临时文件和缓存文件
-- 将临时文件移动到缓存目录
 
 **关键函数**：
 - `check_cache_dir_available()`: 检查缓存目录可用性
 - `get_image_suffix()`: 确定图片文件扩展名
 - `cleanup_files()`: 清理文件列表
-- `move_temp_file_to_cache()`: 移动临时文件到缓存
 
 ### 8. NodeBuilder (core/node_builder.py)
 
@@ -290,13 +342,15 @@ astrbot_plugin_video_parser/
 
 **主要功能**：
 - 构建文本节点（标题、作者、简介等）
+- 显示下载失败统计（视频 X/Y，图片 A/B）
+- 处理解析失败时的错误信息显示
 - 构建媒体节点（Image/Video）
 - 处理本地文件和网络URL
 - 处理消息打包逻辑（区分普通媒体和大媒体）
 
 **关键函数**：
-- `build_text_node()`: 构建文本节点
-- `build_media_nodes()`: 构建媒体节点列表
+- `build_text_node()`: 构建文本节点，包含下载失败统计信息
+- `build_media_nodes()`: 构建媒体节点列表，从 `video_urls` 和 `image_urls` 构建
 - `build_nodes_for_link()`: 构建单个链接的节点列表
 - `build_all_nodes()`: 构建所有链接的节点，处理打包逻辑
 - `is_pure_image_gallery()`: 判断是否为纯图片图集
@@ -330,12 +384,13 @@ astrbot_plugin_video_parser/
    │
    ├─ ParserManager.parse_text()
    │
-   └─ 为每个链接调用对应的解析器
-      ├─ BilibiliParser.parse()
-      ├─ DouyinParser.parse()
-      ├─ KuaishouParser.parse()
-      ├─ XiaohongshuParser.parse()
-      └─ TwitterParser.parse()
+      └─ 为每个链接调用对应的解析器
+         ├─ BilibiliParser.parse()
+         ├─ DouyinParser.parse()
+         ├─ KuaishouParser.parse()
+         ├─ WeiboParser.parse()
+         ├─ XiaohongshuParser.parse()
+         └─ TwitterParser.parse()
       │
       └─ 返回元数据列表
 
@@ -391,12 +446,12 @@ BaseVideoParser.parse()
 │
 ├─ 3. 数据提取
 │   ├─ 提取标题、作者、简介
-│   ├─ 提取媒体直链
-│   ├─ 提取缩略图URL
+│   ├─ 提取视频直链（组织为 List[List[str]] 格式）
+│   ├─ 提取图片直链（组织为 List[List[str]] 格式）
 │   └─ 处理特殊字段（如B站的视频分P）
 │
 └─ 4. 构建元数据
-    └─ 返回标准格式的元数据字典
+    └─ 返回标准格式的元数据字典（包含 video_urls 和 image_urls）
 ```
 
 ---
@@ -482,20 +537,26 @@ astrbot          # AstrBot框架（运行时依赖）
 元数据字典 (metadata)
   │
   ├─ url: 原始URL
-  ├─ media_type: 媒体类型
   ├─ title: 标题
   ├─ author: 作者
-  ├─ media_urls: 媒体直链列表
+  ├─ video_urls: 视频URL列表（List[List[str]]）
+  ├─ image_urls: 图片URL列表（List[List[str]]）
   └─ ...
   │
   ▼
 DownloadManager 处理
   │
+  ├─ 添加 video_count: 视频数量
+  ├─ 添加 image_count: 图片数量
   ├─ 添加 video_sizes: 视频大小列表
   ├─ 添加 max_video_size_mb: 最大视频大小
   ├─ 添加 file_paths: 文件路径列表（如已下载）
+  ├─ 添加 failed_video_count: 下载失败的视频数量
+  ├─ 添加 failed_image_count: 下载失败的图片数量
   ├─ 添加 use_local_files: 是否使用本地文件
-  └─ 添加 is_large_media: 是否为大媒体
+  ├─ 添加 is_large_media: 是否为大媒体
+  ├─ 添加 has_access_denied: 是否有403访问被拒绝错误
+  └─ 添加 exceeds_max_size: 是否超过最大视频大小限制
   │
   ▼
 NodeBuilder 构建
@@ -513,14 +574,14 @@ AstrBot 消息发送
 ```
 网络媒体URL
   │
-  ▼
-下载到临时文件 (tempfile)
+  ├─ 视频（大媒体）→ 下载到缓存目录 (cache_dir)
+  │   └─ 文件命名: {media_id}_{index}_{timestamp}{suffix}
+  │
+  └─ 图片 → 下载到临时文件 (tempfile)
+      └─ 临时文件路径添加到 metadata['file_paths']
   │
   ▼
-移动到缓存目录 (cache_dir)
-  │
-  ├─ 文件命名: {media_id}_{index}.{suffix}
-  └─ 文件路径添加到 metadata['file_paths']
+文件路径添加到 metadata['file_paths']
   │
   ▼
 构建消息节点 (使用本地文件路径)
@@ -557,7 +618,13 @@ class NewPlatformParser(BaseVideoParser):
     
     async def parse(self, session, url: str) -> Dict[str, Any]:
         # 解析链接，返回元数据
-        pass
+        # 必须包含 video_urls 和 image_urls（List[List[str]] 格式）
+        return {
+            'url': url,
+            'video_urls': [[video_url]],  # 或 [[url1, url2]] 如果有多个备用URL
+            'image_urls': [[image_url]],  # 或 [] 如果没有图片
+            # ... 其他字段
+        }
 ```
 
 2. **注册解析器**：
@@ -591,7 +658,9 @@ if custom_condition:
 在 `NodeBuilder.build_media_nodes()` 中添加新的节点类型处理：
 
 ```python
-elif media_type == 'new_type':
+# 现在不再使用 media_type，而是通过 video_urls 和 image_urls 来判断
+# 如果需要添加新的媒体类型，可以在元数据中添加特殊字段，然后在构建节点时判断
+if metadata.get('new_media_type'):
     # 构建新类型的节点
     pass
 ```
@@ -615,6 +684,8 @@ elif media_type == 'new_type':
 - 小文件使用直链，避免不必要的下载
 - 大文件下载到本地，提高发送成功率
 - 预先下载模式可提高总下载速度
+- 下载前和下载后双重检查视频大小，确保不超过限制
+- 优先使用实际文件大小（更准确），HEAD请求结果作为补充
 
 ### 4. 资源管理
 
@@ -630,15 +701,31 @@ elif media_type == 'new_type':
 1. **解析器异常**：
    - 单个链接解析失败不影响其他链接
    - 异常信息记录到元数据的 `error` 字段
+   - 错误信息会在文本节点中显示（"解析失败：{错误信息}"）
    - 继续处理其他链接
 
 2. **下载异常**：
    - 下载失败时回退到直链模式
    - 记录警告日志，不中断流程
+   - 统计下载失败的视频和图片数量（`failed_video_count`、`failed_image_count`）
+   - 在文本节点中显示下载失败统计（"下载失败：视频 X/Y，图片 A/B"）
+   - 构建消息节点时避免传入下载失败的媒体路径
 
 3. **文件操作异常**：
    - 文件清理失败只记录警告，不抛出异常
    - 缓存目录不可用时自动降级到直链模式
+
+4. **视频大小检查异常**：
+   - 下载前通过HEAD请求检查大小，如果超过限制则跳过下载
+   - 下载后从实际文件大小再次检查，如果超过限制则清理已下载文件
+   - 如果HEAD请求无法获取大小，下载后会从实际文件大小检查
+   - 确保 `max_video_size_mb` 配置在所有情况下都能正确生效
+
+5. **403访问被拒绝异常**：
+   - 检测到403状态码时，记录警告日志
+   - 在元数据中标记 `has_access_denied = True`
+   - 在文本节点中显示"媒体访问被拒绝(403 Forbidden)"错误信息
+   - 不中断处理流程，继续处理其他媒体
 
 ### 日志记录
 
@@ -670,7 +757,10 @@ elif media_type == 'new_type':
     "parser_enable_settings": {
         "enable_bilibili": bool,
         "enable_douyin": bool,
-        # ... 其他平台
+        "enable_kuaishou": bool,
+        "enable_weibo": bool,
+        "enable_xiaohongshu": bool,
+        "enable_twitter": bool
     },
     "twitter_proxy_settings": {
         "twitter_use_image_proxy": bool,
@@ -687,17 +777,32 @@ elif media_type == 'new_type':
 ### 平台特性
 
 1. **小红书**：
-   - 所有链接均有身份验证和时效性
-   - 需要在有效期内发送完整链接才能成功解析
-   - 分享链接可能有水印
+   - 所有链接均有身份验证和时效性，需要在有效期内发送完整链接才能成功解析
+   - 分享链接的解析结果有水印
 
 2. **推特**：
    - 图片CDN大多被墙，建议开启代理
    - 视频CDN通常不受影响，可直连
    - 使用 fxtwitter API，无需代理
 
-3. **B站**：
-   - 需要设置正确的 Referer 和 Origin 头
-   - 支持短链、AV号、BV号多种格式
+3. **微博**：
+   - 需要获取访客cookie才能访问API
+   - 支持 weibo.com、weibo.cn、video.weibo.com 等多种链接格式
+   - 下载媒体时需要设置 Referer 请求头
+   - 支持 `page_url` 字段，优先使用 `page_url` 作为 Referer
+
+4. **图片下载**：
+   - 在非预下载模式下，所有图片都会下载到临时文件
+   - 提高图片发送成功率，避免直链访问失败
+   - 临时文件在消息发送后会自动清理
+
+5. **B站**：
+   - 转发动态会使用"转发动态数据（原始动态数据）"组织文本格式解析结果
+   - 支持 `page_url` 字段，优先使用 `page_url` 作为 Referer
+
+6. **文件命名**：
+   - 缓存文件使用格式：`{media_id}_{index}_{timestamp}{suffix}`
+   - 时间戳确保并发下载时文件唯一性
+   - 文件在发送后立即清理，不需要检查缓存
 
 ---

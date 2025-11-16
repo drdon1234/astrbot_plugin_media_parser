@@ -10,10 +10,10 @@ import aiohttp
 
 
 class BaseVideoParser(ABC):
-    """视频解析器基类，只负责解析URL返回元数据。"""
+    """视频解析器基类，只负责解析URL返回元数据"""
 
     def __init__(self, name: str):
-        """初始化视频解析器基类。
+        """初始化视频解析器基类
 
         Args:
             name: 解析器名称
@@ -22,7 +22,7 @@ class BaseVideoParser(ABC):
 
     @abstractmethod
     def can_parse(self, url: str) -> bool:
-        """判断是否可以解析此URL。
+        """判断是否可以解析此URL
 
         Args:
             url: 视频链接
@@ -34,7 +34,7 @@ class BaseVideoParser(ABC):
 
     @abstractmethod
     def extract_links(self, text: str) -> List[str]:
-        """从文本中提取链接。
+        """从文本中提取链接
 
         Args:
             text: 输入文本
@@ -50,7 +50,7 @@ class BaseVideoParser(ABC):
         session: aiohttp.ClientSession,
         url: str
     ) -> Optional[Dict[str, Any]]:
-        """解析单个视频链接。
+        """解析单个视频链接
 
         Args:
             session: aiohttp会话
@@ -59,13 +59,13 @@ class BaseVideoParser(ABC):
         Returns:
             解析结果字典，包含以下字段：
             - url: 原始url（必需）
-            - media_type: 媒体类型: "video", "image", "gallery"（必需）
             - title: 标题（可选）
             - author: 作者（可选）
             - desc: 简介（可选）
             - timestamp: 发布时间（可选）
-            - media_urls: 媒体直链列表（必需）
-            - 其他平台特定字段（如thumb_url, image_url_lists等）
+            - video_urls: 视频URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
+            - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
+            - 其他平台特定字段
 
         Raises:
             解析失败时直接raise异常，不记录日志

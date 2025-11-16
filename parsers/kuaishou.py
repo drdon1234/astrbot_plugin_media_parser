@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import json
-import os
 import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -26,13 +25,13 @@ class KuaishouParser(BaseVideoParser):
     """快手视频解析器"""
 
     def __init__(self):
-        """初始化快手解析器。"""
+        """初始化快手解析器"""
         super().__init__("快手")
         self.headers = MOBILE_HEADERS
         self.semaphore = asyncio.Semaphore(10)
 
     def can_parse(self, url: str) -> bool:
-        """判断是否可以解析此URL。
+        """判断是否可以解析此URL
 
         Args:
             url: 视频链接
@@ -48,7 +47,7 @@ class KuaishouParser(BaseVideoParser):
         return False
 
     def extract_links(self, text: str) -> List[str]:
-        """从文本中提取快手链接。
+        """从文本中提取快手链接
 
         Args:
             text: 输入文本
@@ -56,17 +55,20 @@ class KuaishouParser(BaseVideoParser):
         Returns:
             快手链接列表
         """
-        result_links = []
+        result_links_set = set()
+        
         short_pattern = r'https?://v\.kuaishou\.com/[^\s]+'
         short_links = re.findall(short_pattern, text)
-        result_links.extend(short_links)
+        result_links_set.update(short_links)
+        
         long_pattern = r'https?://(?:www\.)?kuaishou\.com/[^\s]+'
         long_links = re.findall(long_pattern, text)
-        result_links.extend(long_links)
-        return result_links
+        result_links_set.update(long_links)
+        
+        return list(result_links_set)
 
     def _extract_media_id(self, url: str) -> str:
-        """从URL中提取媒体ID。
+        """从URL中提取媒体ID
 
         Args:
             url: 快手URL
@@ -78,7 +80,7 @@ class KuaishouParser(BaseVideoParser):
         return video_id_match.group(1) if video_id_match else "kuaishou"
 
     def _min_mp4(self, url: str) -> str:
-        """处理MP4 URL，提取最小格式。
+        """处理MP4 URL，提取最小格式
 
         Args:
             url: 原始URL
@@ -93,7 +95,7 @@ class KuaishouParser(BaseVideoParser):
         return f"https://{domain}/{path_wo_file}/{filename}"
 
     def _extract_upload_time(self, url: str) -> Optional[str]:
-        """从URL中提取上传时间。
+        """从URL中提取上传时间
 
         Args:
             url: 视频或图片URL
@@ -118,7 +120,7 @@ class KuaishouParser(BaseVideoParser):
         return None
 
     def _extract_metadata(self, html: str) -> Dict[str, Optional[str]]:
-        """提取用户名、UID、标题。
+        """提取用户名、UID、标题
 
         Args:
             html: HTML内容
@@ -178,7 +180,7 @@ class KuaishouParser(BaseVideoParser):
         return metadata
 
     def _extract_album_image_url(self, html: str) -> Optional[str]:
-        """提取图集图片URL。
+        """提取图集图片URL
 
         Args:
             html: HTML内容
@@ -203,7 +205,7 @@ class KuaishouParser(BaseVideoParser):
         music_path: Optional[str],
         img_paths: List[str]
     ) -> Dict[str, Any]:
-        """构建图集数据，支持多个CDN。
+        """构建图集数据，支持多个CDN
 
         Args:
             cdns: CDN列表
@@ -262,7 +264,7 @@ class KuaishouParser(BaseVideoParser):
         }
 
     def _parse_album(self, html: str) -> Optional[Dict[str, Any]]:
-        """解析图集，提取所有CDN。
+        """解析图集，提取所有CDN
 
         Args:
             html: HTML内容
@@ -293,7 +295,7 @@ class KuaishouParser(BaseVideoParser):
         return self._build_album(cdns, music_path, img_paths)
 
     def _parse_video(self, html: str) -> Optional[str]:
-        """解析视频URL。
+        """解析视频URL
 
         Args:
             html: HTML内容
@@ -321,7 +323,7 @@ class KuaishouParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         url: str
     ) -> Optional[str]:
-        """获取HTML内容（处理短链）。
+        """获取HTML内容（处理短链）
 
         Args:
             session: aiohttp会话
@@ -356,7 +358,7 @@ class KuaishouParser(BaseVideoParser):
         self,
         metadata: Dict[str, Optional[str]]
     ) -> str:
-        """构建作者信息。
+        """构建作者信息
 
         Args:
             metadata: 元数据字典
@@ -376,7 +378,7 @@ class KuaishouParser(BaseVideoParser):
             return ""
 
     def _parse_rawdata_json(self, html: str) -> Optional[Dict[str, Any]]:
-        """解析rawData JSON数据。
+        """解析rawData JSON数据
 
         Args:
             html: HTML内容
@@ -402,7 +404,7 @@ class KuaishouParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         url: str
     ) -> Optional[Dict[str, Any]]:
-        """解析单个快手链接。
+        """解析单个快手链接
 
         Args:
             session: aiohttp会话
@@ -430,20 +432,18 @@ class KuaishouParser(BaseVideoParser):
                 upload_time = self._extract_upload_time(video_url)
                 return {
                     "url": url,
-                    "media_type": "video",
                     "title": title,
                     "author": author,
-                    "desc": "",  # 快手API不返回描述
+                    "desc": "",
                     "timestamp": upload_time or "",
-                    "media_urls": [video_url],
-                    "thumb_url": None,
+                    "video_urls": [[video_url]],
+                    "image_urls": [],
                 }
 
             album = self._parse_album(html)
             if album:
-                images = album.get('images', [])
                 image_url_lists = album.get('image_url_lists', [])
-                if images:
+                if image_url_lists:
                     image_url = self._extract_album_image_url(html)
                     upload_time = (
                         self._extract_upload_time(image_url)
@@ -452,14 +452,12 @@ class KuaishouParser(BaseVideoParser):
                     )
                     return {
                         "url": url,
-                        "media_type": "gallery",
                         "title": title or "快手图集",
                         "author": author,
-                        "desc": "",  # 快手API不返回描述
+                        "desc": "",
                         "timestamp": upload_time or "",
-                        "media_urls": images,
-                        "thumb_url": None,
-                        "image_url_lists": image_url_lists,
+                        "video_urls": [],
+                        "image_urls": image_url_lists,
                     }
 
             rawdata = self._parse_rawdata_json(html)
@@ -471,13 +469,12 @@ class KuaishouParser(BaseVideoParser):
                         upload_time = self._extract_upload_time(video_url)
                         return {
                             "url": url,
-                            "media_type": "video",
                             "title": title,
                             "author": author,
-                            "desc": "",  # 快手API不返回描述
+                            "desc": "",
                             "timestamp": upload_time or "",
-                            "media_urls": [video_url],
-                            "thumb_url": None,
+                            "video_urls": [[video_url]],
+                            "image_urls": [],
                         }
                 
                 if 'photo' in rawdata and rawdata.get('type') == 1:
@@ -496,22 +493,19 @@ class KuaishouParser(BaseVideoParser):
                     music_path = rawdata['photo'].get('music')
                     album_data = self._build_album(cdns, music_path, img_paths)
                     if album_data:
-                        images = album_data.get('images', [])
                         image_url_lists = album_data.get('image_url_lists', [])
-                        if images:
+                        if image_url_lists:
                             upload_time = None
-                            if images[0]:
-                                upload_time = self._extract_upload_time(images[0])
+                            if image_url_lists[0] and image_url_lists[0][0]:
+                                upload_time = self._extract_upload_time(image_url_lists[0][0])
                             return {
                                 "url": url,
-                                "media_type": "gallery",
                                 "title": title or "快手图集",
                                 "author": author,
-                                "desc": "",  # 快手API不返回描述
+                                "desc": "",
                                 "timestamp": upload_time or "",
-                                "media_urls": images,
-                                "thumb_url": None,
-                                "image_url_lists": image_url_lists,
+                                "video_urls": [],
+                                "image_urls": image_url_lists,
                             }
 
             if (metadata.get('userName') or

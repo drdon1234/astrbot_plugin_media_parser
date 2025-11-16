@@ -2,6 +2,7 @@
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaishouParser
+from .weibo import WeiboParser
 from .xiaohongshu import XiaohongshuParser
 from .twitter import TwitterParser
 from .link_router import LinkRouter
@@ -10,6 +11,7 @@ __all__ = [
     'BilibiliParser',
     'DouyinParser',
     'KuaishouParser',
+    'WeiboParser',
     'XiaohongshuParser',
     'TwitterParser',
     'LinkRouter'

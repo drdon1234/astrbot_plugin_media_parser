@@ -14,7 +14,7 @@ except ImportError:
 
 
 def check_cache_dir_available(cache_dir: str) -> bool:
-    """检查缓存目录是否可用（可写）。
+    """检查缓存目录是否可用（可写）
 
     Args:
         cache_dir: 缓存目录路径
@@ -41,7 +41,7 @@ def check_cache_dir_available(cache_dir: str) -> bool:
 
 
 def get_image_suffix(content_type: str = None, url: str = None) -> str:
-    """根据Content-Type或URL确定图片文件扩展名。
+    """根据Content-Type或URL确定图片文件扩展名
 
     Args:
         content_type: HTTP Content-Type头
@@ -74,8 +74,76 @@ def get_image_suffix(content_type: str = None, url: str = None) -> str:
     return '.jpg'
 
 
+def get_video_suffix(content_type: str = None, url: str = None) -> str:
+    """根据Content-Type或URL确定视频文件扩展名
+
+    Args:
+        content_type: HTTP Content-Type头
+        url: 视频URL
+
+    Returns:
+        文件扩展名（.mp4, .mkv, .mov, .avi, .flv, .f4v, .webm, .wmv），默认返回.mp4
+    """
+    if content_type:
+        content_type_lower = content_type.lower()
+        if 'mp4' in content_type_lower:
+            return '.mp4'
+        elif 'matroska' in content_type_lower or 'mkv' in content_type_lower:
+            return '.mkv'
+        elif 'quicktime' in content_type_lower or 'mov' in content_type_lower:
+            return '.mov'
+        elif 'avi' in content_type_lower or 'x-msvideo' in content_type_lower:
+            return '.avi'
+        elif 'x-flv' in content_type_lower or 'flv' in content_type_lower or 'f4v' in content_type_lower:
+            if 'f4v' in content_type_lower:
+                return '.f4v'
+            return '.flv'
+        elif 'webm' in content_type_lower:
+            return '.webm'
+        elif 'wmv' in content_type_lower or 'x-ms-wmv' in content_type_lower:
+            return '.wmv'
+        elif content_type_lower.startswith('video/'):
+            if '/mp4' in content_type_lower:
+                return '.mp4'
+            elif '/webm' in content_type_lower:
+                return '.webm'
+            elif '/quicktime' in content_type_lower or '/mov' in content_type_lower:
+                return '.mov'
+            elif '/flv' in content_type_lower or '/f4v' in content_type_lower:
+                if '/f4v' in content_type_lower:
+                    return '.f4v'
+                return '.flv'
+            elif '/avi' in content_type_lower:
+                return '.avi'
+            elif '/wmv' in content_type_lower:
+                return '.wmv'
+            elif '/matroska' in content_type_lower or '/mkv' in content_type_lower:
+                return '.mkv'
+
+    if url:
+        url_lower = url.lower()
+        if '.mp4' in url_lower:
+            return '.mp4'
+        elif '.mkv' in url_lower:
+            return '.mkv'
+        elif '.mov' in url_lower:
+            return '.mov'
+        elif '.avi' in url_lower:
+            return '.avi'
+        elif '.f4v' in url_lower:
+            return '.f4v'
+        elif '.flv' in url_lower:
+            return '.flv'
+        elif '.webm' in url_lower:
+            return '.webm'
+        elif '.wmv' in url_lower:
+            return '.wmv'
+
+    return '.mp4'
+
+
 def cleanup_files(file_paths: List[str]) -> None:
-    """清理文件列表。
+    """清理文件列表
 
     Args:
         file_paths: 文件路径列表
@@ -86,103 +154,4 @@ def cleanup_files(file_paths: List[str]) -> None:
                 os.unlink(file_path)
             except Exception as e:
                 logger.warning(f"清理文件失败: {file_path}, 错误: {e}")
-
-
-def move_temp_file_to_cache(
-    temp_file_path: str,
-    cache_dir: str,
-    media_id: str,
-    index: int
-) -> Optional[str]:
-    """将临时文件移动到缓存目录。
-
-    Args:
-        temp_file_path: 临时文件路径
-        cache_dir: 缓存目录路径
-        media_id: 媒体ID
-        index: 索引
-
-    Returns:
-        缓存文件路径，失败返回None
-    """
-    if not cache_dir or not temp_file_path:
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception:
-                pass
-        return None
-
-    if not os.path.exists(temp_file_path):
-        return None
-
-    cache_path = None
-    try:
-        content = None
-        try:
-            with open(temp_file_path, 'rb') as f:
-                content = f.read()
-        except Exception:
-            if os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except Exception:
-                    pass
-            return None
-
-        if not content:
-            if os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except Exception:
-                    pass
-            return None
-
-        if content.startswith(b'\xff\xd8'):
-            suffix = '.jpg'
-        elif content.startswith(b'\x89PNG'):
-            suffix = '.png'
-        elif content.startswith(b'RIFF') and b'WEBP' in content[:12]:
-            suffix = '.webp'
-        elif content.startswith(b'GIF'):
-            suffix = '.gif'
-        else:
-            suffix = get_image_suffix(url=temp_file_path)
-
-        os.makedirs(cache_dir, exist_ok=True)
-
-        cache_filename = f"{media_id}_{index}{suffix}"
-        cache_path = os.path.join(cache_dir, cache_filename)
-
-        try:
-            with open(cache_path, 'wb') as f:
-                f.write(content)
-        except Exception:
-            if os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except Exception:
-                    pass
-            return None
-
-        if os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception:
-                pass
-
-        return os.path.normpath(cache_path)
-    except Exception as e:
-        logger.warning(f"移动临时文件到缓存目录失败: {e}")
-        if os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception:
-                pass
-        if cache_path and os.path.exists(cache_path):
-            try:
-                os.unlink(cache_path)
-            except Exception:
-                pass
-        return None
 

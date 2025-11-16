@@ -9,10 +9,10 @@ from .base_parser import BaseVideoParser
 
 
 class LinkRouter:
-    """链接清洗分流器，负责从文本中提取链接并匹配解析器。"""
+    """链接清洗分流器，负责从文本中提取链接并匹配解析器"""
 
     def __init__(self, parsers: List[BaseVideoParser]):
-        """初始化链接清洗分流器。
+        """初始化链接清洗分流器
 
         Args:
             parsers: 解析器列表
@@ -28,7 +28,7 @@ class LinkRouter:
         self,
         text: str
     ) -> List[Tuple[str, BaseVideoParser]]:
-        """从文本中提取所有可解析的链接，并匹配对应的解析器。
+        """从文本中提取所有可解析的链接，并匹配对应的解析器
 
         Args:
             text: 输入文本
@@ -56,7 +56,7 @@ class LinkRouter:
         return links_with_parser
 
     def find_parser(self, url: str) -> BaseVideoParser:
-        """根据URL查找合适的解析器。
+        """根据URL查找合适的解析器
 
         Args:
             url: 视频链接
