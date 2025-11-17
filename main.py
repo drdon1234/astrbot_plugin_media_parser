@@ -488,6 +488,7 @@ class VideoParserPlugin(Star):
         Args:
             event: 消息事件对象
         """
+        message_text = event.message_str
         try:
             messages = event.get_messages()
             if messages and len(messages) > 0:
