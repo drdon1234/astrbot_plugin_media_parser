@@ -36,6 +36,9 @@ class LinkRouter:
         Returns:
             包含(链接, 解析器)元组的列表，按在文本中出现的位置排序
         """
+        if "原始链接：" in text:
+            return []
+
         links_with_position = []
         for parser in self.parsers:
             links = parser.extract_links(text)
