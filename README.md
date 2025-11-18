@@ -310,13 +310,19 @@
 - 图片CDN大多被墙，建议开启代理
 - 视频CDN通常不受影响，可直连
 
+5. **其他**
+- 插件在任何消息中匹配到 ```"原始链接："``` 字段将静默跳过解析
+- 这是为了防止多个使用本插件的 Bot 重复解析其他 Bot 发送的文本格式解析结果
+
 ---
 
 ## 鸣谢
 
-- **B站解析端点**参考自：GitHub 项目 [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
-- **QQ小程序卡片链接提取方法**参考自：GitHub 用户 [tianger-mckz](https://github.com/tianger-mckz)  
+- **B站解析端点** 参考自：GitHub 项目 bilibili-API-collect  
+  详见：[bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
+- **QQ小程序卡片链接提取方法** 参考自：GitHub 用户 tianger-mckz  
   详见：[issue #1](https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034)
-- **抖音解析方法**参考自：CSDN 博客文章  
-  [文章链接](https://blog.csdn.net/qq_53153535/article/details/141297614)
-- **推特解析**使用免费第三方服务：fxtwitter（GitHub 项目 [FxEmbed](https://github.com/FxEmbed/FxEmbed)）
+- **抖音解析方法** 参考自：CSDN 博客文章  
+  详见：[文章链接](https://blog.csdn.net/qq_53153535/article/details/141297614)
+- **推特解析** 使用免费第三方服务：fxtwitter（GitHub 项目 FxEmbed）  
+  详见：[FxEmbed](https://github.com/FxEmbed/FxEmbed)
