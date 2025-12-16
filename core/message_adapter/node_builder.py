@@ -126,12 +126,12 @@ def build_media_nodes(
         return nodes
     
     has_valid_media = metadata.get('has_valid_media')
+    if has_valid_media is None:
+        logger.warning(f"元数据中has_valid_media字段为None，视为False: {url}")
+        has_valid_media = False
+    
     if has_valid_media is False:
         logger.debug(f"媒体无效，跳过节点构建: {url}")
-        return nodes
-    
-    if has_valid_media is None:
-        logger.warning(f"元数据中缺少has_valid_media字段，跳过媒体节点构建: {url}")
         return nodes
     
     video_urls = metadata.get('video_urls', [])
@@ -150,8 +150,10 @@ def build_media_nodes(
         return nodes
     
     file_idx = 0
+    
     for idx, url_list in enumerate(video_urls):
         if not url_list or not isinstance(url_list, list):
+            file_idx += 1
             continue
         
         if video_sizes and idx < len(video_sizes) and video_sizes[idx] is None:
@@ -182,10 +184,12 @@ def build_media_nodes(
     
     for url_list in image_urls:
         if not url_list or not isinstance(url_list, list):
+            file_idx += 1
             continue
         
         image_url = url_list[0] if url_list else None
         if not image_url:
+            file_idx += 1
             continue
         
         image_file_path = None

@@ -70,6 +70,28 @@ class DownloadManager:
         self._active_tasks: List[asyncio.Task] = []
         self._shutting_down = False
 
+    def _get_effective_proxy(
+        self,
+        metadata: Dict[str, Any],
+        proxy_addr: str = None,
+        use_proxy_flag: bool = False
+    ) -> Optional[str]:
+        """获取有效的代理地址
+        
+        优先级：元数据中的 proxy_url > 函数参数 proxy_addr
+        
+        Args:
+            metadata: 元数据字典
+            proxy_addr: 函数参数中的代理地址（可选）
+            use_proxy_flag: 是否使用代理的标志（如 use_image_proxy, use_video_proxy）
+            
+        Returns:
+            有效的代理地址，如果不需要代理返回None
+        """
+        if not use_proxy_flag:
+            return None
+        return metadata.get('proxy_url') or proxy_addr
+
     async def _download_one_image(
         self,
         session: aiohttp.ClientSession,
@@ -95,7 +117,7 @@ class DownloadManager:
         
         headers = metadata.get('image_headers', {})
         use_image_proxy = metadata.get('use_image_proxy', False)
-        proxy = (metadata.get('proxy_url') or proxy_addr) if use_image_proxy else None
+        proxy = self._get_effective_proxy(metadata, proxy_addr, use_image_proxy)
         
         for url in url_list:
             result = await download_media(
@@ -195,7 +217,7 @@ class DownloadManager:
         try:
             headers = metadata.get('video_headers', {})
             use_video_proxy = metadata.get('use_video_proxy', False)
-            proxy = (metadata.get('proxy_url') or proxy_addr) if use_video_proxy else None
+            proxy = self._get_effective_proxy(metadata, proxy_addr, use_video_proxy)
             return await get_video_size(session, url_list[0], headers, proxy)
         except Exception:
             return None, None
@@ -211,7 +233,7 @@ class DownloadManager:
         Args:
             metadata: 元数据字典（应包含 image_headers, video_headers 字段）
             media_id: 媒体ID
-            proxy_addr: 代理地址（可选，如果元数据中有代理配置则会被覆盖）
+            proxy_addr: 代理地址（可选，优先级低于元数据中的 proxy_url）
 
         Returns:
             媒体项列表，每个项包含url_list（URL列表）、media_id、index、is_video、headers等字段
@@ -222,7 +244,7 @@ class DownloadManager:
         
         use_image_proxy = metadata.get('use_image_proxy', False)
         use_video_proxy = metadata.get('use_video_proxy', False)
-        effective_proxy_addr = metadata.get('proxy_url') or proxy_addr
+        effective_proxy_addr = self._get_effective_proxy(metadata, proxy_addr, True) or proxy_addr
         
         image_headers = metadata.get('image_headers', {})
         video_headers = metadata.get('video_headers', {})
@@ -343,6 +365,11 @@ class DownloadManager:
         url = metadata.get('url', '')
         video_urls = metadata.get('video_urls', [])
         image_urls = metadata.get('image_urls', [])
+        
+        if 'image_headers' not in metadata:
+            metadata['image_headers'] = {}
+        if 'video_headers' not in metadata:
+            metadata['video_headers'] = {}
         
         image_pre_download = metadata.get('image_pre_download', False)
         video_pre_download = metadata.get('video_pre_download', False)
@@ -595,7 +622,7 @@ class DownloadManager:
                 try:
                     image_headers = metadata.get('image_headers', {})
                     use_image_proxy = metadata.get('use_image_proxy', False)
-                    image_proxy = (metadata.get('proxy_url') or proxy_addr) if use_image_proxy else None
+                    image_proxy = self._get_effective_proxy(metadata, proxy_addr, use_image_proxy)
                     return await validate_media_url(
                         session, url_list[0], image_headers, image_proxy, is_video=False
                     )

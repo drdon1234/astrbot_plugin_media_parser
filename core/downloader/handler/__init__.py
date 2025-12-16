@@ -9,9 +9,6 @@
 from .normal_video import pre_download_videos, pre_download_media
 from .m3u8 import M3U8Handler
 
-# 底层处理器仅供 router 内部使用，不对外导出
-# 如需下载媒体，请使用 router.download_media 函数
-
 __all__ = [
     'pre_download_videos',
     'pre_download_media',

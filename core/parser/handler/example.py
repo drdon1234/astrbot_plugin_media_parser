@@ -79,19 +79,6 @@ class ExampleParser(BaseVideoParser):
             RuntimeError: 当解析失败时
         """
         try:
-            # 示例代码
-            # result = await self._fetch_info(session, url)
-            # if not result:
-            #     raise RuntimeError(f"无法解析此URL: {url}")
-            # return {
-            #     "url": url,
-            #     "title": result.get("title", ""),
-            #     "author": result.get("author", ""),
-            #     "desc": result.get("desc", ""),
-            #     "timestamp": result.get("timestamp", ""),
-            #     "video_urls": [[result.get("video_url")]] if result.get("video_url") else [],
-            #     "image_urls": [],
-            # }
             return None
         except Exception as e:
             raise RuntimeError(str(e))

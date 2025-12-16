@@ -162,7 +162,10 @@ class ParserManager:
                     'error': str(result),
                     'video_urls': [],
                     'image_urls': [],
-                    'platform': parser.name  # 即使解析失败，也记录尝试解析的平台
+                    'image_headers': {},
+                    'video_headers': {},
+                    'platform': parser.name,
+                    'has_valid_media': False
                 })
             elif result:
                 if 'platform' not in result:

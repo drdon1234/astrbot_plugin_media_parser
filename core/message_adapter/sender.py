@@ -167,23 +167,38 @@ class MessageSender:
             f"⚠️ 链接中包含超过{threshold_mb}MB的视频时"
             f"将单独发送所有媒体"
         )
-        await event.send(event.plain_result(notice_text))
-        for link_idx, link_nodes in enumerate(link_nodes_list):
-            link_video_files = []
-            if link_idx < len(metadata):
-                link_video_files = metadata[link_idx].get('video_files', [])
-            try:
-                for node in link_nodes:
-                    if node is not None:
-                        try:
-                            await event.send(event.chain_result([node]))
-                        except Exception as e:
-                            if self.logger:
-                                self.logger.warning(f"发送大媒体节点失败: {e}")
-            finally:
-                cleanup_files(link_video_files)
-            if link_idx < len(link_nodes_list) - 1:
-                await event.send(event.plain_result(separator))
+        all_video_files_to_cleanup = []
+        try:
+            await event.send(event.plain_result(notice_text))
+            for link_idx, link_nodes in enumerate(link_nodes_list):
+                link_video_files = []
+                if link_idx < len(metadata):
+                    link_video_files = metadata[link_idx].get('video_files', [])
+                all_video_files_to_cleanup.extend(link_video_files)
+                try:
+                    for node in link_nodes:
+                        if node is not None:
+                            try:
+                                await event.send(event.chain_result([node]))
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.warning(f"发送大媒体节点失败: {e}")
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"发送大媒体链接失败: {e}")
+                finally:
+                    cleanup_files(link_video_files)
+                if link_idx < len(link_nodes_list) - 1:
+                    try:
+                        await event.send(event.plain_result(separator))
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.warning(f"发送分隔符失败: {e}")
+        except Exception as e:
+            if self.logger:
+                self.logger.exception(f"发送大媒体结果失败: {e}")
+            cleanup_files(all_video_files_to_cleanup)
+            raise
 
     async def send_unpacked_results(
         self,

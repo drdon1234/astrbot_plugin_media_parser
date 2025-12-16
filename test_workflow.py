@@ -68,13 +68,11 @@ def init_components(
     Returns:
         (ParserManager, DownloadManager) 元组
     """
-    # 设置 debug 模式
     Config.DEBUG_MODE = debug_mode
     if debug_mode:
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug模式已启用")
     
-    # 创建解析器列表
     parsers = [
         BilibiliParser(),
         DouyinParser(),
@@ -89,14 +87,11 @@ def init_components(
         ) if use_proxy and proxy_url else TwitterParser(),
     ]
     
-    # 创建解析器管理器
     parser_manager = ParserManager(parsers)
     
-    # 设置缓存目录（如果未指定，使用项目目录下的 media 文件夹）
     if cache_dir is None:
         cache_dir = os.path.join(os.path.dirname(__file__), "media")
     
-    # 创建下载管理器
     download_manager = DownloadManager(
         max_video_size_mb=max_video_size_mb,
         large_video_threshold_mb=large_video_threshold_mb,
@@ -178,11 +173,9 @@ def print_processed_metadata(metadata: Dict[str, Any], url: str, parser_name: st
         print("=" * 80)
         return
     
-    # 显示基本信息
     print(f"标题: {metadata.get('title', 'N/A')}")
     print(f"作者: {metadata.get('author', 'N/A')}")
     
-    # 显示媒体统计
     video_count = metadata.get('video_count', 0)
     image_count = metadata.get('image_count', 0)
     failed_video_count = metadata.get('failed_video_count', 0)
@@ -192,7 +185,6 @@ def print_processed_metadata(metadata: Dict[str, Any], url: str, parser_name: st
     print(f"  视频: {video_count} 个 (失败: {failed_video_count})")
     print(f"  图片: {image_count} 张 (失败: {failed_image_count})")
     
-    # 显示视频大小信息
     video_sizes = metadata.get('video_sizes', [])
     max_video_size = metadata.get('max_video_size_mb')
     total_video_size = metadata.get('total_video_size_mb', 0.0)
@@ -206,7 +198,6 @@ def print_processed_metadata(metadata: Dict[str, Any], url: str, parser_name: st
         if total_video_size > 0:
             print(f"  总大小: {total_video_size:.2f} MB")
     
-    # 显示下载状态
     has_valid_media = metadata.get('has_valid_media', False)
     use_local_files = metadata.get('use_local_files', False)
     is_large_media = metadata.get('is_large_media', False)
@@ -219,7 +210,6 @@ def print_processed_metadata(metadata: Dict[str, Any], url: str, parser_name: st
     if exceeds_max_size:
         print(f"  ⚠️ 超过大小限制")
     
-    # 显示文件路径
     file_paths = metadata.get('file_paths', [])
     if file_paths:
         print(f"\n下载的文件 ({len([fp for fp in file_paths if fp])} 个):")
@@ -255,7 +245,6 @@ async def test_workflow(
     print(f"\n正在解析文本... ({len(text)} 字符)")
     print("-" * 80)
     
-    # 步骤1: 解析文本中的链接
     metadata_list = await parser_manager.parse_text(text, session)
     
     if not metadata_list:
@@ -264,7 +253,6 @@ async def test_workflow(
     
     print(f"找到 {len(metadata_list)} 个链接的解析结果\n")
     
-    # 显示解析结果
     success_count = 0
     fail_count = 0
     for metadata in metadata_list:
@@ -286,11 +274,9 @@ async def test_workflow(
     
     print(f"\n解析完成: 成功 {success_count} 个, 失败 {fail_count} 个")
     
-    # 保存解析统计
     parse_success_total = success_count
     parse_fail_total = fail_count
     
-    # 步骤2: 处理元数据（下载处理）
     if not metadata_list:
         return []
     
@@ -303,7 +289,6 @@ async def test_workflow(
     
     for metadata in metadata_list:
         if metadata.get('error'):
-            # 跳过有错误的元数据
             processed_metadata_list.append(metadata)
             download_fail_count += 1
             continue
@@ -316,23 +301,18 @@ async def test_workflow(
             )
             processed_metadata_list.append(processed_metadata)
             
-            # 统计下载结果
             if processed_metadata.get('error'):
                 download_fail_count += 1
             else:
-                # 检查是否有有效的媒体文件
                 has_valid_media = processed_metadata.get('has_valid_media', False)
                 file_paths = processed_metadata.get('file_paths', [])
-                # 如果有有效媒体或文件路径，认为下载成功
                 if has_valid_media or (file_paths and any(file_paths)):
                     download_success_count += 1
                 else:
-                    # 检查是否有视频或图片URL但下载失败
                     failed_video_count = processed_metadata.get('failed_video_count', 0)
                     failed_image_count = processed_metadata.get('failed_image_count', 0)
                     video_count = processed_metadata.get('video_count', 0)
                     image_count = processed_metadata.get('image_count', 0)
-                    # 如果有媒体但全部失败，则算下载失败
                     if (video_count > 0 and failed_video_count == video_count and image_count == 0) or \
                        (image_count > 0 and failed_image_count == image_count and video_count == 0) or \
                        (video_count > 0 and image_count > 0 and failed_video_count == video_count and failed_image_count == image_count):
@@ -340,7 +320,6 @@ async def test_workflow(
                     else:
                         download_success_count += 1
             
-            # 显示处理结果
             parser_name = "未知解析器"
             try:
                 parser = parser_manager.find_parser(metadata.get('url', ''))
@@ -354,7 +333,6 @@ async def test_workflow(
             processed_metadata_list.append(metadata)
             download_fail_count += 1
     
-    # 在返回的元数据中添加统计信息（用于主函数显示）
     if processed_metadata_list:
         processed_metadata_list[0]['_stats'] = {
             'parse_success': parse_success_total,
@@ -394,7 +372,6 @@ async def main(
     print("输入 'q' 退出程序")
     print("=" * 80)
     
-    # 初始化组件
     parser_manager, download_manager = init_components(
         debug_mode=debug_mode,
         use_proxy=use_proxy,
@@ -406,7 +383,6 @@ async def main(
         max_concurrent_downloads=max_concurrent_downloads
     )
     
-    # 获取实际使用的下载目录
     actual_cache_dir = download_manager.cache_dir
     
     print("\n" + "=" * 80)
@@ -480,7 +456,6 @@ async def main(
                     if processed_metadata_list:
                         print(f"\n工作流测试完成: 共处理 {len(processed_metadata_list)} 个链接")
                         
-                        # 显示最终统计信息
                         stats = processed_metadata_list[0].get('_stats') if processed_metadata_list else None
                         if stats:
                             print("\n" + "=" * 80)
@@ -501,7 +476,6 @@ async def main(
                 traceback.print_exc()
     
     finally:
-        # 清理下载管理器
         try:
             await download_manager.shutdown()
         except Exception as e:
@@ -509,29 +483,20 @@ async def main(
 
 
 if __name__ == "__main__":
-    # ========== 配置项 ==========
-    # Debug 模式
     DEBUG_MODE = False
     
-    # 代理配置
     USE_PROXY = True
-    PROXY_URL = "http://127.0.0.1:7897"  # 代理地址（格式: http://host:port 或 socks5://host:port）
+    PROXY_URL = "http://127.0.0.1:7897"
     
-    # 最大视频大小 (MB, 0表示不限制)
     MAX_VIDEO_SIZE_MB = 0.0
     
-    # 大视频阈值 (MB, 0表示所有视频都使用直链，不进行本地下载，与MAX_VIDEO_SIZE_MB=0时的行为类似)
-    LARGE_VIDEO_THRESHOLD_MB = 0.0 # Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
+    LARGE_VIDEO_THRESHOLD_MB = 0.0
     
-    # 预下载所有媒体（本地测试版本默认下载）
     PRE_DOWNLOAD_ALL_MEDIA = True
     
-    # 最大并发下载数
     MAX_CONCURRENT_DOWNLOADS = 5
     
-    # 下载目录（默认使用当前程序所在目录下的 media 目录）
     CACHE_DIR = os.path.join(os.path.dirname(__file__), "media")
-    # ============================
     
     asyncio.run(main(
         debug_mode=DEBUG_MODE,

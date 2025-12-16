@@ -44,10 +44,8 @@ class VideoParserPlugin(Star):
         super().__init__(context)
         self.logger = logger
         
-        # 使用配置管理器处理配置
         self.config_manager = ConfigManager(config)
         
-        # 从配置管理器获取配置值
         self.is_auto_pack = self.config_manager.is_auto_pack
         self.is_auto_parse = self.config_manager.is_auto_parse
         self.trigger_keywords = self.config_manager.trigger_keywords
@@ -55,11 +53,9 @@ class VideoParserPlugin(Star):
         self.large_video_threshold_mb = self.config_manager.large_video_threshold_mb
         self.debug_mode = self.config_manager.debug_mode
         
-        # 创建解析器
         parsers = self.config_manager.create_parsers()
         self.parser_manager = ParserManager(parsers)
         
-        # 创建下载管理器
         self.download_manager = DownloadManager(
             max_video_size_mb=self.max_video_size_mb,
             large_video_threshold_mb=self.large_video_threshold_mb,
@@ -68,19 +64,15 @@ class VideoParserPlugin(Star):
             max_concurrent_downloads=self.config_manager.max_concurrent_downloads
         )
         
-        # 保存代理配置供下载时使用
         self.proxy_addr = self.config_manager.proxy_addr
         self.twitter_proxy_config = self.config_manager.get_twitter_proxy_config()
         
-        # 初始化 MessageManager
         self.message_manager = MessageManager(logger=self.logger)
 
     async def terminate(self):
         """插件终止时的清理工作"""
-        # 终止所有下载任务
         await self.download_manager.shutdown()
         
-        # 清理缓存目录
         if self.download_manager.cache_dir:
             cleanup_directory(self.download_manager.cache_dir)
 
@@ -174,7 +166,6 @@ class VideoParserPlugin(Star):
                     return metadata
                 
                 try:
-                    # 下载器会从元数据中读取 header 参数并自行构造 headers
                     processed_metadata = await self.download_manager.process_metadata(
                         session,
                         metadata,
@@ -193,38 +184,48 @@ class VideoParserPlugin(Star):
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     metadata = metadata_list[i] if i < len(metadata_list) else {}
-                    self.logger.exception(f"处理元数据失败: {metadata.get('url', '')}, 错误: {result}")
-                    metadata['error'] = str(result)
+                    error_msg = str(result)
+                    self.logger.exception(
+                        f"处理元数据失败: {metadata.get('url', '未知URL')}, "
+                        f"错误类型: {type(result).__name__}, 错误: {error_msg}"
+                    )
+                    metadata['error'] = error_msg
                     processed_metadata_list.append(metadata)
                 elif isinstance(result, dict):
                     processed_metadata_list.append(result)
                 else:
                     metadata = metadata_list[i] if i < len(metadata_list) else {}
-                    metadata['error'] = 'Unknown error'
+                    error_msg = f'未知错误类型: {type(result).__name__}'
+                    self.logger.warning(
+                        f"处理元数据返回了意外的结果类型: {metadata.get('url', '未知URL')}, "
+                        f"类型: {type(result).__name__}"
+                    )
+                    metadata['error'] = error_msg
                     processed_metadata_list.append(metadata)
             
-            all_link_nodes, link_metadata, temp_files, video_files = self.message_manager.build_nodes(
-                processed_metadata_list,
-                self.is_auto_pack,
-                sender_name,
-                sender_id,
-                self.large_video_threshold_mb,
-                self.max_video_size_mb
-            )
-            
-            if self.debug_mode:
-                self.logger.debug(
-                    f"节点构建完成: {len(all_link_nodes)} 个链接节点, "
-                    f"{len(temp_files)} 个临时文件, {len(video_files)} 个视频文件"
-                )
-            
-            if not all_link_nodes:
-                cleanup_files(temp_files + video_files)
-                if self.debug_mode:
-                    self.logger.debug("未构建任何节点，跳过发送")
-                return
-            
+            temp_files = []
+            video_files = []
             try:
+                all_link_nodes, link_metadata, temp_files, video_files = self.message_manager.build_nodes(
+                    processed_metadata_list,
+                    self.is_auto_pack,
+                    sender_name,
+                    sender_id,
+                    self.large_video_threshold_mb,
+                    self.max_video_size_mb
+                )
+                
+                if self.debug_mode:
+                    self.logger.debug(
+                        f"节点构建完成: {len(all_link_nodes)} 个链接节点, "
+                        f"{len(temp_files)} 个临时文件, {len(video_files)} 个视频文件"
+                    )
+                
+                if not all_link_nodes:
+                    if self.debug_mode:
+                        self.logger.debug("未构建任何节点，跳过发送")
+                    return
+                
                 if self.debug_mode:
                     self.logger.debug(f"开始发送结果，打包模式: {self.is_auto_pack}")
                 await self.message_manager.send_results(
@@ -236,10 +237,16 @@ class VideoParserPlugin(Star):
                     self.is_auto_pack,
                     self.large_video_threshold_mb
                 )
-                cleanup_files(temp_files + video_files)
                 if self.debug_mode:
-                    self.logger.debug("发送完成，已清理临时文件")
+                    self.logger.debug("发送完成")
             except Exception as e:
-                self.logger.exception(f"auto_parse方法执行失败: {e}")
-                cleanup_files(temp_files + video_files)
+                self.logger.exception(
+                    f"构建节点或发送消息失败: {e}, "
+                    f"临时文件数: {len(temp_files)}, 视频文件数: {len(video_files)}"
+                )
                 raise
+            finally:
+                if temp_files or video_files:
+                    cleanup_files(temp_files + video_files)
+                    if self.debug_mode:
+                        self.logger.debug(f"已清理临时文件: {len(temp_files)} 个, 视频文件: {len(video_files)} 个")
