@@ -24,8 +24,6 @@ async def download_image_to_file(
     image_url: str,
     index: int = 0,
     headers: dict = None,
-    referer: str = None,
-    default_referer: str = None,
     proxy: str = None,
     cache_dir: Optional[str] = None,
     media_id: Optional[str] = None
@@ -36,9 +34,7 @@ async def download_image_to_file(
         session: aiohttp会话
         image_url: 图片URL
         index: 图片索引
-        headers: 自定义请求头（如果提供，会与默认请求头合并）
-        referer: Referer URL，如果提供则使用
-        default_referer: 默认Referer URL（如果referer未提供）
+        headers: 请求头字典
         proxy: 代理地址（可选）
         cache_dir: 缓存目录（可选，如果提供则下载到缓存目录，否则下载到临时文件）
         media_id: 媒体ID（可选，用于生成缓存文件名）
@@ -61,8 +57,6 @@ async def download_image_to_file(
             file_path_generator=generate_cache_file_path,
             is_video=False,
             headers=headers,
-            referer=referer,
-            default_referer=default_referer,
             proxy=proxy
         )
     else:
@@ -81,8 +75,6 @@ async def download_image_to_file(
             file_path_generator=generate_temp_file_path,
             is_video=False,
             headers=headers,
-            referer=referer,
-            default_referer=default_referer,
             proxy=proxy
         )
     

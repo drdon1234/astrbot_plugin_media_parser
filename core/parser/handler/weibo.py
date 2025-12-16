@@ -18,6 +18,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 
 class WeiboParser(BaseVideoParser):
@@ -304,6 +305,22 @@ class WeiboParser(BaseVideoParser):
         Returns:
             解析结果字典
         """
+        user_agent = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/120.0.0.0 Safari/537.36'
+        )
+        referer = 'https://weibo.com/'
+        image_headers = build_request_headers(
+            is_video=False,
+            referer=referer,
+            user_agent=user_agent
+        )
+        video_headers = build_request_headers(
+            is_video=True,
+            referer=referer,
+            user_agent=user_agent
+        )
         return {
             'url': url,
             'title': '',
@@ -312,12 +329,8 @@ class WeiboParser(BaseVideoParser):
             'timestamp': timestamp,
             'video_urls': video_urls,
             'image_urls': image_urls,
-            'referer': 'https://weibo.com/',
-            'user_agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
+            'image_headers': image_headers,
+            'video_headers': video_headers,
         }
     
     def _separate_media_urls(self, media_urls: List[str]) -> tuple:

@@ -31,7 +31,6 @@ class M3U8Handler:
         self,
         session: aiohttp.ClientSession,
         headers: dict = None,
-        referer: str = None,
         proxy: str = None,
         max_concurrent_segments: int = 10
     ):
@@ -40,14 +39,11 @@ class M3U8Handler:
         Args:
             session: aiohttp 会话
             headers: 请求头（可选）
-            referer: Referer URL（可选）
             proxy: 代理地址（可选）
             max_concurrent_segments: 最大并发下载分片数
         """
         self.session = session
         self.headers = headers or {}
-        if referer:
-            self.headers['Referer'] = referer
         self.proxy = proxy
         self.max_concurrent_segments = max_concurrent_segments
 

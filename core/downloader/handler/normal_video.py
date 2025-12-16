@@ -67,8 +67,6 @@ async def download_video_to_cache(
     media_id: str,
     index: int = 0,
     headers: dict = None,
-    referer: str = None,
-    default_referer: str = None,
     proxy: str = None
 ) -> Optional[Dict[str, Any]]:
     """下载视频到缓存目录
@@ -79,9 +77,7 @@ async def download_video_to_cache(
         cache_dir: 缓存目录路径
         media_id: 媒体ID
         index: 索引
-        headers: 自定义请求头（如果提供，会与默认请求头合并）
-        referer: Referer URL，如果提供则使用
-        default_referer: 默认Referer URL（如果referer未提供）
+        headers: 请求头字典
         proxy: 代理地址（可选）
 
     Returns:
@@ -105,8 +101,6 @@ async def download_video_to_cache(
         file_path_generator=generate_cache_file_path,
         is_video=True,
         headers=headers,
-        referer=referer,
-        default_referer=default_referer,
         proxy=proxy
     )
     
@@ -129,7 +123,7 @@ async def pre_download_videos(
     Args:
         session: aiohttp会话
         video_items: 视频项列表，每个项包含url_list（URL列表）、media_id、index、
-            headers、referer、default_referer、proxy等字段
+            headers、proxy等字段
         cache_dir: 缓存目录路径
         max_concurrent: 最大并发下载数
 
@@ -149,12 +143,7 @@ async def pre_download_videos(
                 url_list = item.get('url_list', [])
                 media_id = item.get('media_id', 'media')
                 index = item.get('index', 0)
-                is_video = item.get('is_video', True)
-                item_referer = item.get('referer')
-                item_default_referer = item.get('default_referer')
-                item_origin = item.get('origin')
-                item_user_agent = item.get('user_agent')
-                item_extra_headers = item.get('extra_headers', {})
+                item_headers = item.get('headers', {})
                 item_proxy = item.get('proxy')
 
                 if not url_list or not isinstance(url_list, list):
@@ -165,16 +154,6 @@ async def pre_download_videos(
                         'index': index
                     }
 
-                from ..utils import build_request_headers
-                item_headers = build_request_headers(
-                    is_video=is_video,
-                    referer=item_referer,
-                    default_referer=item_default_referer,
-                    origin=item_origin,
-                    user_agent=item_user_agent,
-                    custom_headers=item_extra_headers
-                )
-
                 for url in url_list:
                     result = await download_media(
                         session,
@@ -184,8 +163,6 @@ async def pre_download_videos(
                         media_id=media_id,
                         index=index,
                         headers=item_headers,
-                        referer=item_referer,
-                        default_referer=item_default_referer,
                         proxy=item_proxy
                     )
                     if result and result.get('file_path'):
@@ -234,7 +211,7 @@ async def pre_download_media(
     Args:
         session: aiohttp会话
         media_items: 媒体项列表，每个项包含url_list（URL列表）、media_id、index、
-            headers、referer、default_referer、proxy等字段
+            headers、proxy等字段
         cache_dir: 缓存目录路径
         max_concurrent: 最大并发下载数
 
@@ -254,12 +231,7 @@ async def pre_download_media(
                 url_list = item.get('url_list', [])
                 media_id = item.get('media_id', 'media')
                 index = item.get('index', 0)
-                is_video = item.get('is_video', True)
-                item_referer = item.get('referer')
-                item_default_referer = item.get('default_referer')
-                item_origin = item.get('origin')
-                item_user_agent = item.get('user_agent')
-                item_extra_headers = item.get('extra_headers', {})
+                item_headers = item.get('headers', {})
                 item_proxy = item.get('proxy')
 
                 if not url_list or not isinstance(url_list, list):
@@ -270,16 +242,6 @@ async def pre_download_media(
                         'index': index
                     }
 
-                from ..utils import build_request_headers
-                item_headers = build_request_headers(
-                    is_video=is_video,
-                    referer=item_referer,
-                    default_referer=item_default_referer,
-                    origin=item_origin,
-                    user_agent=item_user_agent,
-                    custom_headers=item_extra_headers
-                )
-
                 for url in url_list:
                     result = await download_media(
                         session,
@@ -289,8 +251,6 @@ async def pre_download_media(
                         media_id=media_id,
                         index=index,
                         headers=item_headers,
-                        referer=item_referer,
-                        default_referer=item_default_referer,
                         proxy=item_proxy
                     )
                     if result and result.get('file_path'):

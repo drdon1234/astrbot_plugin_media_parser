@@ -15,6 +15,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -1048,6 +1049,18 @@ class BilibiliParser(BaseVideoParser):
                 else:
                     final_url = dynamic_url
 
+                referer = url
+                origin = "https://www.bilibili.com"
+                image_headers = build_request_headers(
+                    is_video=False,
+                    referer=referer,
+                    origin=origin
+                )
+                video_headers = build_request_headers(
+                    is_video=True,
+                    referer=referer,
+                    origin=origin
+                )
                 return {
                     "url": final_url,
                     "title": final_title,
@@ -1056,8 +1069,8 @@ class BilibiliParser(BaseVideoParser):
                     "timestamp": final_timestamp,
                     "video_urls": video_result.get("video_urls", []),
                     "image_urls": video_result.get("image_urls", []),
-                    "referer": url,
-                    "origin": "https://www.bilibili.com",
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
             else:
                 final_title = title
@@ -1072,16 +1085,28 @@ class BilibiliParser(BaseVideoParser):
                     if video_desc:
                         final_desc = video_desc
 
+                referer = url
+                origin = "https://www.bilibili.com"
+                image_headers = build_request_headers(
+                    is_video=False,
+                    referer=referer,
+                    origin=origin
+                )
+                video_headers = build_request_headers(
+                    is_video=True,
+                    referer=referer,
+                    origin=origin
+                )
                 return {
                     "url": original_url if B23_HOST in urlparse(original_url).netloc.lower() else url,
                     "title": final_title,
-                    "referer": url,
-                    "origin": "https://www.bilibili.com",
                     "author": author,
                     "desc": final_desc,
                     "timestamp": timestamp,
                     "video_urls": video_result.get("video_urls", []),
                     "image_urls": video_result.get("image_urls", []),
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
 
         image_urls = []
@@ -1098,6 +1123,19 @@ class BilibiliParser(BaseVideoParser):
 
         display_url = original_url if B23_HOST in urlparse(original_url).netloc.lower() else url
 
+        referer = url
+        origin = "https://www.bilibili.com"
+        image_headers = build_request_headers(
+            is_video=False,
+            referer=referer,
+            origin=origin
+        )
+        video_headers = build_request_headers(
+            is_video=True,
+            referer=referer,
+            origin=origin
+        )
+
         return {
             "url": display_url,
             "title": title,
@@ -1106,8 +1144,8 @@ class BilibiliParser(BaseVideoParser):
             "timestamp": timestamp,
             "video_urls": [],
             "image_urls": image_urls,
-            "referer": url,
-            "origin": "https://www.bilibili.com",
+            "image_headers": image_headers,
+            "video_headers": video_headers,
         }
 
     async def parse(
@@ -1262,6 +1300,18 @@ class BilibiliParser(BaseVideoParser):
         is_b23_short = urlparse(original_url).netloc.lower() == B23_HOST
         display_url = original_url if is_b23_short else page_url
         
+        referer = page_url
+        origin = "https://www.bilibili.com"
+        image_headers = build_request_headers(
+            is_video=False,
+            referer=referer,
+            origin=origin
+        )
+        video_headers = build_request_headers(
+            is_video=True,
+            referer=referer,
+            origin=origin
+        )
         result = {
             "url": display_url,
             "title": info.get("title", ""),
@@ -1270,8 +1320,8 @@ class BilibiliParser(BaseVideoParser):
             "timestamp": info.get("timestamp", ""),
             "video_urls": [[direct_url]],
             "image_urls": [],
-            "referer": page_url,
-            "origin": "https://www.bilibili.com",
+            "image_headers": image_headers,
+            "video_headers": video_headers,
         }
         logger.debug(f"[{self.name}] parse_bilibili_minimal: 解析完成 {url}, title={result.get('title', '')[:50]}")
         return result

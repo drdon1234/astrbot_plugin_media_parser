@@ -72,12 +72,10 @@ class BaseVideoParser(ABC):
             - timestamp: 发布时间（可选）
             - video_urls: 视频URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
             - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
+            - image_headers: dict，图片下载的完整请求头字典（必需）
+            - video_headers: dict，视频下载的完整请求头字典（必需）
             - image_pre_download: bool，是否必须预下载图片（可选，默认False）。True=必须预下载，如果未启用预下载或预下载失败则跳过；False=根据配置选择
             - video_pre_download: bool，是否必须预下载视频（可选，默认False）。True=必须预下载，如果未启用预下载或预下载失败则跳过；False=根据配置选择
-            - referer: str，下载媒体时使用的 Referer URL（可选，推荐提供）
-            - origin: str，下载媒体时使用的 Origin URL（可选，某些平台如B站需要）
-            - user_agent: str，下载媒体时使用的 User-Agent（可选，默认使用桌面端 User-Agent）
-            - extra_headers: dict，其他自定义请求头（可选）
             - 其他平台特定字段
 
         Raises:

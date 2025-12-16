@@ -13,6 +13,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 
 UA = (
@@ -193,6 +194,15 @@ class XiaoheiheParser(BaseVideoParser):
             video_urls = [[video] for video in videos] if videos else []
             image_urls = [[img] for img in images] if images else []
             
+            referer = "https://store.steampowered.com/"
+            image_headers = build_request_headers(
+                is_video=False,
+                referer=referer
+            )
+            video_headers = build_request_headers(
+                is_video=True,
+                referer=referer
+            )
             result_dict = {
                 "url": original_url,
                 "title": "",
@@ -201,7 +211,8 @@ class XiaoheiheParser(BaseVideoParser):
                 "timestamp": "",
                 "video_urls": video_urls,
                 "image_urls": image_urls,
-                "referer": "https://store.steampowered.com/",  # 用于下载视频时的 referer
+                "image_headers": image_headers,
+                "video_headers": video_headers,
             }
             logger.debug(f"[{self.name}] parse: 解析完成 {url}, video_count={len(video_urls)}, image_count={len(image_urls)}")
             return result_dict

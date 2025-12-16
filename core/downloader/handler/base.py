@@ -15,7 +15,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ...file_cleaner import cleanup_file
-from ..utils import build_request_headers, extract_size_from_headers
+from ..utils import extract_size_from_headers
 from ..validator import validate_media_response
 from ...constants import Config
 
@@ -69,8 +69,6 @@ async def download_media_from_url(
     file_path_generator: Callable[[str, str], str],
     is_video: bool = True,
     headers: dict = None,
-    referer: str = None,
-    default_referer: str = None,
     proxy: str = None
 ) -> Tuple[Optional[str], Optional[float]]:
     """通用媒体下载函数，封装公共的下载逻辑
@@ -80,21 +78,14 @@ async def download_media_from_url(
         media_url: 媒体URL
         file_path_generator: 文件路径生成函数，接受 (content_type, media_url) 参数，返回文件路径
         is_video: 是否为视频（True为视频，False为图片）
-        headers: 自定义请求头（如果提供，会与默认请求头合并）
-        referer: Referer URL，如果提供则使用
-        default_referer: 默认Referer URL（如果referer未提供）
+        headers: 请求头字典
         proxy: 代理地址（可选）
 
     Returns:
         (file_path, size_mb) 元组，失败返回 (None, None)
     """
     try:
-        request_headers = build_request_headers(
-            is_video=is_video,
-            referer=referer,
-            default_referer=default_referer,
-            custom_headers=headers
-        )
+        request_headers = headers or {}
         
         timeout = aiohttp.ClientTimeout(
             total=Config.VIDEO_DOWNLOAD_TIMEOUT if is_video else Config.IMAGE_DOWNLOAD_TIMEOUT

@@ -15,6 +15,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 MOBILE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) '
@@ -448,6 +449,22 @@ class KuaishouParser(BaseVideoParser):
             if video_url:
                 logger.debug(f"[{self.name}] parse: 检测到视频")
                 upload_time = self._extract_upload_time(video_url)
+                user_agent = (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                )
+                referer = "https://www.kuaishou.com/"
+                image_headers = build_request_headers(
+                    is_video=False,
+                    referer=referer,
+                    user_agent=user_agent
+                )
+                video_headers = build_request_headers(
+                    is_video=True,
+                    referer=referer,
+                    user_agent=user_agent
+                )
                 result_dict = {
                     "url": url,
                     "title": title,
@@ -456,12 +473,8 @@ class KuaishouParser(BaseVideoParser):
                     "timestamp": upload_time or "",
                     "video_urls": [[video_url]],
                     "image_urls": [],
-                    "referer": "https://www.kuaishou.com/",
-                    "user_agent": (
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                        'AppleWebKit/537.36 (KHTML, like Gecko) '
-                        'Chrome/120.0.0.0 Safari/537.36'
-                    ),
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
                 logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}")
                 return result_dict
@@ -476,6 +489,22 @@ class KuaishouParser(BaseVideoParser):
                         if image_url
                         else None
                     )
+                    user_agent = (
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                        'AppleWebKit/537.36 (KHTML, like Gecko) '
+                        'Chrome/120.0.0.0 Safari/537.36'
+                    )
+                    referer = "https://www.kuaishou.com/"
+                    image_headers = build_request_headers(
+                        is_video=False,
+                        referer=referer,
+                        user_agent=user_agent
+                    )
+                    video_headers = build_request_headers(
+                        is_video=True,
+                        referer=referer,
+                        user_agent=user_agent
+                    )
                     result_dict = {
                         "url": url,
                         "title": title or "快手图集",
@@ -484,12 +513,8 @@ class KuaishouParser(BaseVideoParser):
                         "timestamp": upload_time or "",
                         "video_urls": [],
                         "image_urls": image_url_lists,
-                        "referer": "https://www.kuaishou.com/",
-                        "user_agent": (
-                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                            'AppleWebKit/537.36 (KHTML, like Gecko) '
-                            'Chrome/120.0.0.0 Safari/537.36'
-                        ),
+                        "image_headers": image_headers,
+                        "video_headers": video_headers,
                     }
                     logger.debug(f"[{self.name}] parse: 解析完成(图片集) {url}, title={title[:50] if title else '快手图集'}, image_count={len(image_url_lists)}")
                     return result_dict
@@ -501,6 +526,22 @@ class KuaishouParser(BaseVideoParser):
                     if vurl and '.mp4' in vurl:
                         video_url = self._min_mp4(vurl)
                         upload_time = self._extract_upload_time(video_url)
+                        user_agent = (
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 (KHTML, like Gecko) '
+                            'Chrome/120.0.0.0 Safari/537.36'
+                        )
+                        referer = "https://www.kuaishou.com/"
+                        image_headers = build_request_headers(
+                            is_video=False,
+                            referer=referer,
+                            user_agent=user_agent
+                        )
+                        video_headers = build_request_headers(
+                            is_video=True,
+                            referer=referer,
+                            user_agent=user_agent
+                        )
                         return {
                             "url": url,
                             "title": title,
@@ -509,12 +550,8 @@ class KuaishouParser(BaseVideoParser):
                             "timestamp": upload_time or "",
                             "video_urls": [[video_url]],
                             "image_urls": [],
-                            "referer": "https://www.kuaishou.com/",
-                            "user_agent": (
-                                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                                'Chrome/120.0.0.0 Safari/537.36'
-                            ),
+                            "image_headers": image_headers,
+                            "video_headers": video_headers,
                         }
                 
                 if 'photo' in rawdata and rawdata.get('type') == 1:
@@ -538,6 +575,22 @@ class KuaishouParser(BaseVideoParser):
                             upload_time = None
                             if image_url_lists[0] and image_url_lists[0][0]:
                                 upload_time = self._extract_upload_time(image_url_lists[0][0])
+                            user_agent = (
+                                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                'Chrome/120.0.0.0 Safari/537.36'
+                            )
+                            referer = "https://www.kuaishou.com/"
+                            image_headers = build_request_headers(
+                                is_video=False,
+                                referer=referer,
+                                user_agent=user_agent
+                            )
+                            video_headers = build_request_headers(
+                                is_video=True,
+                                referer=referer,
+                                user_agent=user_agent
+                            )
                             return {
                                 "url": url,
                                 "title": title or "快手图集",
@@ -546,12 +599,8 @@ class KuaishouParser(BaseVideoParser):
                                 "timestamp": upload_time or "",
                                 "video_urls": [],
                                 "image_urls": image_url_lists,
-                                "referer": "https://www.kuaishou.com/",
-                                "user_agent": (
-                                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                                    'Chrome/120.0.0.0 Safari/537.36'
-                                ),
+                                "image_headers": image_headers,
+                                "video_headers": video_headers,
                             }
 
             if (metadata.get('userName') or

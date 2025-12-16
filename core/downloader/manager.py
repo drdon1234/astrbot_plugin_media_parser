@@ -93,14 +93,7 @@ class DownloadManager:
         if not url_list or not isinstance(url_list, list):
             return None
         
-        from .utils import build_request_headers
-        headers = build_request_headers(
-            is_video=False,
-            referer=metadata.get('referer'),
-            origin=metadata.get('origin'),
-            user_agent=metadata.get('user_agent'),
-            custom_headers=metadata.get('extra_headers', {})
-        )
+        headers = metadata.get('image_headers', {})
         use_image_proxy = metadata.get('use_image_proxy', False)
         proxy = (metadata.get('proxy_url') or proxy_addr) if use_image_proxy else None
         
@@ -108,13 +101,11 @@ class DownloadManager:
             result = await download_media(
                 session,
                 url,
-                media_type=None,  # 自动检测类型
-                cache_dir=None,  # 图片不需要缓存目录
+                media_type=None,
+                cache_dir=None,
                 media_id='image',
                 index=img_idx,
                 headers=headers,
-                referer=metadata.get('referer'),
-                default_referer=metadata.get('referer'),
                 proxy=proxy
             )
             if result and result.get('file_path'):
@@ -202,14 +193,7 @@ class DownloadManager:
         if not url_list:
             return None, None
         try:
-            from .utils import build_request_headers
-            headers = build_request_headers(
-                is_video=True,
-                referer=metadata.get('referer'),
-                origin=metadata.get('origin'),
-                user_agent=metadata.get('user_agent'),
-                custom_headers=metadata.get('extra_headers', {})
-            )
+            headers = metadata.get('video_headers', {})
             use_video_proxy = metadata.get('use_video_proxy', False)
             proxy = (metadata.get('proxy_url') or proxy_addr) if use_video_proxy else None
             return await get_video_size(session, url_list[0], headers, proxy)
@@ -225,12 +209,12 @@ class DownloadManager:
         """构建媒体项列表
 
         Args:
-            metadata: 元数据字典（应包含 referer, origin, user_agent 等 header 相关字段）
+            metadata: 元数据字典（应包含 image_headers, video_headers 字段）
             media_id: 媒体ID
             proxy_addr: 代理地址（可选，如果元数据中有代理配置则会被覆盖）
 
         Returns:
-            媒体项列表，每个项包含url_list（URL列表）、media_id、index、is_video等字段
+            媒体项列表，每个项包含url_list（URL列表）、media_id、index、is_video、headers等字段
         """
         media_items = []
         video_urls = metadata.get('video_urls', [])
@@ -240,26 +224,19 @@ class DownloadManager:
         use_video_proxy = metadata.get('use_video_proxy', False)
         effective_proxy_addr = metadata.get('proxy_url') or proxy_addr
         
-        metadata_referer = metadata.get('referer')
-        metadata_origin = metadata.get('origin')
-        metadata_user_agent = metadata.get('user_agent')
-        metadata_extra_headers = metadata.get('extra_headers', {})
+        image_headers = metadata.get('image_headers', {})
+        video_headers = metadata.get('video_headers', {})
         
         idx = 0
         for url_list in video_urls:
             if url_list and isinstance(url_list, list):
                 item_proxy = effective_proxy_addr if use_video_proxy else None
-                video_referer = metadata_referer
                 media_items.append({
                     'url_list': url_list,
                     'media_id': media_id,
                     'index': idx,
                     'is_video': True,
-                    'referer': video_referer,
-                    'default_referer': video_referer,
-                    'origin': metadata_origin,
-                    'user_agent': metadata_user_agent,
-                    'extra_headers': metadata_extra_headers,
+                    'headers': video_headers,
                     'proxy': item_proxy
                 })
                 idx += 1
@@ -272,11 +249,7 @@ class DownloadManager:
                     'media_id': media_id,
                     'index': idx,
                     'is_video': False,
-                    'referer': metadata_referer,
-                    'default_referer': metadata_referer,
-                    'origin': metadata_origin,
-                    'user_agent': metadata_user_agent,
-                    'extra_headers': metadata_extra_headers,
+                    'headers': image_headers,
                     'proxy': item_proxy
                 })
                 idx += 1
@@ -352,7 +325,7 @@ class DownloadManager:
 
         Args:
             session: aiohttp会话
-            metadata: 解析后的元数据（应包含 referer, origin 等 header 相关字段）
+            metadata: 解析后的元数据（应包含 image_headers, video_headers 字段）
             proxy_addr: 代理地址（可选，用于 Twitter 等需要代理的平台）
 
         Returns:
@@ -620,14 +593,7 @@ class DownloadManager:
                 if not url_list:
                     return False, None
                 try:
-                    from .utils import build_request_headers
-                    image_headers = build_request_headers(
-                        is_video=False,
-                        referer=metadata.get('referer'),
-                        origin=metadata.get('origin'),
-                        user_agent=metadata.get('user_agent'),
-                        custom_headers=metadata.get('extra_headers', {})
-                    )
+                    image_headers = metadata.get('image_headers', {})
                     use_image_proxy = metadata.get('use_image_proxy', False)
                     image_proxy = (metadata.get('proxy_url') or proxy_addr) if use_image_proxy else None
                     return await validate_media_url(
@@ -810,8 +776,6 @@ class DownloadManager:
         self,
         session: aiohttp.ClientSession,
         metadata_list: List[Dict[str, Any]],
-        headers: dict = None,
-        referer: str = None,
         proxy: str = None
     ) -> List[Dict[str, Any]]:
         """处理元数据列表
@@ -819,8 +783,6 @@ class DownloadManager:
         Args:
             session: aiohttp会话
             metadata_list: 解析后的元数据列表
-            headers: 请求头（可选）
-            referer: Referer URL（可选）
             proxy: 代理地址（可选）
 
         Returns:
@@ -832,8 +794,6 @@ class DownloadManager:
                 processed = await self.process_metadata(
                     session,
                     metadata,
-                    headers,
-                    referer,
                     proxy
                 )
                 processed_metadata.append(processed)

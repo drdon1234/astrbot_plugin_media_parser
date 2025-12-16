@@ -14,6 +14,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 
 class DouyinParser(BaseVideoParser):
@@ -360,6 +361,23 @@ class DouyinParser(BaseVideoParser):
             else:
                 display_url = url
             
+            user_agent = (
+                'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/116.0.0.0 Mobile Safari/537.36'
+            )
+            referer = "https://www.douyin.com/"
+            image_headers = build_request_headers(
+                is_video=False,
+                referer=referer,
+                user_agent=user_agent
+            )
+            video_headers = build_request_headers(
+                is_video=True,
+                referer=referer,
+                user_agent=user_agent
+            )
+
             if is_gallery:
                 logger.debug(f"[{self.name}] parse: 检测到图片集，共{len(image_url_lists)}张图片")
                 image_urls = []
@@ -376,12 +394,8 @@ class DouyinParser(BaseVideoParser):
                     "timestamp": timestamp,
                     "video_urls": [],
                     "image_urls": image_urls,
-                    "referer": "https://www.douyin.com/",
-                    "user_agent": (
-                        'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
-                        'AppleWebKit/537.36 (KHTML, like Gecko) '
-                        'Chrome/116.0.0.0 Mobile Safari/537.36'
-                    ),
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
             else:
                 if not video_url:
@@ -395,13 +409,9 @@ class DouyinParser(BaseVideoParser):
                     "desc": "",
                     "timestamp": timestamp,
                     "video_urls": [[video_url]],
-                    "referer": "https://www.douyin.com/",
-                    "user_agent": (
-                        'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
-                        'AppleWebKit/537.36 (KHTML, like Gecko) '
-                        'Chrome/116.0.0.0 Mobile Safari/537.36'
-                    ),
                     "image_urls": [],
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
                 logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}")
                 return result_dict

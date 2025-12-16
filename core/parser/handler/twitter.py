@@ -13,6 +13,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 
 class TwitterParser(BaseVideoParser):
@@ -241,12 +242,17 @@ class TwitterParser(BaseVideoParser):
             has_videos = len(video_urls) > 0
             has_images = len(image_urls) > 0
             
+            image_headers = build_request_headers(is_video=False)
+            video_headers = build_request_headers(is_video=True)
+            
             metadata_base = {
                 "url": url,
                 "title": text[:100] if text else "Twitter 推文",
                 "author": author,
                 "desc": text,
                 "timestamp": timestamp,
+                "image_headers": image_headers,
+                "video_headers": video_headers,
                 "use_image_proxy": self.use_image_proxy,
                 "use_video_proxy": self.use_video_proxy,
                 "proxy_url": self.proxy_url if (self.use_image_proxy or self.use_video_proxy) else None,

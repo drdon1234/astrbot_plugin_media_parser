@@ -17,8 +17,7 @@ except ImportError:
 from .utils import (
     validate_content_type,
     check_json_error_response,
-    extract_size_from_headers,
-    build_request_headers
+    extract_size_from_headers
 )
 from ..constants import Config
 
