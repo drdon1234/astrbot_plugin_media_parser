@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import asyncio
 import json
 import re
@@ -8,7 +9,14 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from .base_parser import BaseVideoParser
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+from .base import BaseVideoParser
+from ..utils import build_request_headers, is_live_url, SkipParse
 
 MOBILE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) '
@@ -22,11 +30,10 @@ MOBILE_HEADERS = {
 
 
 class KuaishouParser(BaseVideoParser):
-    """快手视频解析器"""
 
     def __init__(self):
         """初始化快手解析器"""
-        super().__init__("快手")
+        super().__init__("kuaishou")
         self.headers = MOBILE_HEADERS
         self.semaphore = asyncio.Semaphore(10)
 
@@ -40,10 +47,13 @@ class KuaishouParser(BaseVideoParser):
             如果可以解析返回True，否则返回False
         """
         if not url:
+            logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
         url_lower = url.lower()
         if 'kuaishou.com' in url_lower or 'kspkg.com' in url_lower:
+            logger.debug(f"[{self.name}] can_parse: 匹配快手链接 {url}")
             return True
+        logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
         return False
 
     def extract_links(self, text: str) -> List[str]:
@@ -65,19 +75,12 @@ class KuaishouParser(BaseVideoParser):
         long_links = re.findall(long_pattern, text)
         result_links_set.update(long_links)
         
-        return list(result_links_set)
-
-    def _extract_media_id(self, url: str) -> str:
-        """从URL中提取媒体ID
-
-        Args:
-            url: 快手URL
-
-        Returns:
-            媒体ID，如果无法提取则返回"kuaishou"
-        """
-        video_id_match = re.search(r'/(\w+)(?:\.html|/|\?|$)', url)
-        return video_id_match.group(1) if video_id_match else "kuaishou"
+        result = list(result_links_set)
+        if result:
+            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+        else:
+            logger.debug(f"[{self.name}] extract_links: 未提取到链接")
+        return result
 
     def _min_mp4(self, url: str) -> str:
         """处理MP4 URL，提取最小格式
@@ -344,11 +347,17 @@ class KuaishouParser(BaseVideoParser):
                 loc = r1.headers.get('Location')
                 if not loc:
                     return None
+            if is_live_url(loc):
+                logger.debug(f"[{self.name}] _fetch_html: 短链重定向到直播域名，跳过解析 {url} -> {loc}")
+                raise SkipParse("直播域名链接不解析")
             async with session.get(loc, headers=self.headers) as r2:
                 if r2.status != 200:
                     return None
                 return await r2.text()
         else:
+            if is_live_url(url):
+                logger.debug(f"[{self.name}] _fetch_html: 检测到直播域名链接，跳过解析 {url}")
+                raise SkipParse("直播域名链接不解析")
             async with session.get(url, headers=self.headers) as r:
                 if r.status != 200:
                     return None
@@ -416,11 +425,14 @@ class KuaishouParser(BaseVideoParser):
         Raises:
             RuntimeError: 当解析失败时
         """
+        logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
             html = await self._fetch_html(session, url)
             if not html:
+                logger.debug(f"[{self.name}] parse: 无法获取HTML内容 {url}")
                 raise RuntimeError(f"无法获取HTML内容: {url}")
 
+            logger.debug(f"[{self.name}] parse: HTML获取成功，开始提取元数据")
             metadata = self._extract_metadata(html)
             author = self._build_author_info(metadata)
             title = metadata.get('caption', '') or "快手视频"
@@ -429,8 +441,25 @@ class KuaishouParser(BaseVideoParser):
 
             video_url = self._parse_video(html)
             if video_url:
+                logger.debug(f"[{self.name}] parse: 检测到视频")
                 upload_time = self._extract_upload_time(video_url)
-                return {
+                user_agent = (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                )
+                referer = "https://www.kuaishou.com/"
+                image_headers = build_request_headers(
+                    is_video=False,
+                    referer=referer,
+                    user_agent=user_agent
+                )
+                video_headers = build_request_headers(
+                    is_video=True,
+                    referer=referer,
+                    user_agent=user_agent
+                )
+                result_dict = {
                     "url": url,
                     "title": title,
                     "author": author,
@@ -438,7 +467,11 @@ class KuaishouParser(BaseVideoParser):
                     "timestamp": upload_time or "",
                     "video_urls": [[video_url]],
                     "image_urls": [],
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
+                logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}")
+                return result_dict
 
             album = self._parse_album(html)
             if album:
@@ -450,7 +483,23 @@ class KuaishouParser(BaseVideoParser):
                         if image_url
                         else None
                     )
-                    return {
+                    user_agent = (
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                        'AppleWebKit/537.36 (KHTML, like Gecko) '
+                        'Chrome/120.0.0.0 Safari/537.36'
+                    )
+                    referer = "https://www.kuaishou.com/"
+                    image_headers = build_request_headers(
+                        is_video=False,
+                        referer=referer,
+                        user_agent=user_agent
+                    )
+                    video_headers = build_request_headers(
+                        is_video=True,
+                        referer=referer,
+                        user_agent=user_agent
+                    )
+                    result_dict = {
                         "url": url,
                         "title": title or "快手图集",
                         "author": author,
@@ -458,7 +507,11 @@ class KuaishouParser(BaseVideoParser):
                         "timestamp": upload_time or "",
                         "video_urls": [],
                         "image_urls": image_url_lists,
+                        "image_headers": image_headers,
+                        "video_headers": video_headers,
                     }
+                    logger.debug(f"[{self.name}] parse: 解析完成(图片集) {url}, title={title[:50] if title else '快手图集'}, image_count={len(image_url_lists)}")
+                    return result_dict
 
             rawdata = self._parse_rawdata_json(html)
             if rawdata:
@@ -467,6 +520,22 @@ class KuaishouParser(BaseVideoParser):
                     if vurl and '.mp4' in vurl:
                         video_url = self._min_mp4(vurl)
                         upload_time = self._extract_upload_time(video_url)
+                        user_agent = (
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 (KHTML, like Gecko) '
+                            'Chrome/120.0.0.0 Safari/537.36'
+                        )
+                        referer = "https://www.kuaishou.com/"
+                        image_headers = build_request_headers(
+                            is_video=False,
+                            referer=referer,
+                            user_agent=user_agent
+                        )
+                        video_headers = build_request_headers(
+                            is_video=True,
+                            referer=referer,
+                            user_agent=user_agent
+                        )
                         return {
                             "url": url,
                             "title": title,
@@ -475,6 +544,8 @@ class KuaishouParser(BaseVideoParser):
                             "timestamp": upload_time or "",
                             "video_urls": [[video_url]],
                             "image_urls": [],
+                            "image_headers": image_headers,
+                            "video_headers": video_headers,
                         }
                 
                 if 'photo' in rawdata and rawdata.get('type') == 1:
@@ -498,6 +569,22 @@ class KuaishouParser(BaseVideoParser):
                             upload_time = None
                             if image_url_lists[0] and image_url_lists[0][0]:
                                 upload_time = self._extract_upload_time(image_url_lists[0][0])
+                            user_agent = (
+                                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                'Chrome/120.0.0.0 Safari/537.36'
+                            )
+                            referer = "https://www.kuaishou.com/"
+                            image_headers = build_request_headers(
+                                is_video=False,
+                                referer=referer,
+                                user_agent=user_agent
+                            )
+                            video_headers = build_request_headers(
+                                is_video=True,
+                                referer=referer,
+                                user_agent=user_agent
+                            )
                             return {
                                 "url": url,
                                 "title": title or "快手图集",
@@ -506,6 +593,8 @@ class KuaishouParser(BaseVideoParser):
                                 "timestamp": upload_time or "",
                                 "video_urls": [],
                                 "image_urls": image_url_lists,
+                                "image_headers": image_headers,
+                                "video_headers": video_headers,
                             }
 
             if (metadata.get('userName') or

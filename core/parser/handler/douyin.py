@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import asyncio
 import json
 import re
@@ -7,15 +8,21 @@ from typing import Optional, Dict, Any, List
 
 import aiohttp
 
-from .base_parser import BaseVideoParser
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+from .base import BaseVideoParser
+from ..utils import build_request_headers, is_live_url, SkipParse
 
 
 class DouyinParser(BaseVideoParser):
-    """抖音视频解析器"""
 
     def __init__(self):
         """初始化抖音解析器"""
-        super().__init__("抖音")
+        super().__init__("douyin")
         self.headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
@@ -38,10 +45,13 @@ class DouyinParser(BaseVideoParser):
             如果可以解析返回True，否则返回False
         """
         if not url:
+            logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
         url_lower = url.lower()
         if 'v.douyin.com' in url_lower or 'douyin.com' in url_lower:
+            logger.debug(f"[{self.name}] can_parse: 匹配抖音链接 {url}")
             return True
+        logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
         return False
 
     def extract_links(self, text: str) -> List[str]:
@@ -86,23 +96,12 @@ class DouyinParser(BaseVideoParser):
                     seen_ids.add(item_id)
                     result_links_set.add(f"https://www.douyin.com/video/{item_id}")
         
-        return list(result_links_set)
-
-    def _extract_media_id(self, url: str) -> str:
-        """从URL中提取媒体ID
-
-        Args:
-            url: 抖音URL
-
-        Returns:
-            媒体ID，如果无法提取则返回"douyin"
-        """
-        video_id_match = (
-            re.search(r'/note/(\d+)', url) or
-            re.search(r'/video/(\d+)', url) or
-            re.search(r'(\d{19})', url)
-        )
-        return video_id_match.group(1) if video_id_match else "douyin"
+        result = list(result_links_set)
+        if result:
+            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+        else:
+            logger.debug(f"[{self.name}] extract_links: 未提取到链接")
+        return result
 
     def extract_router_data(self, text: str) -> Optional[str]:
         """从HTML中提取ROUTER_DATA
@@ -199,7 +198,7 @@ class DouyinParser(BaseVideoParser):
                             len(img['url_list']) > 0):
                         url_list = img['url_list']
                         valid_urls = []
-                        for url_idx, img_url in enumerate(url_list):
+                        for img_url in url_list:
                             if (img_url and
                                     isinstance(img_url, str) and
                                     img_url.startswith(
@@ -286,11 +285,18 @@ class DouyinParser(BaseVideoParser):
         Raises:
             RuntimeError: 当解析失败时
         """
+        logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
             redirected_url = await self.get_redirected_url(session, url)
+            if redirected_url != url:
+                logger.debug(f"[{self.name}] parse: URL重定向 {url} -> {redirected_url}")
+            if is_live_url(redirected_url) or is_live_url(url):
+                logger.debug(f"[{self.name}] parse: 检测到直播域名链接，跳过解析 {url} -> {redirected_url}")
+                raise SkipParse("直播域名链接不解析")
             is_note = '/note/' in redirected_url or '/note/' in url
             note_id = None
             if is_note:
+                logger.debug(f"[{self.name}] parse: 检测到笔记类型")
                 note_match = re.search(r'/note/(\d+)', redirected_url)
                 if not note_match:
                     note_match = re.search(r'/note/(\d+)', url)
@@ -325,8 +331,10 @@ class DouyinParser(BaseVideoParser):
                         raise RuntimeError(f"无法解析此URL: {url}")
             
             if not result:
+                logger.debug(f"[{self.name}] parse: 无法获取视频信息 {url}")
                 raise RuntimeError(f"无法获取视频信息: {url}")
 
+            logger.debug(f"[{self.name}] parse: 视频信息获取成功 {url}")
             is_gallery = result.get('is_gallery', False)
             images = result.get('images', [])
             image_url_lists = result.get('image_url_lists', [])
@@ -340,7 +348,25 @@ class DouyinParser(BaseVideoParser):
             else:
                 display_url = url
             
+            user_agent = (
+                'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/116.0.0.0 Mobile Safari/537.36'
+            )
+            referer = "https://www.douyin.com/"
+            image_headers = build_request_headers(
+                is_video=False,
+                referer=referer,
+                user_agent=user_agent
+            )
+            video_headers = build_request_headers(
+                is_video=True,
+                referer=referer,
+                user_agent=user_agent
+            )
+
             if is_gallery:
+                logger.debug(f"[{self.name}] parse: 检测到图片集，共{len(image_url_lists)}张图片")
                 image_urls = []
                 if image_url_lists:
                     for url_list in image_url_lists:
@@ -355,12 +381,15 @@ class DouyinParser(BaseVideoParser):
                     "timestamp": timestamp,
                     "video_urls": [],
                     "image_urls": image_urls,
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
             else:
                 if not video_url:
+                    logger.debug(f"[{self.name}] parse: 无法获取视频URL {url}")
                     raise RuntimeError(f"无法获取视频URL: {url}")
                 
-                return {
+                result_dict = {
                     "url": display_url,
                     "title": title,
                     "author": author,
@@ -368,4 +397,8 @@ class DouyinParser(BaseVideoParser):
                     "timestamp": timestamp,
                     "video_urls": [[video_url]],
                     "image_urls": [],
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
+                logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}")
+                return result_dict

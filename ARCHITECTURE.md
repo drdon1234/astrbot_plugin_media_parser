@@ -1,808 +1,544 @@
-# 架构与技术说明文档
+# 架构文档
 
 ## 目录
 
-- [项目概述](#项目概述)
-- [系统架构](#系统架构)
-- [核心模块](#核心模块)
-- [工作流程](#工作流程)
-- [技术栈](#技术栈)
-- [设计模式](#设计模式)
-- [数据流](#数据流)
-- [扩展性设计](#扩展性设计)
+1. [整体架构](#整体架构)
+2. [具体工作流](#具体工作流)
+3. [异常处理](#异常处理)
 
 ---
 
-## 项目概述
+## 整体架构
 
-**astrbot_plugin_video_parser** 是一个 AstrBot 插件，用于自动识别和解析多个流媒体平台的视频/图片链接，将其转换为媒体直链并发送给用户。
+### 系统概述
 
-### 主要功能
+本系统是一个流媒体平台链接解析插件，用于自动识别和解析各种流媒体平台的链接，提取媒体元数据，并将媒体内容转换为可直接发送的格式。系统采用模块化设计，支持多平台解析、智能下载策略和灵活的消息发送方式。
 
-- **多平台支持**：支持 B站、抖音、快手、微博、小红书、推特等主流平台
-- **自动识别**：自动识别会话中的视频或图片链接
-- **并行解析**：支持多平台并行解析与批量处理
-- **智能下载**：根据视频大小自动决定使用直链或本地缓存
-- **消息打包**：支持将解析结果打包为消息集合（可配置）
+### 模块划分
 
-### 支持的平台
+系统主要分为以下几个核心模块：
 
-| 平台 | 支持的链接类型 | 可解析的媒体类型 |
-|------|--------------|----------------|
-| B站 | 短链、AV号、BV号、动态长链、动态短链 | 视频、图片 |
-| 抖音 | 短链、视频长链、图集长链 | 视频、图片 |
-| 快手 | 短链、视频长链 | 视频、图片 |
-| 微博 | weibo.com、weibo.cn、video.weibo.com 链接 | 视频、图片 |
-| 小红书 | 短链、笔记长链 | 视频、图片 |
-| 推特 | Twitter/X 链接 | 视频、图片 |
+#### 1. 配置管理模块 (ConfigManager)
 
----
+负责读取、解析和验证配置文件，创建解析器实例，管理全局配置项。主要职责包括：
 
-## 系统架构
+- 解析配置文件中的各项设置（触发设置、视频大小设置、下载设置等）
+- 根据配置创建并初始化各个平台的解析器
+- 管理代理配置（小黑盒和Twitter平台的代理设置）
+- 验证配置有效性（如确保至少启用一个解析器）
 
-### 整体架构图
+#### 2. 解析器模块 (Parser)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    AstrBot 消息事件                          │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│              VideoParserPlugin (main.py)                     │
-│  - 事件监听与过滤                                             │
-│  - 配置管理                                                   │
-│  - 消息发送控制                                               │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│              ParserManager (core/parser_manager.py)           │
-│  - 解析器注册与管理                                           │
-│  - 链接提取与去重                                             │
-│  - 并行解析调度                                               │
-└──────────────┬───────────────────────┬──────────────────────┘
-               │                       │
-               ▼                       ▼
-┌──────────────────────────┐  ┌──────────────────────────────┐
-│   LinkRouter             │  │   BaseVideoParser            │
-│  (parsers/link_router.py)│  │   (parsers/base_parser.py)   │
-│  - 链接匹配               │  │   - 解析器接口定义           │
-│  - 解析器路由             │  └───────────┬──────────────────┘
-└──────────────────────────┘              │
-                                         │
-                    ┌────────────────────┼────────────────────┐
-                    ▼                    ▼                    ▼
-         ┌─────────────────┐  ┌─────────────────┐  ┌──────────────┐
-         │ BilibiliParser  │  │ DouyinParser    │  │ TwitterParser│
-         │ KuaishouParser  │  │ WeiboParser     │  │ ...          │
-         │ XiaohongshuParser│ │                 │  │              │
-         └─────────────────┘  └─────────────────┘  └──────────────┘
-                    │                    │                    │
-                    └────────────────────┼────────────────────┘
-                                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│          DownloadManager (core/download_manager.py)          │
-│  - 视频大小检查                                               │
-│  - 下载策略决策                                               │
-│  - 缓存管理                                                   │
-└──────────────┬───────────────────────┬──────────────────────┘
-               │                       │
-               ▼                       ▼
-┌──────────────────────────┐  ┌──────────────────────────────┐
-│   Downloader             │  │   FileManager                │
-│  (core/downloader.py)    │  │  (core/file_manager.py)      │
-│  - 媒体下载               │  │  - 文件缓存管理              │
-│  - 大小检查               │  │  - 临时文件清理              │
-└──────────────────────────┘  └──────────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────────────────────────┐
-│          NodeBuilder (core/node_builder.py)                 │
-│  - 元数据转换为消息节点                                       │
-│  - 消息打包逻辑                                               │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    AstrBot 消息发送                           │
-└─────────────────────────────────────────────────────────────┘
-```
+负责从文本中提取链接并解析为元数据。包含以下子模块：
 
-### 模块层次结构
+**解析器管理器 (ParserManager)**
+- 管理所有解析器实例
+- 协调多个解析器的并发解析任务
+- 处理解析结果的去重和合并
 
-```
-astrbot_plugin_video_parser/
-├── main.py                    # 插件主入口
-├── core/                      # 核心功能模块
-│   ├── parser_manager.py      # 解析器管理器
-│   ├── download_manager.py    # 下载管理器
-│   ├── downloader.py          # 下载器实现
-│   ├── file_manager.py        # 文件管理
-│   ├── node_builder.py       # 节点构建器
-│   └── constants.py           # 常量配置
-└── parsers/                   # 解析器模块
-    ├── base_parser.py         # 解析器基类
-    ├── link_router.py         # 链接路由器
-    ├── bilibili.py            # B站解析器
-    ├── douyin.py              # 抖音解析器
-    ├── kuaishou.py            # 快手解析器
-    ├── weibo.py               # 微博解析器
-    ├── xiaohongshu.py         # 小红书解析器
-    └── twitter.py             # 推特解析器
-```
-
----
-
-## 核心模块
-
-### 1. VideoParserPlugin (main.py)
-
-**职责**：插件主入口，负责事件监听、配置管理和消息发送。
-
-**主要功能**：
-- 监听 AstrBot 消息事件
-- 解析配置参数（触发设置、下载设置、解析器启用等）
-- 初始化解析器管理器和下载管理器
-- 协调整个解析流程
-- 处理消息发送（打包/非打包模式）
-
-**关键方法**：
-- `__init__()`: 初始化插件，加载配置，创建管理器实例
-- `auto_parse()`: 自动解析消息中的链接
-- `_should_parse()`: 判断是否应该解析消息
-- `_send_packed_results()`: 发送打包的结果（使用 Nodes）
-- `_send_unpacked_results()`: 发送非打包的结果（独立发送）
-
-### 2. ParserManager (core/parser_manager.py)
-
-**职责**：管理所有解析器，负责链接提取、去重和并行解析调度。
-
-**主要功能**：
-- 注册和管理解析器实例
+**链接路由器 (LinkRouter)**
 - 从文本中提取所有可解析的链接
-- 对链接进行去重处理
-- 并行调用解析器解析链接
-- 异常处理和错误记录
-
-**关键方法**：
-- `extract_all_links()`: 从文本中提取所有可解析的链接
-- `parse_text()`: 解析文本中的所有链接（并行）
-- `parse_url()`: 解析单个URL
-- `find_parser()`: 根据URL查找合适的解析器
-
-**设计特点**：
-- 使用 `asyncio.gather()` 实现并行解析
-- 自动处理解析异常，不会因单个链接失败而中断整个流程
-
-### 3. LinkRouter (parsers/link_router.py)
-
-**职责**：从文本中匹配可解析的链接并确定对应的解析器。
-
-**主要功能**：
-- 遍历所有解析器，提取匹配的链接
-- 按链接在文本中的位置排序
-- 去重处理
-- 为每个链接匹配对应的解析器
-
-**关键方法**：
-- `extract_links_with_parser()`: 提取链接并匹配解析器
-- `find_parser()`: 根据URL查找解析器
-
-### 4. BaseVideoParser (parsers/base_parser.py)
-
-**职责**：定义解析器的抽象接口，所有平台解析器必须实现此接口。
-
-**接口方法**：
-- `can_parse(url: str) -> bool`: 判断是否可以解析此URL
-- `extract_links(text: str) -> List[str]`: 从文本中提取链接
-- `parse(session, url: str) -> Dict[str, Any]`: 解析单个链接，返回元数据
-
-**元数据格式**：
-```python
-{
-    'url': str,                    # 原始URL（必需）
-    'title': str,                  # 标题（可选）
-    'author': str,                 # 作者（可选）
-    'desc': str,                   # 简介（可选）
-    'timestamp': str,              # 发布时间（可选）
-    'video_urls': List[List[str]], # 视频URL列表，每个元素是单个媒体的可用URL列表（必需，可为空列表）
-                                   # 即使只有一条直链也要是列表的列表，例如：[[url1], [url2, url3]]
-    'image_urls': List[List[str]], # 图片URL列表，每个元素是单个媒体的可用URL列表（必需，可为空列表）
-                                   # 即使只有一条直链也要是列表的列表，例如：[[url1], [url2, url3]]
-    # 其他平台特定字段...
-}
-```
-
-**说明**：
-- `video_urls` 和 `image_urls` 都是二维列表格式，外层列表的每个元素代表一个媒体项，内层列表包含该媒体项的可用直链URL
-- 如果某个媒体项只有一条直链，格式为 `[[url]]`（列表的列表）
-- 如果某个媒体项有多条直链（备用URL），格式为 `[[url1, url2, url3]]`
-- 多个媒体项时，格式为 `[[url1], [url2], [url3]]` 或 `[[url1, url2], [url3, url4]]`
-- 不再使用 `media_type` 字段，媒体类型通过 `video_urls` 和 `image_urls` 是否为空来判断
-- 不再使用 `thumb_url` 字段，缩略图功能已移除
-
-### 5. DownloadManager (core/download_manager.py)
-
-**职责**：管理媒体下载流程，根据配置决定使用网络直链还是本地文件。
-
-**主要功能**：
-- 检查视频大小（HEAD请求获取Content-Length，或从实际文件大小获取）
-- 根据配置决定下载策略：
-  - 超过 `max_video_size_mb`：跳过，不下载（下载前和下载后都会检查）
-  - 超过 `large_video_threshold_mb`：下载到缓存目录
-  - 启用 `pre_download_all_media`：预先下载所有媒体（下载前会先检查大小）
-  - 图片文件：总是下载到临时文件（在非预下载模式下）
-- 管理并发下载数量
-- 为元数据添加文件路径信息
-- 下载后再次验证视频大小，确保不超过限制
-
-**关键方法**：
-- `process_metadata()`: 处理单个元数据，决定下载策略
-- `_build_media_items()`: 构建媒体项列表（从 `video_urls` 和 `image_urls` 构建）
-- `_process_download_results()`: 处理下载结果，构建文件路径列表并统计失败数量
-- `_generate_media_id()`: 生成媒体ID（用于文件命名）
-
-**下载策略决策流程**：
-
-**预先下载模式（pre_download_all_media = True）**：
-```
-1. 统计视频和图片数量
-   ├─ video_count = len(video_urls)
-   └─ image_count = len(image_urls)
-
-2. 下载前检查视频大小（HEAD请求，尝试每个视频的第一个URL）
-   ├─ 超过 max_video_size_mb → 标记 exceeds_max_size，跳过下载
-   └─ 未超过 → 继续
-
-3. 构建媒体项列表（_build_media_items）
-   ├─ 遍历 video_urls，为每个视频创建媒体项（包含 url_list）
-   └─ 遍历 image_urls，为每个图片创建媒体项（包含 url_list）
-
-4. 下载所有媒体到缓存（pre_download_media）
-   └─ 遍历URL列表，每个URL只尝试一次，直到成功或所有URL都失败
-
-5. 处理下载结果（_process_download_results）
-   ├─ 构建文件路径列表
-   └─ 统计失败的视频和图片数量
-
-6. 下载后检查视频大小（从实际文件大小获取）
-   ├─ 超过 max_video_size_mb → 清理已下载文件，标记 exceeds_max_size
-   └─ 未超过 → 使用本地文件
-```
-
-**非预先下载模式（pre_download_all_media = False）**：
-```
-1. 统计视频和图片数量
-   ├─ video_count = len(video_urls)
-   └─ image_count = len(image_urls)
-
-2. 获取视频大小（HEAD请求，尝试每个视频的第一个URL）
-   ├─ 超过 max_video_size_mb → 标记 exceeds_max_size，跳过
-   └─ 未超过 → 继续
-
-3. 验证图片URL（验证每个图片的第一个URL）
-   └─ 检查是否有有效的图片
-
-4. 检查是否需要下载视频
-   ├─ 超过 large_video_threshold_mb → 下载视频到缓存
-   └─ 其他 → 使用视频直链
-
-5. 下载图片到临时文件（无论是否需要下载视频）
-   └─ 所有图片都下载到临时文件，提高发送成功率
-
-6. 如果下载了视频，下载后再次检查大小（从实际文件大小获取）
-   ├─ 超过 max_video_size_mb → 清理已下载文件，标记 exceeds_max_size
-   └─ 未超过 → 使用本地文件
-```
-
-**下载逻辑**：
-- 每个媒体项包含 `url_list`（可用URL列表）
-- 遍历 `url_list` 中的每个URL，每个URL只尝试一次
-- 如果某个URL下载成功，立即返回成功结果
-- 如果所有URL都失败，标记为下载失败，统计到失败计数中
-- 注意：当前实现中每个URL只尝试一次，没有重试机制
-
-### 6. Downloader (core/downloader.py)
-
-**职责**：实现具体的下载功能，包括视频大小检查和媒体下载。
-
-**主要功能**：
-- 通过 HEAD 请求获取视频大小
-- 下载媒体文件到缓存目录或临时文件
-- 文件命名格式：`{media_id}_{index}_{timestamp}{suffix}`（使用时间戳确保唯一性）
-- 支持并发下载控制
-
-**关键函数**：
-- `get_video_size()`: 获取视频大小（MB）
-- `download_media_to_cache()`: 下载媒体到缓存目录
-- `download_image_to_file()`: 下载图片到文件
-- `pre_download_media()`: 预先下载多个媒体（并发）
-  - 每个媒体项包含 `url_list`（可用URL列表）
-  - 遍历 `url_list` 中的每个URL，每个URL只尝试一次
-  - 如果某个URL成功，立即返回；如果所有URL都失败，标记为失败
-
-### 7. FileManager (core/file_manager.py)
-
-**职责**：管理文件缓存和清理。
-
-**主要功能**：
-- 检查缓存目录是否可用（可写）
-- 根据文件内容或URL确定文件扩展名
-- 清理临时文件和缓存文件
-
-**关键函数**：
-- `check_cache_dir_available()`: 检查缓存目录可用性
-- `get_image_suffix()`: 确定图片文件扩展名
-- `cleanup_files()`: 清理文件列表
-
-### 8. NodeBuilder (core/node_builder.py)
-
-**职责**：将元数据转换为 AstrBot 消息节点。
-
-**主要功能**：
-- 构建文本节点（标题、作者、简介等）
-- 显示下载失败统计（视频 X/Y，图片 A/B）
-- 处理解析失败时的错误信息显示
-- 构建媒体节点（Image/Video）
-- 处理本地文件和网络URL
-- 处理消息打包逻辑（区分普通媒体和大媒体）
-
-**关键函数**：
-- `build_text_node()`: 构建文本节点，包含下载失败统计信息
-- `build_media_nodes()`: 构建媒体节点列表，从 `video_urls` 和 `image_urls` 构建
-- `build_nodes_for_link()`: 构建单个链接的节点列表
-- `build_all_nodes()`: 构建所有链接的节点，处理打包逻辑
-- `is_pure_image_gallery()`: 判断是否为纯图片图集
-
----
-
-## 工作流程
-
-### 完整解析流程
-
-```
-1. 消息接收
-   │
-   ├─ VideoParserPlugin.auto_parse() 监听消息事件
-   │
-   └─ 检查是否应该解析 (_should_parse)
-      ├─ 自动解析模式：直接解析
-      └─ 手动触发模式：检查关键词
-
-2. 链接提取
-   │
-   ├─ ParserManager.extract_all_links()
-   │
-   └─ LinkRouter.extract_links_with_parser()
-      ├─ 遍历所有解析器
-      ├─ 提取匹配的链接
-      ├─ 按位置排序
-      └─ 去重
-
-3. 并行解析
-   │
-   ├─ ParserManager.parse_text()
-   │
-      └─ 为每个链接调用对应的解析器
-         ├─ BilibiliParser.parse()
-         ├─ DouyinParser.parse()
-         ├─ KuaishouParser.parse()
-         ├─ WeiboParser.parse()
-         ├─ XiaohongshuParser.parse()
-         └─ TwitterParser.parse()
-      │
-      └─ 返回元数据列表
-
-4. 下载管理
-   │
-   ├─ DownloadManager.process_metadata()
-   │
-   └─ 对每个元数据：
-      ├─ 检查视频大小（HEAD请求）
-      ├─ 判断是否需要下载
-      ├─ 下载到缓存（如需要）
-      └─ 添加文件路径信息
-
-5. 节点构建
-   │
-   ├─ NodeBuilder.build_all_nodes()
-   │
-   └─ 对每个元数据：
-      ├─ 构建文本节点
-      ├─ 构建媒体节点
-      └─ 区分普通媒体和大媒体
-
-6. 消息发送
-   │
-   ├─ 检查 is_auto_pack 配置
-   │
-   ├─ 打包模式：
-   │   ├─ 普通媒体 → Nodes（消息集合）
-   │   └─ 大媒体 → 单独发送
-   │
-   └─ 非打包模式：
-       └─ 所有媒体 → 独立发送
-
-7. 清理
-   │
-   └─ cleanup_files() 清理临时文件
-```
-
-### 解析器工作流程
-
-```
-BaseVideoParser.parse()
-│
-├─ 1. URL预处理
-│   ├─ 短链展开（如需要）
-│   ├─ 参数提取（BV号、AV号等）
-│   └─ 构建API请求URL
-│
-├─ 2. API请求
-│   ├─ 设置请求头（User-Agent、Referer等）
-│   ├─ 发送HTTP请求
-│   └─ 解析响应（JSON/HTML）
-│
-├─ 3. 数据提取
-│   ├─ 提取标题、作者、简介
-│   ├─ 提取视频直链（组织为 List[List[str]] 格式）
-│   ├─ 提取图片直链（组织为 List[List[str]] 格式）
-│   └─ 处理特殊字段（如B站的视频分P）
-│
-└─ 4. 构建元数据
-    └─ 返回标准格式的元数据字典（包含 video_urls 和 image_urls）
-```
-
----
-
-## 技术栈
-
-### 核心技术
-
-- **Python 3.x**: 主要编程语言
-- **aiohttp**: 异步HTTP客户端，用于API请求和媒体下载
-- **asyncio**: 异步编程框架，实现并行解析和下载
-- **AstrBot API**: 机器人框架API，用于消息发送和事件监听
-
-### 关键依赖
-
-```python
-aiohttp          # 异步HTTP客户端
-astrbot          # AstrBot框架（运行时依赖）
-```
-
-### 异步编程模式
-
-项目大量使用异步编程，主要优势：
-- **并行解析**：多个链接同时解析，提高效率
-- **并发下载**：控制并发数量，避免资源耗尽
-- **非阻塞IO**：网络请求不阻塞主线程
-
-**关键异步模式**：
-- `asyncio.gather()`: 并行执行多个异步任务
-- `asyncio.Semaphore`: 控制并发数量
-- `aiohttp.ClientSession`: 复用HTTP连接，提高性能
-
----
-
-## 设计模式
-
-### 1. 策略模式（Strategy Pattern）
-
-**应用场景**：不同平台的解析策略
-
-**实现**：
-- `BaseVideoParser` 定义解析策略接口
-- 各平台解析器（`BilibiliParser`、`DouyinParser`等）实现具体策略
-- `ParserManager` 根据URL选择合适的策略
-
-### 2. 工厂模式（Factory Pattern）
-
-**应用场景**：解析器实例创建
-
-**实现**：
-- `VideoParserPlugin.__init__()` 根据配置创建解析器实例
-- 支持动态启用/禁用解析器
-
-### 3. 责任链模式（Chain of Responsibility）
-
-**应用场景**：链接匹配和解析器路由
-
-**实现**：
-- `LinkRouter` 遍历解析器列表，找到第一个匹配的解析器
-- 每个解析器的 `can_parse()` 方法判断是否匹配
-
-### 4. 模板方法模式（Template Method）
-
-**应用场景**：下载流程的统一处理
-
-**实现**：
-- `DownloadManager.process_metadata()` 定义下载流程模板
-- 根据配置和媒体类型决定具体执行步骤
-
----
-
-## 数据流
-
-### 元数据流转
-
-```
-原始URL
-  │
-  ▼
-解析器解析
-  │
-  ▼
-元数据字典 (metadata)
-  │
-  ├─ url: 原始URL
-  ├─ title: 标题
-  ├─ author: 作者
-  ├─ video_urls: 视频URL列表（List[List[str]]）
-  ├─ image_urls: 图片URL列表（List[List[str]]）
-  └─ ...
-  │
-  ▼
-DownloadManager 处理
-  │
-  ├─ 添加 video_count: 视频数量
-  ├─ 添加 image_count: 图片数量
-  ├─ 添加 video_sizes: 视频大小列表
-  ├─ 添加 max_video_size_mb: 最大视频大小
-  ├─ 添加 file_paths: 文件路径列表（如已下载）
-  ├─ 添加 failed_video_count: 下载失败的视频数量
-  ├─ 添加 failed_image_count: 下载失败的图片数量
-  ├─ 添加 use_local_files: 是否使用本地文件
-  ├─ 添加 is_large_media: 是否为大媒体
-  ├─ 添加 has_access_denied: 是否有403访问被拒绝错误
-  └─ 添加 exceeds_max_size: 是否超过最大视频大小限制
-  │
-  ▼
-NodeBuilder 构建
-  │
-  ├─ Plain: 文本节点
-  ├─ Image: 图片节点
-  └─ Video: 视频节点
-  │
-  ▼
-AstrBot 消息发送
-```
-
-### 文件流转
-
-```
-网络媒体URL
-  │
-  ├─ 视频（大媒体）→ 下载到缓存目录 (cache_dir)
-  │   └─ 文件命名: {media_id}_{index}_{timestamp}{suffix}
-  │
-  └─ 图片 → 下载到临时文件 (tempfile)
-      └─ 临时文件路径添加到 metadata['file_paths']
-  │
-  ▼
-文件路径添加到 metadata['file_paths']
-  │
-  ▼
-构建消息节点 (使用本地文件路径)
-  │
-  ▼
-消息发送
-  │
-  ▼
-清理文件 (cleanup_files)
-```
-
----
-
-## 扩展性设计
-
-### 添加新平台解析器
-
-1. **创建解析器类**：
-```python
-from parsers.base_parser import BaseVideoParser
-
-class NewPlatformParser(BaseVideoParser):
-    def __init__(self):
-        super().__init__("新平台")
+- 根据链接特征匹配对应的解析器
+- 过滤重复链接和无效链接
+
+**平台解析器 (Handler)**
+- 各平台的具体解析器实现（B站、抖音、快手、微博、小红书、小黑盒、推特等）
+- 每个解析器负责识别平台链接、提取元数据、获取媒体直链
+- 返回标准化的元数据格式
+- 支持的平台：BilibiliParser、DouyinParser、KuaishouParser、WeiboParser、XiaohongshuParser、XiaoheiheParser、TwitterParser
+
+#### 3. 下载器模块 (Downloader)
+
+负责媒体文件的下载、验证和缓存管理。包含以下子模块：
+
+**下载管理器 (DownloadManager)**
+- 管理下载流程和策略选择（直链模式 vs 预下载模式）
+- 检查视频大小限制
+- 决定是否需要下载到本地缓存
+- 协调并发下载任务
+
+**下载路由器 (Router)**
+- 根据媒体类型（M3U8、普通视频、图片）选择相应的下载处理器
+- 自动检测媒体类型
+
+**下载处理器 (Handler)**
+- 图片下载处理器：下载图片到临时文件
+- 普通视频下载处理器：下载视频到缓存目录
+- M3U8处理器：处理HLS流媒体，支持音视频合并
+
+**验证器 (Validator)**
+- 验证媒体URL的有效性
+- 检查媒体大小
+- 验证Content-Type和响应内容
+
+#### 4. 消息适配器模块 (MessageAdapter)
+
+负责构建和发送消息。包含以下子模块：
+
+**消息管理器 (MessageManager)**
+- 提供节点构建和消息发送的接口
+- 根据配置选择打包或非打包发送方式
+- 管理发送者信息的获取
+
+**节点构建器 (NodeBuilder)**
+- 从元数据构建文本节点（标题、作者、简介等）
+- 构建媒体节点（图片、视频）
+- 处理打包逻辑（区分普通媒体和大媒体）
+
+**消息发送器 (Sender)**
+- 支持打包发送（使用Nodes）和非打包发送（独立发送）
+- 处理大媒体的单独发送逻辑
+- 管理发送过程中的资源清理
+
+#### 5. 文件清理模块 (FileCleaner)
+
+负责清理临时文件和缓存目录，确保资源正确释放。
+
+### 组件关系图
+
+```mermaid
+graph TB
+    subgraph 主入口
+        Main[VideoParserPlugin]
+    end
     
-    def can_parse(self, url: str) -> bool:
-        # 判断是否可以解析此URL
-        return "newplatform.com" in url
+    subgraph 配置层
+        ConfigMgr[ConfigManager]
+    end
     
-    def extract_links(self, text: str) -> List[str]:
-        # 从文本中提取链接
-        # 使用正则表达式匹配
-        pass
+    subgraph 解析层
+        ParserMgr[ParserManager]
+        LinkRouter[LinkRouter]
+        Parsers[平台解析器<br/>B站/抖音/快手/微博/小红书/推特]
+    end
     
-    async def parse(self, session, url: str) -> Dict[str, Any]:
-        # 解析链接，返回元数据
-        # 必须包含 video_urls 和 image_urls（List[List[str]] 格式）
-        return {
-            'url': url,
-            'video_urls': [[video_url]],  # 或 [[url1, url2]] 如果有多个备用URL
-            'image_urls': [[image_url]],  # 或 [] 如果没有图片
-            # ... 其他字段
-        }
+    subgraph 下载层
+        DownloadMgr[DownloadManager]
+        DownloadRouter[DownloadRouter]
+        Handlers[下载处理器<br/>图片/视频/M3U8]
+        Validator[Validator]
+    end
+    
+    subgraph 消息层
+        MsgMgr[MessageManager]
+        NodeBuilder[NodeBuilder]
+        Sender[MessageSender]
+    end
+    
+    subgraph 工具层
+        FileCleaner[FileCleaner]
+        Utils[Utils]
+    end
+    
+    Main --> ConfigMgr
+    Main --> ParserMgr
+    Main --> DownloadMgr
+    Main --> MsgMgr
+    
+    ConfigMgr --> Parsers
+    ParserMgr --> LinkRouter
+    LinkRouter --> Parsers
+    Parsers --> DownloadMgr
+    
+    DownloadMgr --> DownloadRouter
+    DownloadRouter --> Handlers
+    DownloadMgr --> Validator
+    Handlers --> Utils
+    
+    MsgMgr --> NodeBuilder
+    MsgMgr --> Sender
+    NodeBuilder --> Sender
+    
+    DownloadMgr --> FileCleaner
+    MsgMgr --> FileCleaner
+    Sender --> FileCleaner
 ```
 
-2. **注册解析器**：
-在 `main.py` 的 `__init__` 方法中：
-```python
-from parsers import NewPlatformParser
+### 核心类说明
 
-if enable_new_platform:
-    parsers.append(NewPlatformParser())
-```
+#### VideoParserPlugin
 
-3. **添加配置项**：
-在配置文件中添加启用开关：
-```python
-parser_enable_settings = config.get("parser_enable_settings", {})
-enable_new_platform = parser_enable_settings.get("enable_new_platform", True)
-```
+主插件类，继承自AstrBot的Star基类。负责：
 
-### 扩展下载策略
+- 初始化所有管理器（解析器、下载器、消息管理器）
+- 监听消息事件并触发解析流程
+- 协调整个解析、下载、发送流程
+- 处理插件生命周期（终止时清理资源）
 
-在 `DownloadManager.process_metadata()` 中添加新的判断逻辑：
+#### ParserManager
 
-```python
-# 自定义下载条件
-if custom_condition:
-    needs_download = True
-```
+解析器管理器，负责：
 
-### 扩展消息节点类型
+- 管理解析器列表的查找
+- 从文本中提取所有可解析链接
+- 并发执行多个链接的解析任务
+- 处理解析异常和错误结果
 
-在 `NodeBuilder.build_media_nodes()` 中添加新的节点类型处理：
+**注意：** 解析器在初始化时通过构造函数传入，不支持动态注册。
 
-```python
-# 现在不再使用 media_type，而是通过 video_urls 和 image_urls 来判断
-# 如果需要添加新的媒体类型，可以在元数据中添加特殊字段，然后在构建节点时判断
-if metadata.get('new_media_type'):
-    # 构建新类型的节点
-    pass
+#### DownloadManager
+
+下载管理器，负责：
+
+- 根据配置决定下载策略（预下载 vs 直链）
+- 检查视频大小限制
+- 管理大视频的下载（超过阈值时下载到本地）
+- 协调并发下载任务
+- 处理下载过程中的异常
+
+#### MessageManager
+
+消息管理器，负责：
+
+- 获取发送者信息
+- 调用节点构建器构建消息节点
+- 根据配置选择打包或非打包发送方式（委托给MessageSender）
+
+---
+
+## 具体工作流
+
+### 完整流程概述
+
+系统的工作流程从接收消息开始，经过链接提取、解析、下载处理、消息构建，最终发送结果。整个过程采用异步并发处理，提高效率。
+
+### 详细工作流程
+
+#### 1. 消息接收和触发判断
+
+**入口点：** `VideoParserPlugin.auto_parse()`
+
+- 系统监听所有类型的消息事件
+- 从消息中提取文本内容
+- 特殊处理：如果消息包含QQ小程序卡片，提取其中的跳转链接
+- 判断是否应该解析：
+  - 如果启用自动解析，直接处理
+  - 否则检查消息是否包含触发关键词
+
+#### 2. 链接提取和路由
+
+**执行者：** `ParserManager.extract_all_links()`
+
+- 使用LinkRouter从文本中提取所有可解析的链接
+- 每个解析器尝试匹配链接，找到对应的解析器
+- 返回(链接, 解析器)元组列表，按在文本中出现的位置排序
+- 如果没有提取到链接，直接返回，不继续后续流程
+
+#### 3. 元数据解析（并发处理）
+
+**执行者：** `ParserManager.parse_text()`
+
+- 调用extract_all_links提取所有可解析链接，然后通过_deduplicate_links对链接进行去重
+- 对去重后的链接字典，并发调用对应的解析器进行解析
+- 每个解析器返回标准化的元数据，包含：
+  - 基本信息：标题、作者、简介、发布时间
+  - 媒体信息：视频URL列表、图片URL列表
+  - 下载配置：是否需要预下载、请求头信息、代理配置
+  - 平台信息：platform字段标识来源平台
+- 解析失败时，在元数据中标记错误信息（error字段），不中断其他链接的解析
+- SkipParse异常会被跳过，不添加到结果列表
+
+#### 4. 媒体下载和处理
+
+**执行者：** `DownloadManager.process_metadata()`
+
+这是最复杂的阶段，包含多个决策点：
+
+**4.1 预下载检查**
+- 如果元数据标记需要预下载，但配置未启用预下载，则跳过该媒体
+
+**4.2 视频大小检查**
+- 如果配置了最大视频大小限制，先检查视频大小
+- 使用HEAD请求获取视频大小（失败时降级为GET请求）
+- 如果超过限制，标记为超过大小限制，跳过下载
+
+**4.3 下载策略选择**
+
+系统根据配置和媒体特征选择三种模式之一：
+
+**模式A：预下载所有媒体**
+- 如果启用`pre_download_all_media`
+- 并发下载所有媒体到缓存目录
+- 下载完成后，使用本地文件路径构建消息节点
+
+**模式B：大视频下载模式**
+- 如果视频大小超过`large_video_threshold_mb`阈值
+- 仅下载大视频到缓存目录
+- 图片使用直链模式
+- 大视频单独发送，不包含在转发消息集合中
+
+**模式C：直链模式**
+- 默认模式，不下载媒体文件
+- 直接使用媒体URL构建消息节点
+- 图片如果访问被拒绝（403），会尝试下载到临时文件
+
+**4.4 媒体验证**
+- 验证媒体URL的有效性（检查Content-Type、响应状态）
+- 检测403 Forbidden错误
+- 验证失败时标记为无效媒体
+
+#### 5. 消息节点构建
+
+**执行者：** `MessageManager.build_nodes()`
+
+- 为每个链接的元数据构建消息节点：
+  - **文本节点**：包含标题、作者、简介、发布时间、视频大小、错误信息、原始链接
+  - **媒体节点**：根据`use_local_files`标志选择使用本地文件或URL
+- 区分普通媒体和大媒体：
+  - 普通媒体：包含在转发消息集合中
+  - 大媒体：单独发送，不包含在集合中
+
+#### 6. 结果发送
+
+**执行者：** `MessageManager.send_results()`
+
+根据`is_auto_pack`配置选择发送方式：
+
+**打包模式（is_auto_pack=True）**
+- 使用Nodes组件打包所有普通媒体
+- 大媒体单独发送，发送前显示提示信息
+- 图片图集特殊处理：文本和图片分开打包
+
+**非打包模式（is_auto_pack=False）**
+- 每个链接的节点独立发送
+- 图片图集：文本单独发送，图片合并发送
+- 链接之间用分隔线分隔
+
+#### 7. 资源清理
+
+- 发送完成后，清理所有临时文件和视频文件
+- 插件终止时，清理缓存目录
+
+### 工作流程图
+
+```mermaid
+flowchart TD
+    Start([接收消息]) --> CheckTrigger{是否应该解析?}
+    CheckTrigger -->|否| End1([结束])
+    CheckTrigger -->|是| ExtractLinks[提取链接]
+    
+    ExtractLinks --> HasLinks{是否有链接?}
+    HasLinks -->|否| End1
+    HasLinks -->|是| ParseText[解析文本中的所有链接<br/>parse_text去重并并发解析]
+    
+    ParseText --> HasMetadata{是否有元数据?}
+    HasMetadata -->|否| End1
+    HasMetadata -->|是| HasValid{是否有有效元数据?<br/>无错误且有媒体}
+    HasValid -->|否| End1
+    HasValid -->|是| SendNotice[发送提示消息]
+    SendNotice --> ProcessConcurrent[并发处理元数据]
+    
+    ProcessConcurrent --> CheckPreDownload{需要预下载?}
+    CheckPreDownload -->|是且未启用| SkipMedia[跳过媒体]
+    CheckPreDownload -->|否或已启用| CheckSize{检查视频大小}
+    
+    CheckSize --> SizeOK{大小是否OK?}
+    SizeOK -->|超过限制| MarkExceed[标记超过限制]
+    SizeOK -->|正常| ChooseStrategy{选择下载策略}
+    
+    ChooseStrategy --> StrategyA[模式A: 预下载所有]
+    ChooseStrategy --> StrategyB[模式B: 大视频下载]
+    ChooseStrategy --> StrategyC[模式C: 直链模式]
+    
+    StrategyA --> DownloadAll[并发下载所有媒体]
+    StrategyB --> DownloadLarge[下载大视频]
+    StrategyC --> ValidateMedia[验证媒体URL]
+    
+    DownloadAll --> BuildNodes[构建消息节点]
+    DownloadLarge --> BuildNodes
+    ValidateMedia --> BuildNodes
+    MarkExceed --> BuildNodes
+    SkipMedia --> BuildNodes
+    
+    BuildNodes --> HasNodes{是否有节点?}
+    HasNodes -->|否| Cleanup1[清理文件]
+    Cleanup1 --> End1
+    HasNodes -->|是| SendMode{发送模式?}
+    
+    SendMode -->|打包| SendPacked[打包发送]
+    SendMode -->|非打包| SendUnpacked[独立发送]
+    
+    SendPacked --> Cleanup2[清理文件]
+    SendUnpacked --> Cleanup2
+    Cleanup2 --> End2([完成])
 ```
 
 ---
 
-## 性能优化
-
-### 1. 并行处理
-
-- **并行解析**：使用 `asyncio.gather()` 同时解析多个链接
-- **并发下载**：使用 `asyncio.Semaphore` 控制并发数量，避免资源耗尽
-
-### 2. 连接复用
-
-- 使用 `aiohttp.ClientSession` 复用HTTP连接
-- 单个会话处理所有请求，减少连接建立开销
-
-### 3. 智能下载策略
-
-- 小文件使用直链，避免不必要的下载
-- 大文件下载到本地，提高发送成功率
-- 预先下载模式可提高总下载速度
-- 下载前和下载后双重检查视频大小，确保不超过限制
-- 优先使用实际文件大小（更准确），HEAD请求结果作为补充
-
-### 4. 资源管理
-
-- 及时清理临时文件，避免磁盘空间浪费
-- 使用信号量控制并发，避免内存溢出
-
----
-
-## 错误处理
+## 异常处理
 
 ### 异常处理策略
 
-1. **解析器异常**：
-   - 单个链接解析失败不影响其他链接
-   - 异常信息记录到元数据的 `error` 字段
-   - 错误信息会在文本节点中显示（"解析失败：{错误信息}"）
-   - 继续处理其他链接
+系统采用分层异常处理策略，在不同层级捕获和处理异常，确保系统的稳定性和资源的正确释放。
 
-2. **下载异常**：
-   - 下载失败时回退到直链模式
-   - 记录警告日志，不中断流程
-   - 统计下载失败的视频和图片数量（`failed_video_count`、`failed_image_count`）
-   - 在文本节点中显示下载失败统计（"下载失败：视频 X/Y，图片 A/B"）
-   - 构建消息节点时避免传入下载失败的媒体路径
+### 各层级异常处理
 
-3. **文件操作异常**：
-   - 文件清理失败只记录警告，不抛出异常
-   - 缓存目录不可用时自动降级到直链模式
+#### 1. 解析阶段异常处理
 
-4. **视频大小检查异常**：
-   - 下载前通过HEAD请求检查大小，如果超过限制则跳过下载
-   - 下载后从实际文件大小再次检查，如果超过限制则清理已下载文件
-   - 如果HEAD请求无法获取大小，下载后会从实际文件大小检查
-   - 确保 `max_video_size_mb` 配置在所有情况下都能正确生效
+**位置：** `ParserManager.parse_text()`
 
-5. **403访问被拒绝异常**：
-   - 检测到403状态码时，记录警告日志
-   - 在元数据中标记 `has_access_denied = True`
-   - 在文本节点中显示"媒体访问被拒绝(403 Forbidden)"错误信息
-   - 不中断处理流程，继续处理其他媒体
+**处理机制：**
+- 使用`asyncio.gather(..., return_exceptions=True)`并发执行解析任务
+- 解析失败时，捕获异常并在元数据中标记错误信息
+- 单个链接解析失败不影响其他链接的解析
+- 解析器内部异常由解析器自行处理，不向上抛出
 
-### 日志记录
+**异常类型：**
+- 网络请求异常（超时、连接错误）
+- API响应错误（404、500等）
+- 数据解析错误（JSON解析失败、数据格式错误）
+- 平台特定错误（视频不存在、权限不足）
 
-- 使用 AstrBot 的 `logger` 记录关键操作
-- 异常信息包含URL和错误详情，便于调试
+**处理结果：**
+- 在元数据中添加`error`字段，包含错误信息
+- 保持`video_urls`和`image_urls`为空列表
+- 继续处理其他链接
 
----
+#### 2. 下载阶段异常处理
 
-## 配置说明
+**位置：** `DownloadManager.process_metadata()`
 
-### 配置结构
+**处理机制：**
 
-```python
-{
-    "is_auto_pack": bool,                    # 是否打包为消息集合
-    "trigger_settings": {
-        "is_auto_parse": bool,               # 是否自动解析
-        "trigger_keywords": List[str]        # 手动触发关键词
-    },
-    "video_size_settings": {
-        "max_video_size_mb": float,          # 最大视频大小限制
-        "large_video_threshold_mb": float    # 大视频阈值
-    },
-    "download_settings": {
-        "cache_dir": str,                    # 缓存目录
-        "pre_download_all_media": bool,      # 是否预先下载
-        "max_concurrent_downloads": int       # 最大并发下载数
-    },
-    "parser_enable_settings": {
-        "enable_bilibili": bool,
-        "enable_douyin": bool,
-        "enable_kuaishou": bool,
-        "enable_weibo": bool,
-        "enable_xiaohongshu": bool,
-        "enable_twitter": bool
-    },
-    "twitter_proxy_settings": {
-        "twitter_use_image_proxy": bool,
-        "twitter_use_video_proxy": bool,
-        "twitter_proxy_url": str
-    }
-}
+**2.1 视频大小检查异常**
+- HEAD请求失败时，自动降级为GET请求
+- 网络异常时，标记视频大小为None，继续处理
+- 403错误被特殊标记，用于后续决策
+
+**2.2 下载任务异常**
+- 使用`asyncio.gather(..., return_exceptions=True)`并发执行下载
+- 单个媒体下载失败不影响其他媒体的下载
+- 下载失败时，在结果中标记`success=False`
+- 如果要求预下载的媒体全部失败，则跳过该类型媒体
+
+**2.3 文件操作异常**
+- 文件写入失败时，清理已创建的文件
+- 目录创建失败时，标记缓存目录不可用，切换到直链模式
+
+**异常类型：**
+- 网络异常（超时、连接错误、DNS解析失败）
+- HTTP错误（403 Forbidden、404 Not Found、500 Internal Server Error）
+- 文件系统错误（磁盘空间不足、权限不足）
+- 媒体验证失败（无效的Content-Type、JSON错误响应）
+
+**处理结果：**
+- 下载失败的媒体在`file_paths`中标记为None
+- 统计失败数量（`failed_video_count`、`failed_image_count`）
+- 如果所有媒体都失败，标记`has_valid_media=False`
+
+#### 3. 消息发送异常处理
+
+**位置：** `MessageSender.send_packed_results()` 和 `MessageSender.send_unpacked_results()`
+
+**处理机制：**
+- 使用try-finally确保资源清理
+- 单个节点发送失败时，记录警告日志，继续发送其他节点
+- 大媒体发送失败时，清理对应的视频文件
+
+**异常类型：**
+- 消息平台API错误
+- 文件读取错误（本地文件不存在或损坏）
+- 网络错误（上传文件失败）
+
+**处理结果：**
+- 发送失败的节点被跳过，不影响其他节点
+- 无论成功或失败，都会清理临时文件
+
+#### 4. 资源清理机制
+
+**位置：** `FileCleaner` 模块和各个管理器的清理逻辑
+
+**清理时机：**
+- 消息发送完成后立即清理临时文件
+- 插件终止时清理所有缓存文件
+- 下载失败时清理部分下载的文件
+- 超过大小限制时清理已下载的文件
+
+**清理策略：**
+- 使用`cleanup_files()`批量清理文件列表
+- 使用`cleanup_directory()`清理整个目录
+- 清理操作失败时记录警告，不抛出异常（避免影响主流程）
+
+**清理范围：**
+- 临时图片文件（下载到临时目录的图片）
+- 视频缓存文件（下载到缓存目录的视频）
+- 整个媒体目录（M3U8下载时创建的目录）
+
+#### 5. 全局异常处理
+
+**位置：** `VideoParserPlugin.auto_parse()`
+
+**处理机制：**
+- 最外层使用try-except捕获所有未处理的异常
+- 异常发生时，记录完整异常堆栈
+- 确保临时文件被清理（使用try-finally）
+- 异常不会导致插件崩溃，只是本次解析失败
+
+### 异常处理流程图
+
+```mermaid
+flowchart TD
+    Start([开始处理]) --> Parse[解析阶段]
+    
+    Parse --> ParseError{解析异常?}
+    ParseError -->|是| MarkParseError[标记解析错误<br/>继续其他链接]
+    ParseError -->|否| Download[下载阶段]
+    MarkParseError --> Download
+    
+    Download --> SizeCheck[大小检查]
+    SizeCheck --> SizeError{检查异常?}
+    SizeError -->|是| FallbackGET[降级为GET请求<br/>或标记为None]
+    SizeError -->|否| DownloadTask[下载任务]
+    FallbackGET --> DownloadTask
+    
+    DownloadTask --> DownloadError{下载异常?}
+    DownloadError -->|是| MarkDownloadError[标记下载失败<br/>统计失败数量]
+    DownloadError -->|否| Build[构建阶段]
+    MarkDownloadError --> Build
+    
+    Build --> BuildError{构建异常?}
+    BuildError -->|是| SkipNode[跳过该节点<br/>记录警告]
+    BuildError -->|否| Send[发送阶段]
+    SkipNode --> Send
+    
+    Send --> SendError{发送异常?}
+    SendError -->|是| SkipSend[跳过该节点<br/>记录警告]
+    SendError -->|否| Cleanup[清理资源]
+    SkipSend --> Cleanup
+    
+    Cleanup --> CleanupError{清理异常?}
+    CleanupError -->|是| LogWarning[记录警告<br/>不中断流程]
+    CleanupError -->|否| End([完成])
+    LogWarning --> End
+    
+    style ParseError fill:#ffcccc
+    style DownloadError fill:#ffcccc
+    style BuildError fill:#ffcccc
+    style SendError fill:#ffcccc
+    style CleanupError fill:#ffcccc
 ```
 
----
+### 错误信息传递
 
-## 注意事项
+系统通过元数据字典传递错误信息，确保错误信息能够最终展示给用户：
 
-### 平台特性
+1. **解析错误**：在元数据中添加`error`字段
+2. **下载错误**：通过`failed_video_count`和`failed_image_count`统计
+3. **大小限制**：通过`exceeds_max_size`和`max_video_size_mb`标记
+4. **访问拒绝**：通过`has_access_denied`标记
+5. **无效媒体**：通过`has_valid_media=False`标记
 
-1. **小红书**：
-   - 所有链接均有身份验证和时效性，需要在有效期内发送完整链接才能成功解析
-   - 分享链接的解析结果有水印
+这些信息最终会在文本节点中展示给用户，提供清晰的错误反馈。
 
-2. **推特**：
-   - 图片CDN大多被墙，建议开启代理
-   - 视频CDN通常不受影响，可直连
-   - 使用 fxtwitter API，无需代理
+### 容错机制
 
-3. **微博**：
-   - 需要获取访客cookie才能访问API
-   - 支持 weibo.com、weibo.cn、video.weibo.com 等多种链接格式
-   - 下载媒体时需要设置 Referer 请求头
-   - 支持 `page_url` 字段，优先使用 `page_url` 作为 Referer
+系统设计了多层容错机制：
 
-4. **图片下载**：
-   - 在非预下载模式下，所有图片都会下载到临时文件
-   - 提高图片发送成功率，避免直链访问失败
-   - 临时文件在消息发送后会自动清理
+1. **降级策略**：HEAD请求失败时降级为GET请求
+2. **部分失败容忍**：单个媒体失败不影响其他媒体
+3. **模式切换**：预下载失败时自动切换到直链模式
+4. **资源保障**：使用try-finally确保资源清理
+5. **异常隔离**：使用`return_exceptions=True`隔离并发任务异常
 
-5. **B站**：
-   - 转发动态会使用"转发动态数据（原始动态数据）"组织文本格式解析结果
-   - 支持 `page_url` 字段，优先使用 `page_url` 作为 Referer
+这些机制确保了系统在各种异常情况下都能保持稳定运行，不会因为单个错误导致整个流程崩溃。
 
-6. **文件命名**：
-   - 缓存文件使用格式：`{media_id}_{index}_{timestamp}{suffix}`
-   - 时间戳确保并发下载时文件唯一性
-   - 文件在发送后立即清理，不需要检查缓存
-
----

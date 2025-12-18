@@ -2,8 +2,8 @@
     "is_auto_pack": {
         "description": "是否将解析结果打包为消息集合",
         "type": "bool",
-        "hint": "需要在任何wechat平台使用请禁用此项",
-        "default": true
+        "hint": "Napcat 对打包消息的实现有 BUG，不建议使用",
+        "default": false
     },
     "trigger_settings": {
         "description": "触发设置",
@@ -60,7 +60,7 @@
                 "description": "最大并发下载数",
                 "type": "int",
                 "hint": "当启用预先下载所有媒体到本地时，同时下载的媒体文件数量上限。建议值：3-5",
-                "default": 3
+                "default": 5
             }
         }
     },
@@ -93,6 +93,11 @@
                 "type": "bool",
                 "default": true
             },
+            "enable_xiaoheihe": {
+                "description": "是否启用小黑盒解析器",
+                "type": "bool",
+                "default": true
+            },
             "enable_twitter": {
                 "description": "是否启用Twitter/X解析器",
                 "type": "bool",
@@ -100,28 +105,58 @@
             }
         }
     },
-    "twitter_proxy_settings": {
-        "description": "Twitter代理设置",
+    "proxy_settings": {
+        "description": "代理设置",
         "type": "object",
         "items": {
-            "twitter_use_image_proxy": {
-                "description": "Twitter图片下载是否使用代理",
-                "type": "bool",
-                "hint": "启用后，Twitter图片下载将通过代理进行。图片CDN大多被墙，建议开启以提升成功率",
-                "default": false
-            },
-            "twitter_use_video_proxy": {
-                "description": "Twitter视频下载是否使用代理",
-                "type": "bool",
-                "hint": "启用后，Twitter视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量",
-                "default": false
-            },
-            "twitter_proxy_url": {
-                "description": "Twitter代理地址",
+            "proxy_addr": {
+                "description": "全局代理地址",
                 "type": "string",
-                "hint": "代理地址格式：http://host:port 或 socks5://host:port。图片和视频共用此代理地址",
+                "hint": "代理地址格式：http://host:port 或 socks5://host:port。所有解析器共用此代理地址",
                 "default": ""
+            },
+            "xiaoheihe": {
+                "description": "小黑盒代理设置",
+                "type": "object",
+                "items": {
+                    "video": {
+                        "description": "小黑盒视频下载是否使用代理",
+                        "type": "bool",
+                        "hint": "启用后，小黑盒视频下载将通过代理进行",
+                        "default": false
+                    }
+                }
+            },
+            "twitter": {
+                "description": "Twitter代理设置",
+                "type": "object",
+                "items": {
+                    "parse": {
+                        "description": "Twitter解析是否使用代理",
+                        "type": "bool",
+                        "hint": "启用后，Twitter API请求将通过代理进行",
+                        "default": false
+                    },
+                    "image": {
+                        "description": "Twitter图片下载是否使用代理",
+                        "type": "bool",
+                        "hint": "启用后，Twitter图片下载将通过代理进行。图片CDN大多被墙，建议开启以提升成功率",
+                        "default": false
+                    },
+                    "video": {
+                        "description": "Twitter视频下载是否使用代理",
+                        "type": "bool",
+                        "hint": "启用后，Twitter视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量",
+                        "default": false
+                    }
+                }
             }
         }
+    },
+    "debug": {
+        "description": "是否启用Debug模式",
+        "type": "bool",
+        "hint": "启用后，将使用debug级日志记录完整工作流的详细日志（从解析开始到发送完毕）",
+        "default": false
     }
 }

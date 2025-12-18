@@ -1,8 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-微博解析器
-继承自 BaseVideoParser，实现微博链接的解析功能
-"""
 import json
 import re
 from datetime import datetime
@@ -11,11 +7,17 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 
-from .base_parser import BaseVideoParser
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 
 class WeiboParser(BaseVideoParser):
-    """微博解析器"""
 
     URL_PATTERNS = {
         'weibo_com': [
@@ -47,7 +49,12 @@ class WeiboParser(BaseVideoParser):
         all_patterns = []
         for patterns in self.URL_PATTERNS.values():
             all_patterns.extend(patterns)
-        return any(re.search(pattern, url) for pattern in all_patterns)
+        result = any(re.search(pattern, url) for pattern in all_patterns)
+        if result:
+            logger.debug(f"[{self.name}] can_parse: 匹配微博链接 {url}")
+        else:
+            logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
+        return result
 
     def extract_links(self, text: str) -> List[str]:
         """从文本中提取微博链接
@@ -293,6 +300,22 @@ class WeiboParser(BaseVideoParser):
         Returns:
             解析结果字典
         """
+        user_agent = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/120.0.0.0 Safari/537.36'
+        )
+        referer = 'https://weibo.com/'
+        image_headers = build_request_headers(
+            is_video=False,
+            referer=referer,
+            user_agent=user_agent
+        )
+        video_headers = build_request_headers(
+            is_video=True,
+            referer=referer,
+            user_agent=user_agent
+        )
         return {
             'url': url,
             'title': '',
@@ -301,6 +324,8 @@ class WeiboParser(BaseVideoParser):
             'timestamp': timestamp,
             'video_urls': video_urls,
             'image_urls': image_urls,
+            'image_headers': image_headers,
+            'video_headers': video_headers,
         }
     
     def _separate_media_urls(self, media_urls: List[str]) -> tuple:
@@ -571,7 +596,7 @@ class WeiboParser(BaseVideoParser):
 
         pic_infos = json_data.get('pic_infos', {})
         if pic_infos:
-            for pic_id, pic_info in pic_infos.items():
+            for pic_info in pic_infos.values():
                 pic_type = pic_info.get('type', '')
 
                 if pic_type == 'gif' and pic_info.get('video'):
@@ -743,16 +768,26 @@ class WeiboParser(BaseVideoParser):
         Raises:
             Exception: 解析失败时抛出异常
         """
+        logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         url_type = self._get_url_type(url)
+        logger.debug(f"[{self.name}] parse: URL类型 {url_type}")
 
         cookies = await self._get_visitor_cookies(session)
 
-        if url_type == 'weibo_com':
-            return await self._parse_weibo_com(session, url, cookies)
-        elif url_type == 'm_weibo_cn':
-            return await self._parse_m_weibo_cn(session, url, cookies)
-        elif url_type == 'video_weibo':
-            return await self._parse_video_weibo(session, url, cookies)
-        else:
-            raise ValueError(f"不支持的URL类型: {url_type}")
+        try:
+            if url_type == 'weibo_com':
+                result = await self._parse_weibo_com(session, url, cookies)
+            elif url_type == 'm_weibo_cn':
+                result = await self._parse_m_weibo_cn(session, url, cookies)
+            elif url_type == 'video_weibo':
+                result = await self._parse_video_weibo(session, url, cookies)
+            else:
+                logger.debug(f"[{self.name}] parse: 不支持的URL类型 {url_type}")
+                raise ValueError(f"不支持的URL类型: {url_type}")
+            if result:
+                logger.debug(f"[{self.name}] parse: 解析完成 {url}, video_count={len(result.get('video_urls', []))}, image_count={len(result.get('image_urls', []))}")
+            return result
+        except Exception as e:
+            logger.debug(f"[{self.name}] parse: 解析失败 {url}, 错误: {e}")
+            raise
 

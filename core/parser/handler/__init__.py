@@ -4,8 +4,9 @@ from .douyin import DouyinParser
 from .kuaishou import KuaishouParser
 from .weibo import WeiboParser
 from .xiaohongshu import XiaohongshuParser
+from .xiaoheihe import XiaoheiheParser
 from .twitter import TwitterParser
-from .link_router import LinkRouter
+from .base import BaseVideoParser
 
 __all__ = [
     'BilibiliParser',
@@ -13,6 +14,8 @@ __all__ = [
     'KuaishouParser',
     'WeiboParser',
     'XiaohongshuParser',
+    'XiaoheiheParser',
     'TwitterParser',
-    'LinkRouter'
+    'BaseVideoParser'
 ]
+

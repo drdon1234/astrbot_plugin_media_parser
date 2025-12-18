@@ -33,7 +33,7 @@
 <tbody>
 <tr>
 <td class="center"><strong>B站</strong></td>
-<td>短链（<code>b23.tv/...</code>）<br>视频av号（<code>www.bilibili.com/video/av...</code>）<br>视频BV号（<code>www.bilibili.com/video/BV...</code>）<br>动态长链（<code>www.bilibili.com/opus/...</code>）<br>动态短链（<code>t.bilibili.com/...</code>）</td>
+<td>短链（<code>b23.tv/...</code>）<br>视频av号（<code>www.bilibili.com/video/av...</code>）<br>视频BV号（<code>www.bilibili.com/video/BV...</code>）<br>动态长链（<code>www.bilibili.com/opus/...</code>）<br>动态短链（<code>t.bilibili.com/...</code>）<br>小程序卡片（<code>message.meta.detail_1.qqdocurl</code>）</td>
 <td class="center">视频、图片</td>
 </tr>
 <tr>
@@ -48,13 +48,18 @@
 </tr>
 <tr>
 <td class="center"><strong>微博</strong></td>
-<td>桌面端博客链接（<code>weibo.com/...</code>）<br>移动端博客链接（<code>m.weibo.cn/detail/...</code>）<br>移动端视频分享链接（<code>video.weibo.com/show?fid=...</code>）<br>视频分享链接重定向（<code>weibo.com/tv/show/...</code>）</td>
+<td>桌面端博客链接（<code>weibo.com/...</code>）<br>移动端博客链接（<code>m.weibo.cn/detail/...</code>）<br>移动端视频分享链接（<code>video.weibo.com/show?fid=...</code>）<br>视频分享链接重定向（<code>weibo.com/tv/show/...</code>）<br>小程序卡片（<code>message.meta.detail_1.qqdocurl</code>）</td>
 <td class="center">视频、图片</td>
 </tr>
 <tr>
 <td class="center"><strong>小红书</strong></td>
-<td>短链（<code>xhslink.com/...</code>）<br>笔记长链（<code>www.xiaohongshu.com/explore/...</code>）<br>笔记长链（<code>www.xiaohongshu.com/discovery/item/...</code>）</td>
+<td>短链（<code>xhslink.com/...</code>）<br>笔记长链（<code>www.xiaohongshu.com/explore/...</code>）<br>笔记长链（<code>www.xiaohongshu.com/discovery/item/...</code>）<br>小程序卡片（<code>message.meta.news.jumpUrl</code>）</td>
 <td class="center">视频、图片</td>
+</tr>
+<tr>
+<td class="center"><strong>小黑盒</strong></td>
+<td>Web链接（<code>www.xiaoheihe.cn/app/topic/game/...</code>）<br>App分享链接（<code>api.xiaoheihe.cn/game/share_game_detail?...</code>）<br>小程序卡片（<code>message.meta.news.jumpUrl</code>）</td>
+<td class="center">游戏页详情</td>
 </tr>
 <tr>
 <td class="center"><strong>推特</strong></td>
@@ -93,206 +98,6 @@
 
 ---
 
-## 配置文档
-
-### **使用前请核对并根据需要修改配置文件**：
-
-- 打开 AstrBot WebUI → `插件` → 找到本插件 → `插件配置` → 根据需要进行设置
-
-### 基础配置
-
-<table class="config-table">
-<thead>
-<tr>
-<th>配置项</th>
-<th>类型</th>
-<th>默认值</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>是否将解析结果打包为消息集合</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>在微信平台使用时需要禁用此项</td>
-</tr>
-</tbody>
-</table>
-
-### 触发设置
-
-<table class="config-table">
-<thead>
-<tr>
-<th>配置项</th>
-<th>类型</th>
-<th>默认值</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>是否自动解析视频链接</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>-</td>
-</tr>
-<tr>
-<td>手动触发解析的关键词列表</td>
-<td class="center"><code>list</code></td>
-<td class="center"><code>["视频解析", "解析视频"]</code></td>
-<td>当禁用自动解析时，消息头使用这些关键词才会触发解析</td>
-</tr>
-</tbody>
-</table>
-
-### 视频大小设置
-
-<table class="config-table">
-<thead>
-<tr>
-<th>配置项</th>
-<th>类型</th>
-<th>默认值</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>最大允许发送的视频大小(MB)</td>
-<td class="center"><code>float</code></td>
-<td class="center"><code>500.0</code></td>
-<td>超过此大小的视频将被跳过，不下载也不发送。设置为0表示不限制</td>
-</tr>
-<tr>
-<td>大视频阈值(MB)</td>
-<td class="center"><code>float</code></td>
-<td class="center"><code>100.0</code></td>
-<td>当视频大小超过此阈值时，将下载到缓存目录。视频会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制</td>
-</tr>
-</tbody>
-</table>
-
-### 下载和缓存设置
-
-<table class="config-table">
-<thead>
-<tr>
-<th>配置项</th>
-<th>类型</th>
-<th>默认值</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>媒体文件缓存目录</td>
-<td class="center"><code>string</code></td>
-<td class="center"><code>"/app/sharedFolder/video_parser/cache"</code></td>
-<td>用于推特视频和所有超过阈值的大媒体（视频和图片）</td>
-</tr>
-<tr>
-<td>是否预先下载所有媒体到本地</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>false</code></td>
-<td>启用后，所有媒体文件将并发下载到缓存目录，发送时使用本地路径。可以提高发送成功率，减少总下载时间，但会短时间增加磁盘占用</td>
-</tr>
-<tr>
-<td>最大并发下载数</td>
-<td class="center"><code>int</code></td>
-<td class="center"><code>3</code></td>
-<td>当启用预先下载所有媒体到本地时，同时下载的媒体文件数量上限。建议值：3-5</td>
-</tr>
-</tbody>
-</table>
-
-### 解析器启用设置
-
-<table class="config-table">
-<thead>
-<tr>
-<th>配置项</th>
-<th>类型</th>
-<th>默认值</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>是否启用B站解析器</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>-</td>
-</tr>
-<tr>
-<td>是否启用抖音解析器</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>-</td>
-</tr>
-<tr>
-<td>是否启用快手解析器</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>-</td>
-</tr>
-<tr>
-<td>是否启用微博解析器</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>-</td>
-</tr>
-<tr>
-<td>是否启用小红书解析器</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>true</code></td>
-<td>-</td>
-</tr>
-<tr>
-<td>是否启用推特解析器</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>false</code></td>
-<td>-</td>
-</tr>
-</tbody>
-</table>
-
-### 推特代理设置
-
-<table class="config-table">
-<thead>
-<tr>
-<th>配置项</th>
-<th>类型</th>
-<th>默认值</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>推特图片下载是否使用代理</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>false</code></td>
-<td>启用后，推特图片下载将通过代理进行。图片CDN大多被墙，建议开启以提升成功率</td>
-</tr>
-<tr>
-<td>推特视频下载是否使用代理</td>
-<td class="center"><code>bool</code></td>
-<td class="center"><code>false</code></td>
-<td>启用后，推特视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量</td>
-</tr>
-<tr>
-<td>推特代理地址</td>
-<td class="center"><code>string</code></td>
-<td class="center"><code>""</code></td>
-<td>代理地址格式：<code>http://host:port</code> 或 <code>socks5://host:port</code>。图片和视频共用此代理地址。fxtwitter API接口不需要代理，会自动直连</td>
-</tr>
-</tbody>
-</table>
-
----
-
 ## 注意事项
 
 1. **B站**：
@@ -305,18 +110,28 @@
 - 所有链接均有身份验证和时效性，在有效期内发送完整链接才能成功解析
 - 分享链接的解析结果有水印
 
-4. **推特**：
+4. **小黑盒**
+- 不携带 token 的状态只能解析游戏页详情（文字，视频，图片）
+- 游戏预览视频实际从 Steam CDN 请求音视频分片，下载速度不佳时请启用代理
+
+5. **推特**：
 - 解析 API 使用 fxtwitter 服务，无需代理
-- 图片CDN大多被墙，建议开启代理
-- 视频CDN通常不受影响，可直连
+- 图片 CDN 大多被墙，建议开启代理
+- 视频 CDN 通常不受影响，可直连
+
+6. **其他**
+- 插件在任何消息中匹配到 ```"原始链接："``` 字段将静默跳过解析
+- 这是为了防止多个使用本插件的 Bot 重复解析其他 Bot 发送的文本格式解析结果
 
 ---
 
 ## 鸣谢
 
-- **B站解析端点**参考自：GitHub 项目 [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
-- **QQ小程序卡片链接提取方法**参考自：GitHub 用户 [tianger-mckz](https://github.com/tianger-mckz)  
+- **B站解析端点** 参考自：GitHub 项目 bilibili-API-collect  
+  详见：[bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
+- **QQ小程序卡片链接提取方法** 参考自：GitHub 用户 tianger-mckz  
   详见：[issue #1](https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034)
-- **抖音解析方法**参考自：CSDN 博客文章  
-  [文章链接](https://blog.csdn.net/qq_53153535/article/details/141297614)
-- **推特解析**使用免费第三方服务：fxtwitter（GitHub 项目 [FxEmbed](https://github.com/FxEmbed/FxEmbed)）
+- **抖音解析方法** 参考自：CSDN 博客文章  
+  详见：[文章链接](https://blog.csdn.net/qq_53153535/article/details/141297614)
+- **推特解析** 使用免费第三方服务：fxtwitter（GitHub 项目 FxEmbed）  
+  详见：[FxEmbed](https://github.com/FxEmbed/FxEmbed)

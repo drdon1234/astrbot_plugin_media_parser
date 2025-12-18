@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import asyncio
 import json
 import re
@@ -8,7 +9,14 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 
-from .base_parser import BaseVideoParser
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+from .base import BaseVideoParser
+from ..utils import build_request_headers, is_live_url, SkipParse
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -54,11 +62,10 @@ def av2bv(av: int) -> str:
 
 
 class BilibiliParser(BaseVideoParser):
-    """B站视频解析器"""
 
     def __init__(self):
         """初始化B站解析器"""
-        super().__init__("B站")
+        super().__init__("bilibili")
         self.semaphore = asyncio.Semaphore(10)
         self._default_headers = {
             "User-Agent": UA,
@@ -131,27 +138,37 @@ class BilibiliParser(BaseVideoParser):
             如果可以解析返回True，否则返回False
         """
         if not url:
+            logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
         url_lower = url.lower()
         if 'live.bilibili.com' in url_lower:
+            logger.debug(f"[{self.name}] can_parse: 跳过直播链接 {url}")
             return False
         if 'space.bilibili.com' in url_lower:
+            logger.debug(f"[{self.name}] can_parse: 跳过空间链接 {url}")
             return False
 
         if '/opus/' in url_lower:
+            logger.debug(f"[{self.name}] can_parse: 匹配动态链接 {url}")
             return True
         if 't.bilibili.com' in url_lower:
+            logger.debug(f"[{self.name}] can_parse: 匹配动态链接 {url}")
             return True
 
         if B23_HOST in urlparse(url).netloc.lower():
+            logger.debug(f"[{self.name}] can_parse: 匹配b23短链 {url}")
             return True
 
         if BV_RE.search(url):
+            logger.debug(f"[{self.name}] can_parse: 匹配BV号 {url}")
             return True
         if AV_RE.search(url):
+            logger.debug(f"[{self.name}] can_parse: 匹配AV号 {url}")
             return True
         if EP_PATH_RE.search(url) or EP_QS_RE.search(url):
+            logger.debug(f"[{self.name}] can_parse: 匹配番剧链接 {url}")
             return True
+        logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
         return False
 
     def extract_links(self, text: str) -> List[str]:
@@ -281,7 +298,12 @@ class BilibiliParser(BaseVideoParser):
                 t_bilibili_url = f"https://t.bilibili.com/{dynamic_id}"
                 result_links_set.add(t_bilibili_url)
 
-        return list(result_links_set)
+        result = list(result_links_set)
+        if result:
+            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+        else:
+            logger.debug(f"[{self.name}] extract_links: 未提取到链接")
+        return result
 
     async def expand_b23(
         self,
@@ -1027,6 +1049,18 @@ class BilibiliParser(BaseVideoParser):
                 else:
                     final_url = dynamic_url
 
+                referer = url
+                origin = "https://www.bilibili.com"
+                image_headers = build_request_headers(
+                    is_video=False,
+                    referer=referer,
+                    origin=origin
+                )
+                video_headers = build_request_headers(
+                    is_video=True,
+                    referer=referer,
+                    origin=origin
+                )
                 return {
                     "url": final_url,
                     "title": final_title,
@@ -1035,6 +1069,8 @@ class BilibiliParser(BaseVideoParser):
                     "timestamp": final_timestamp,
                     "video_urls": video_result.get("video_urls", []),
                     "image_urls": video_result.get("image_urls", []),
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
             else:
                 final_title = title
@@ -1049,6 +1085,18 @@ class BilibiliParser(BaseVideoParser):
                     if video_desc:
                         final_desc = video_desc
 
+                referer = url
+                origin = "https://www.bilibili.com"
+                image_headers = build_request_headers(
+                    is_video=False,
+                    referer=referer,
+                    origin=origin
+                )
+                video_headers = build_request_headers(
+                    is_video=True,
+                    referer=referer,
+                    origin=origin
+                )
                 return {
                     "url": original_url if B23_HOST in urlparse(original_url).netloc.lower() else url,
                     "title": final_title,
@@ -1057,6 +1105,8 @@ class BilibiliParser(BaseVideoParser):
                     "timestamp": timestamp,
                     "video_urls": video_result.get("video_urls", []),
                     "image_urls": video_result.get("image_urls", []),
+                    "image_headers": image_headers,
+                    "video_headers": video_headers,
                 }
 
         image_urls = []
@@ -1073,6 +1123,19 @@ class BilibiliParser(BaseVideoParser):
 
         display_url = original_url if B23_HOST in urlparse(original_url).netloc.lower() else url
 
+        referer = url
+        origin = "https://www.bilibili.com"
+        image_headers = build_request_headers(
+            is_video=False,
+            referer=referer,
+            origin=origin
+        )
+        video_headers = build_request_headers(
+            is_video=True,
+            referer=referer,
+            origin=origin
+        )
+
         return {
             "url": display_url,
             "title": title,
@@ -1081,6 +1144,8 @@ class BilibiliParser(BaseVideoParser):
             "timestamp": timestamp,
             "video_urls": [],
             "image_urls": image_urls,
+            "image_headers": image_headers,
+            "video_headers": video_headers,
         }
 
     async def parse(
@@ -1100,8 +1165,23 @@ class BilibiliParser(BaseVideoParser):
         Raises:
             RuntimeError: 当解析失败时
         """
+        logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
-            return await self.parse_bilibili_minimal(url, session=session)
+            try:
+                result = await self.parse_bilibili_minimal(url, session=session)
+                if result:
+                    logger.debug(
+                        f"[{self.name}] parse: 解析成功 {url}, "
+                        f"title={result.get('title', '')[:50]}, "
+                        f"video_count={len(result.get('video_urls', []))}, "
+                        f"image_count={len(result.get('image_urls', []))}"
+                    )
+                else:
+                    logger.debug(f"[{self.name}] parse: 解析返回空结果 {url}")
+                return result
+            except Exception as e:
+                logger.debug(f"[{self.name}] parse: 解析失败 {url}, 错误: {e}")
+                raise
 
     async def parse_bilibili_minimal(
         self,
@@ -1129,11 +1209,19 @@ class BilibiliParser(BaseVideoParser):
                 timeout=timeout
             ) as sess:
                 return await self.parse_bilibili_minimal(url, p, sess)
+        logger.debug(f"[{self.name}] parse_bilibili_minimal: 开始处理 {url}")
         original_url = url
         page_url = await self.expand_b23(url, session)
+        if page_url != url:
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: b23短链展开 {url} -> {page_url}")
+
+        if is_live_url(page_url) or is_live_url(original_url):
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 检测到直播域名链接，跳过解析 {original_url} -> {page_url}")
+            raise SkipParse("直播域名链接不解析")
 
         page_url_lower = page_url.lower()
         if '/opus/' in page_url_lower or 't.bilibili.com' in page_url_lower:
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 检测到动态链接，使用动态解析器")
             return await self.parse_opus(page_url, session)
 
         if not self.can_parse(page_url):
@@ -1143,19 +1231,24 @@ class BilibiliParser(BaseVideoParser):
         if not vtype:
             raise RuntimeError(f"无法识别视频类型: {url}")
         if vtype == "ugc":
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 处理UGC视频，分P={p_index}")
             bvid = ident.get("bvid")
             aid = ident.get("aid")
             if bvid:
+                logger.debug(f"[{self.name}] parse_bilibili_minimal: 使用BV号 {bvid}")
                 info = await self.get_ugc_info(bvid=bvid, session=session)
                 pages = await self.get_pagelist(bvid=bvid, session=session)
             elif aid:
+                logger.debug(f"[{self.name}] parse_bilibili_minimal: 使用AV号 {aid}")
                 info = await self.get_ugc_info(aid=aid, session=session)
                 pages = await self.get_pagelist(aid=aid, session=session)
             else:
                 raise RuntimeError(f"无法获取视频信息: {url}")
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 视频信息获取成功，共{len(pages)}个分P")
             if p_index > len(pages):
                 raise RuntimeError(f"分P序号超出范围: {p_index}")
             cid = pages[p_index - 1]["cid"]
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 获取分P{cid}的直链")
             direct_url = await self._get_ugc_direct_url(
                 bvid=bvid,
                 aid=aid,
@@ -1165,7 +1258,9 @@ class BilibiliParser(BaseVideoParser):
             )
             if not direct_url:
                 raise RuntimeError(f"无法获取视频直链: {url}")
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 直链获取成功")
         elif vtype == "pgc":
+            logger.debug(f"[{self.name}] parse_bilibili_minimal: 处理PGC番剧")
             FNVAL_MAX = 4048
             ep_id = ident["ep_id"]
             info = await self.get_pgc_info_by_ep(ep_id, session)
@@ -1209,7 +1304,19 @@ class BilibiliParser(BaseVideoParser):
         is_b23_short = urlparse(original_url).netloc.lower() == B23_HOST
         display_url = original_url if is_b23_short else page_url
         
-        return {
+        referer = page_url
+        origin = "https://www.bilibili.com"
+        image_headers = build_request_headers(
+            is_video=False,
+            referer=referer,
+            origin=origin
+        )
+        video_headers = build_request_headers(
+            is_video=True,
+            referer=referer,
+            origin=origin
+        )
+        result = {
             "url": display_url,
             "title": info.get("title", ""),
             "author": info.get("author", ""),
@@ -1217,6 +1324,9 @@ class BilibiliParser(BaseVideoParser):
             "timestamp": info.get("timestamp", ""),
             "video_urls": [[direct_url]],
             "image_urls": [],
-            "page_url": page_url,
+            "image_headers": image_headers,
+            "video_headers": video_headers,
         }
+        logger.debug(f"[{self.name}] parse_bilibili_minimal: 解析完成 {url}, title={result.get('title', '')[:50]}")
+        return result
 

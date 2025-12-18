@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import asyncio
 import re
 from datetime import datetime
@@ -6,14 +7,21 @@ from typing import Optional, Dict, Any, List
 
 import aiohttp
 
-from .base_parser import BaseVideoParser
+try:
+    from astrbot.api import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+from .base import BaseVideoParser
+from ..utils import build_request_headers
 
 
 class TwitterParser(BaseVideoParser):
-    """Twitter/X 视频解析器"""
 
     def __init__(
         self,
+        use_parse_proxy: bool = False,
         use_image_proxy: bool = False,
         use_video_proxy: bool = False,
         proxy_url: str = None
@@ -21,11 +29,13 @@ class TwitterParser(BaseVideoParser):
         """初始化Twitter解析器
 
         Args:
-            use_image_proxy: 是否使用图片代理
-            use_video_proxy: 是否使用视频代理
-            proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port），图片和视频共用此代理地址
+            use_parse_proxy: 解析时是否使用代理
+            use_image_proxy: 图片下载是否使用代理
+            use_video_proxy: 视频下载是否使用代理
+            proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port）
         """
-        super().__init__("Twitter/X")
+        super().__init__("twitter")
+        self.use_parse_proxy = use_parse_proxy
         self.use_image_proxy = use_image_proxy
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
@@ -49,11 +59,14 @@ class TwitterParser(BaseVideoParser):
             如果可以解析返回True，否则返回False
         """
         if not url:
+            logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
         url_lower = url.lower()
         if 'twitter.com' in url_lower or 'x.com' in url_lower:
             if re.search(r'/status/(\d+)', url):
+                logger.debug(f"[{self.name}] can_parse: 匹配Twitter链接 {url}")
                 return True
+        logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
         return False
 
     def extract_links(self, text: str) -> List[str]:
@@ -84,27 +97,13 @@ class TwitterParser(BaseVideoParser):
                     flags=re.IGNORECASE
                 )
                 result_links_set.add(standardized_url)
-        return list(result_links_set)
+        result = list(result_links_set)
+        if result:
+            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+        else:
+            logger.debug(f"[{self.name}] extract_links: 未提取到链接")
+        return result
 
-    def _get_image_proxy(self) -> Optional[str]:
-        """获取图片代理地址
-
-        Returns:
-            图片代理地址，如果未启用返回None
-        """
-        if self.use_image_proxy and self.proxy_url:
-            return self.proxy_url
-        return None
-
-    def _get_video_proxy(self) -> Optional[str]:
-        """获取视频代理地址
-
-        Returns:
-            视频代理地址，如果未启用返回None
-        """
-        if self.use_video_proxy and self.proxy_url:
-            return self.proxy_url
-        return None
 
     async def _fetch_media_info(
         self,
@@ -130,12 +129,14 @@ class TwitterParser(BaseVideoParser):
         api_url = f"https://api.fxtwitter.com/status/{tweet_id}"
         last_exception = None
 
+        proxy = self.proxy_url if self.use_parse_proxy else None
         for attempt in range(max_retries + 1):
             try:
                 async with session.get(
                     api_url,
                     headers=self.headers,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    proxy=proxy
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
@@ -241,39 +242,50 @@ class TwitterParser(BaseVideoParser):
             has_videos = len(video_urls) > 0
             has_images = len(image_urls) > 0
             
+            image_headers = build_request_headers(is_video=False)
+            video_headers = build_request_headers(is_video=True)
+            
+            metadata_base = {
+                "url": url,
+                "title": text[:100] if text else "Twitter 推文",
+                "author": author,
+                "desc": text,
+                "timestamp": timestamp,
+                "image_headers": image_headers,
+                "video_headers": video_headers,
+                "use_image_proxy": self.use_image_proxy,
+                "use_video_proxy": self.use_video_proxy,
+                "proxy_url": self.proxy_url if (self.use_image_proxy or self.use_video_proxy) else None,
+            }
+            
             if has_videos and has_images:
-                return {
-                    "url": url,
-                    "title": text[:100] if text else "Twitter 推文",
-                    "author": author,
-                    "desc": text,
-                    "timestamp": timestamp,
+                result_dict = {
+                    **metadata_base,
                     "video_urls": [[url] for url in video_urls],
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": True,
                 }
+                logger.debug(f"[{self.name}] parse: 解析完成(视频+图片) {url}, video_count={len(video_urls)}, image_count={len(image_urls)}")
+                return result_dict
             elif has_videos:
-                return {
-                    "url": url,
-                    "title": text[:100] if text else "Twitter 推文",
-                    "author": author,
-                    "desc": text,
-                    "timestamp": timestamp,
+                result_dict = {
+                    **metadata_base,
                     "video_urls": [[url] for url in video_urls],
                     "image_urls": [],
                     "is_twitter_video": True,
                 }
+                logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, video_count={len(video_urls)}")
+                return result_dict
             else:
                 if not image_urls:
+                    logger.debug(f"[{self.name}] parse: 推文不包含图片 {url}")
                     raise RuntimeError("推文不包含图片")
                 
-                return {
-                    "url": url,
-                    "title": text[:100] if text else "Twitter 推文",
-                    "author": author,
-                    "desc": text,
-                    "timestamp": timestamp,
+                result_dict = {
+                    **metadata_base,
                     "video_urls": [],
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": False,
                 }
+                logger.debug(f"[{self.name}] parse: 解析完成(图片) {url}, image_count={len(image_urls)}")
+                return result_dict
