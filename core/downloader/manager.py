@@ -188,7 +188,12 @@ class DownloadManager:
             use_video_proxy = metadata.get('use_video_proxy', False)
             proxy_url = metadata.get('proxy_url') or proxy_addr
             proxy = proxy_url if (use_video_proxy and proxy_url) else None
-            return await get_video_size(session, url_list[0], headers, proxy)
+            video_url = url_list[0]
+            if video_url.startswith('m3u8:'):
+                video_url = video_url[5:]
+            elif video_url.startswith('range:'):
+                video_url = video_url[6:]
+            return await get_video_size(session, video_url, headers, proxy)
         except Exception:
             return None, None
 

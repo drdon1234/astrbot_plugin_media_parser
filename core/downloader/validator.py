@@ -85,6 +85,11 @@ async def get_video_size(
         (size_mb, status_code) 元组，size_mb为视频大小(MB)，无法获取时为None，
         status_code为HTTP状态码（如果是403等特殊状态码），否则为None
     """
+    if video_url.startswith('m3u8:'):
+        video_url = video_url[5:]
+    elif video_url.startswith('range:'):
+        video_url = video_url[6:]
+    
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
@@ -153,6 +158,11 @@ async def validate_media_url(
         (is_valid, status_code) 元组，is_valid表示媒体URL是否有效，
         status_code为HTTP状态码（如果是403等特殊状态码），否则为None
     """
+    if media_url.startswith('m3u8:'):
+        media_url = media_url[5:]
+    elif media_url.startswith('range:'):
+        media_url = media_url[6:]
+    
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
