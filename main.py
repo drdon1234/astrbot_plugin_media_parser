@@ -51,6 +51,11 @@ class VideoParserPlugin(Star):
         self.max_video_size_mb = self.config_manager.max_video_size_mb
         self.large_video_threshold_mb = self.config_manager.large_video_threshold_mb
         self.debug_mode = self.config_manager.debug_mode
+        self.whitelist = {
+            "enable": self.config_manager.whitelist_enable,
+            "user": self.config_manager.whitelist_user,
+            "group": self.config_manager.whitelist_group
+        }
         
         parsers = self.config_manager.create_parsers()
         self.parser_manager = ParserManager(parsers)
@@ -98,6 +103,23 @@ class VideoParserPlugin(Star):
         Args:
             event: 消息事件对象
         """
+        # 白名单检查
+        is_private = event.is_private_chat()
+        sender_id = event.get_sender_id()
+        group_id = None if is_private else event.get_group_id()
+
+        if not self.whitelist["enable"]:
+            allowed = True
+        elif sender_id in self.whitelist["user"]:
+            allowed = True
+        elif not is_private and group_id in self.whitelist["group"]:
+            allowed = True
+        else:
+            allowed = False
+
+        if not allowed:
+            return
+
         message_text = event.message_str
         try:
             messages = event.get_messages()

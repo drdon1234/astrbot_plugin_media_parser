@@ -44,6 +44,11 @@ class ConfigManager:
             ["视频解析", "解析视频"]
         )
         
+        whitelist = self._config.get("whitelist", {})
+        self.whitelist_enable = whitelist.get("enable", False)
+        self.whitelist_user = whitelist.get("user", [])
+        self.whitelist_group = whitelist.get("group", [])
+        
         video_size_settings = self._config.get("video_size_settings", {})
         self.max_video_size_mb = video_size_settings.get("max_video_size_mb", 0.0)
         large_video_threshold_mb = video_size_settings.get(

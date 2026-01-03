@@ -22,6 +22,30 @@
             }
         }
     },
+    "whitelist": {
+        "description": "白名单设置",
+        "type": "object",
+        "items": {
+            "enable": {
+                "description": "是否启用白名单",
+                "type": "bool",
+                "hint": "启用后，只有白名单中的用户或群组才能触发解析",
+                "default": false
+            },
+            "user": {
+                "description": "用户白名单",
+                "type": "list",
+                "hint": "允许触发解析的用户ID列表",
+                "default": []
+            },
+            "group": {
+                "description": "群组白名单",
+                "type": "list",
+                "hint": "允许触发解析的群组ID列表",
+                "default": []
+            }
+        }
+    },
     "video_size_settings": {
         "description": "视频大小设置",
         "type": "object",
@@ -47,7 +71,7 @@
             "cache_dir": {
                 "description": "媒体缓存目录",
                 "type": "string",
-                "hint": "媒体文件缓存目录，用于Twitter视频和所有超过阈值的大视频",
+                "hint": "媒体文件缓存目录，用于Twitter视频和所有超过阈值的大视频，默认值是 docker 专用，请修改为部署平台对应的路径格式",
                 "default": "/app/sharedFolder/video_parser/cache"
             },
             "pre_download_all_media": {
@@ -101,7 +125,7 @@
             "enable_twitter": {
                 "description": "是否启用Twitter/X解析器",
                 "type": "bool",
-                "default": false
+                "default": true
             }
         }
     },
@@ -123,7 +147,7 @@
                         "description": "小黑盒视频下载是否使用代理",
                         "type": "bool",
                         "hint": "启用后，小黑盒视频下载将通过代理进行",
-                        "default": false
+                        "default": true
                     }
                 }
             },
@@ -141,13 +165,13 @@
                         "description": "Twitter图片下载是否使用代理",
                         "type": "bool",
                         "hint": "启用后，Twitter图片下载将通过代理进行。图片CDN大多被墙，建议开启以提升成功率",
-                        "default": false
+                        "default": true
                     },
                     "video": {
                         "description": "Twitter视频下载是否使用代理",
                         "type": "bool",
                         "hint": "启用后，Twitter视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量",
-                        "default": false
+                        "default": true
                     }
                 }
             }
