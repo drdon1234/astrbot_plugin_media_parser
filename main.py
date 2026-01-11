@@ -124,17 +124,38 @@ class VideoParserPlugin(Star):
         try:
             messages = event.get_messages()
             if messages and len(messages) > 0:
-                message_data = json.loads(messages[0].data)
-                meta = message_data.get("meta") or {}
-                detail_1 = meta.get("detail_1") or {}
-                curl_link = detail_1.get("qqdocurl")
+                first_msg = messages[0]
+                msg_data = first_msg.data
+                curl_link = None
+        
+                # 方式1: msg_data 已经是解析好的字典
+                if isinstance(msg_data, dict) and not msg_data.get('data'):
+                    meta = msg_data.get("meta") or {}
+                    detail_1 = meta.get("detail_1") or {}
+                    curl_link = detail_1.get("qqdocurl")
+                    if not curl_link:
+                        news = meta.get("news") or {}
+                        curl_link = news.get("jumpUrl")
+        
+                # 方式2: msg_data 是 {'data': 'json字符串'} 格式
                 if not curl_link:
-                    news = meta.get("news") or {}
-                    curl_link = news.get("jumpUrl")
+                    json_str = msg_data.get('data', '') if isinstance(msg_data, dict) else msg_data
+                    if json_str and isinstance(json_str, str):
+                        message_data = json.loads(json_str)
+                        meta = message_data.get("meta") or {}
+                        detail_1 = meta.get("detail_1") or {}
+                        curl_link = detail_1.get("qqdocurl")
+                        if not curl_link:
+                            news = meta.get("news") or {}
+                            curl_link = news.get("jumpUrl")
+        
                 if curl_link:
+                    if self.debug_mode:
+                        self.logger.debug(f"[media_parser] 从JSON卡片提取到链接: {curl_link}")
                     message_text = curl_link
-        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError):
-            pass
+        except (AttributeError, KeyError, json.JSONDecodeError, IndexError, TypeError) as e:
+            if self.debug_mode:
+                self.logger.debug(f"[media_parser] 提取JSON卡片链接失败: {e}")
         
         if not self._should_parse(message_text):
             return
