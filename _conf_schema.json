@@ -126,6 +126,11 @@
                 "description": "是否启用Twitter/X解析器",
                 "type": "bool",
                 "default": true
+            },
+            "enable_youtube": {
+                "description": "是否启用YouTube(yt-dlp)解析器",
+                "type": "bool",
+                "default": true
             }
         }
     },
@@ -171,6 +176,18 @@
                         "description": "Twitter视频下载是否使用代理",
                         "type": "bool",
                         "hint": "启用后，Twitter视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量",
+                        "default": true
+                    }
+                }
+            },
+            "youtube": {
+                "description": "YouTube代理设置",
+                "type": "object",
+                "items": {
+                    "use_proxy": {
+                        "description": "YouTube解析和下载是否使用代理",
+                        "type": "bool",
+                        "hint": "启用后，YouTube(yt-dlp)的解析和下载请求将通过代理进行",
                         "default": true
                     }
                 }
