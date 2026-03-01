@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -11,7 +9,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from .handler.base import BaseVideoParser
+from .platform.base import BaseVideoParser
 from .router import LinkRouter
 from .utils import SkipParse, is_live_url
 
@@ -25,7 +23,7 @@ class ParserManager:
             parsers: 解析器列表
 
         Raises:
-            ValueError: 当parsers参数为空时
+            ValueError: parsers参数为空时
         """
         if not parsers:
             raise ValueError("parsers 参数不能为空")
@@ -40,7 +38,7 @@ class ParserManager:
             url: 视频链接
 
         Returns:
-            匹配的解析器实例，如果未找到返回None
+            匹配的解析器实例，未找到时为None
         """
         try:
             return self.link_router.find_parser(url)
@@ -61,24 +59,6 @@ class ParserManager:
         """
         return self.link_router.extract_links_with_parser(text)
 
-    def _deduplicate_links(
-        self,
-        links_with_parser: List[Tuple[str, BaseVideoParser]]
-    ) -> Dict[str, BaseVideoParser]:
-        """对链接进行去重
-
-        Args:
-            links_with_parser: 链接和解析器的列表
-
-        Returns:
-            去重后的链接和解析器字典
-        """
-        unique_links = {}
-        for link, parser in links_with_parser:
-            if link not in unique_links:
-                unique_links[link] = parser
-        return unique_links
-
     async def parse_text(
         self,
         text: str,
@@ -97,8 +77,8 @@ class ParserManager:
         if not links_with_parser:
             self.logger.debug("未提取到任何可解析链接")
             return []
-        unique_links = self._deduplicate_links(links_with_parser)
-        self.logger.debug(f"去重后需要解析 {len(unique_links)} 个链接")
+        unique_links = {link: parser for link, parser in links_with_parser}
+        self.logger.debug(f"需要解析 {len(unique_links)} 个链接")
         tasks = [
             parser.parse(session, url)
             for url, parser in unique_links.items()

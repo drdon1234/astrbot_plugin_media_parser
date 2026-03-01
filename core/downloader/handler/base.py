@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 from typing import Optional, Callable, Dict, Any, Tuple
 
@@ -14,8 +13,6 @@ from ...file_cleaner import cleanup_file
 from ..utils import extract_size_from_headers
 from ..validator import validate_media_response
 from ...constants import Config
-
-_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 async def download_media_stream(
@@ -45,7 +42,7 @@ async def download_media_stream(
                 f.write(content_preview)
             
             if is_video:
-                async for chunk in response.content.iter_chunked(_DOWNLOAD_CHUNK_SIZE):
+                async for chunk in response.content.iter_chunked(Config.STREAM_DOWNLOAD_CHUNK_SIZE):
                     f.write(chunk)
             else:
                 content = await response.read()

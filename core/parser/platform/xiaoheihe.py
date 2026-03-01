@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 import html as html_lib
 import json
@@ -17,6 +15,7 @@ except ImportError:
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers
+from ...constants import Config
 
 
 UA = (
@@ -41,12 +40,37 @@ class XiaoheiheParser(BaseVideoParser):
         super().__init__("xiaoheihe")
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
-        self.semaphore = asyncio.Semaphore(10)
+        self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._default_headers = {
             "User-Agent": UA,
             "Referer": "https://www.xiaoheihe.cn/",
             "Accept-Language": "zh-CN,zh;q=0.9"
         }
+    
+    def _add_m3u8_prefix_to_urls(self, urls: List[str]) -> List[str]:
+        """为 m3u8 URL 列表添加 m3u8: 前缀
+        
+        Args:
+            urls: URL 列表
+            
+        Returns:
+            添加了 m3u8: 前缀的 URL 列表（仅对 m3u8 URL 添加）
+        """
+        if not urls:
+            return urls
+        
+        result = []
+        for url in urls:
+            if url and isinstance(url, str):
+                url_lower = url.lower()
+                if '.m3u8' in url_lower and not url.startswith('m3u8:'):
+                    result.append(f'm3u8:{url}')
+                else:
+                    result.append(url)
+            else:
+                result.append(url)
+        
+        return result
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析该 URL。
@@ -763,7 +787,8 @@ class XiaoheiheParser(BaseVideoParser):
 
             desc = "\n".join(desc_lines).rstrip()
 
-            video_urls = [[v] for v in videos] if videos else []
+            prefixed_videos = self._add_m3u8_prefix_to_urls(videos) if videos else []
+            video_urls = [[v] for v in prefixed_videos] if prefixed_videos else []
             image_urls = [[img] for img in images] if images else []
 
             if not video_urls and not image_urls:
@@ -788,6 +813,8 @@ class XiaoheiheParser(BaseVideoParser):
                 "use_video_proxy": self.use_video_proxy,
                 "proxy_url": self.proxy_url if self.use_video_proxy else None,
             }
+            if video_urls:
+                result_dict["video_force_download"] = True
             logger.debug(
                 f"[{self.name}] parse: 解析完成 {url}, "
                 f"title_len={len(result_dict.get('title') or '')}, "

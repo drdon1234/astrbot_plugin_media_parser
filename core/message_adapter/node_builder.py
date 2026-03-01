@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 from typing import Dict, Any, List, Optional, Tuple, Union
 
@@ -21,7 +20,7 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0) ->
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
 
     Returns:
-        Plain文本节点，如果无内容返回None
+        Plain文本节点，无内容时为None
     """
     text_parts = []
     if metadata.get('title'):
@@ -170,10 +169,16 @@ def build_media_nodes(
             except Exception as e:
                 logger.warning(f"构建视频节点失败: {video_file_path}, 错误: {e}")
         else:
+            actual_video_url = video_url
+            if video_url.startswith('range:'):
+                actual_video_url = video_url[6:]
+            elif video_url.startswith('m3u8:'):
+                actual_video_url = video_url[5:]
+            
             try:
-                nodes.append(Video.fromURL(video_url))
+                nodes.append(Video.fromURL(actual_video_url))
             except Exception as e:
-                logger.warning(f"构建视频节点失败: {video_url}, 错误: {e}")
+                logger.warning(f"构建视频节点失败: {actual_video_url}, 错误: {e}")
         
         file_idx += 1
     
@@ -243,7 +248,7 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
         nodes: 节点列表
 
     Returns:
-        如果是纯图片图集返回True，否则返回False
+        是否为纯图片图集
     """
     has_video = False
     has_image = False

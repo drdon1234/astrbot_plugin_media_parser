@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 import re
 from datetime import datetime
@@ -15,6 +13,7 @@ except ImportError:
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers
+from ...constants import Config
 
 
 class TwitterParser(BaseVideoParser):
@@ -39,7 +38,7 @@ class TwitterParser(BaseVideoParser):
         self.use_image_proxy = use_image_proxy
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
-        self.semaphore = asyncio.Semaphore(10)
+        self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -48,6 +47,33 @@ class TwitterParser(BaseVideoParser):
             ),
             'Accept': 'application/json',
         }
+    
+    def _add_range_prefix_to_video_urls(self, video_urls: List[List[str]]) -> List[List[str]]:
+        """为视频URL列表添加 range: 前缀
+        
+        Args:
+            video_urls: 视频URL列表（二维列表）
+            
+        Returns:
+            添加了 range: 前缀的视频URL列表
+        """
+        if not video_urls:
+            return video_urls
+        
+        result = []
+        for url_list in video_urls:
+            if url_list and isinstance(url_list, list):
+                prefixed_list = []
+                for url in url_list:
+                    if url and not url.startswith('range:'):
+                        prefixed_list.append(f'range:{url}')
+                    else:
+                        prefixed_list.append(url)
+                result.append(prefixed_list)
+            else:
+                result.append(url_list)
+        
+        return result
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
@@ -56,7 +82,7 @@ class TwitterParser(BaseVideoParser):
             url: 视频链接
 
         Returns:
-            如果可以解析返回True，否则返回False
+            是否可以解析
         """
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
@@ -261,7 +287,7 @@ class TwitterParser(BaseVideoParser):
             if has_videos and has_images:
                 result_dict = {
                     **metadata_base,
-                    "video_urls": [[url] for url in video_urls],
+                    "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": True,
                 }
@@ -270,7 +296,7 @@ class TwitterParser(BaseVideoParser):
             elif has_videos:
                 result_dict = {
                     **metadata_base,
-                    "video_urls": [[url] for url in video_urls],
+                    "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
                     "image_urls": [],
                     "is_twitter_video": True,
                 }

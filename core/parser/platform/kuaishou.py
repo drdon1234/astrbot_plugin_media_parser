@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 import json
 import re
@@ -17,6 +15,7 @@ except ImportError:
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers, is_live_url, SkipParse
+from ...constants import Config
 
 MOBILE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) '
@@ -35,7 +34,7 @@ class KuaishouParser(BaseVideoParser):
         """初始化快手解析器"""
         super().__init__("kuaishou")
         self.headers = MOBILE_HEADERS
-        self.semaphore = asyncio.Semaphore(10)
+        self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
@@ -44,7 +43,7 @@ class KuaishouParser(BaseVideoParser):
             url: 视频链接
 
         Returns:
-            如果可以解析返回True，否则返回False
+            是否可以解析
         """
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
@@ -104,7 +103,7 @@ class KuaishouParser(BaseVideoParser):
             url: 视频或图片URL
 
         Returns:
-            上传时间字符串（YYYY-MM-DD格式），如果无法提取返回None
+            上传时间字符串（YYYY-MM-DD格式），无法提取时为None
         """
         try:
             match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', url)
@@ -189,7 +188,7 @@ class KuaishouParser(BaseVideoParser):
             html: HTML内容
 
         Returns:
-            图片URL，如果无法提取返回None
+            图片URL，无法提取时为None
         """
         match = re.search(r'<img\s+class="image"\s+src="([^"]+)"', html)
         if match:
@@ -216,7 +215,7 @@ class KuaishouParser(BaseVideoParser):
             img_paths: 图片路径列表
 
         Returns:
-            包含images（主URL列表）和image_url_lists（每个图片的所有CDN URL列表）的字典，如果构建失败返回None
+            包含images和image_url_lists的字典，构建失败时为None
         """
         cleaned_cdns = [
             re.sub(r'https?://', '', cdn) for cdn in cdns if cdn
@@ -273,7 +272,7 @@ class KuaishouParser(BaseVideoParser):
             html: HTML内容
 
         Returns:
-            包含images和image_url_lists的字典，如果解析失败返回None
+            包含images和image_url_lists的字典，解析失败时为None
         """
         cdn_matches = re.findall(
             r'"cdnList"\s*:\s*\[.*?"cdn"\s*:\s*"([^"]+)"',
@@ -304,7 +303,7 @@ class KuaishouParser(BaseVideoParser):
             html: HTML内容
 
         Returns:
-            视频URL，如果解析失败返回None
+            视频URL，解析失败时为None
         """
         m = re.search(
             r'"(url|srcNoMark|photoUrl|videoUrl)"\s*:\s*"'
@@ -333,7 +332,7 @@ class KuaishouParser(BaseVideoParser):
             url: 快手链接
 
         Returns:
-            HTML内容，如果获取失败返回None
+            HTML内容，获取失败时为None
         """
         is_short = 'v.kuaishou.com' in urlparse(url).netloc
         if is_short:
@@ -393,7 +392,7 @@ class KuaishouParser(BaseVideoParser):
             html: HTML内容
 
         Returns:
-            解析后的数据，如果解析失败返回None
+            解析后的数据，解析失败时为None
         """
         json_match = re.search(
             r'<script[^>]*>window\.rawData\s*=\s*({.*?});?</script>',

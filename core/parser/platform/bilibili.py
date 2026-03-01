@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 import json
 import re
@@ -17,6 +15,7 @@ except ImportError:
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers, is_live_url, SkipParse
+from ...constants import Config
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -66,12 +65,39 @@ class BilibiliParser(BaseVideoParser):
     def __init__(self):
         """初始化B站解析器"""
         super().__init__("bilibili")
-        self.semaphore = asyncio.Semaphore(10)
+        self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._default_headers = {
             "User-Agent": UA,
             "Referer": "https://www.bilibili.com",
             "Origin": "https://www.bilibili.com"
         }
+    
+    def _add_range_prefix_to_video_urls(self, video_urls: List[List[str]]) -> List[List[str]]:
+        """为视频URL列表添加 range: 前缀
+        
+        Args:
+            video_urls: 视频URL列表（二维列表）
+            
+        Returns:
+            添加了 range: 前缀的视频URL列表
+        """
+        if not video_urls:
+            return video_urls
+        
+        result = []
+        for url_list in video_urls:
+            if url_list and isinstance(url_list, list):
+                prefixed_list = []
+                for url in url_list:
+                    if url and not url.startswith('range:'):
+                        prefixed_list.append(f'range:{url}')
+                    else:
+                        prefixed_list.append(url)
+                result.append(prefixed_list)
+            else:
+                result.append(url_list)
+        
+        return result
 
     def _prepare_aid_param(self, aid: str) -> int:
         """将aid转换为整数
@@ -100,7 +126,7 @@ class BilibiliParser(BaseVideoParser):
             JSON响应字典
 
         Raises:
-            RuntimeError: 当响应不是JSON格式时
+            RuntimeError: 响应不是JSON格式时
         """
         if resp.content_type != 'application/json':
             text = await resp.text()
@@ -119,7 +145,7 @@ class BilibiliParser(BaseVideoParser):
             api_name: API名称
 
         Raises:
-            RuntimeError: 当API返回错误码时
+            RuntimeError: API返回错误码时
         """
         if j.get("code") != 0:
             error_msg = j.get('message', '未知错误')
@@ -135,7 +161,7 @@ class BilibiliParser(BaseVideoParser):
             url: 视频或动态链接
 
         Returns:
-            如果可以解析返回True，否则返回False
+            是否可以解析
         """
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
@@ -358,7 +384,7 @@ class BilibiliParser(BaseVideoParser):
             url: 动态链接
 
         Returns:
-            动态ID，如果提取失败返回None
+            动态ID，提取失败时为None
         """
         match = T_BILIBILI_RE.search(url)
         if match:
@@ -386,7 +412,7 @@ class BilibiliParser(BaseVideoParser):
             动态信息字典
 
         Raises:
-            RuntimeError: 当API返回错误时
+            RuntimeError: API返回错误时
         """
         api = "https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/get_dynamic_detail"
         params = {"dynamic_id": opus_id}
@@ -413,7 +439,7 @@ class BilibiliParser(BaseVideoParser):
             data: 包含视频信息的字典
 
         Returns:
-            视频链接，如果提取失败返回None
+            视频链接，提取失败时为None
         """
         if not isinstance(data, dict):
             return None
@@ -482,7 +508,7 @@ class BilibiliParser(BaseVideoParser):
             包含title、desc、author的字典
 
         Raises:
-            ValueError: 当bvid和aid都未提供时
+            ValueError: bvid和aid都未提供时
             RuntimeError: 当API返回错误时
         """
         api = "https://api.bilibili.com/x/web-interface/view"
@@ -539,7 +565,7 @@ class BilibiliParser(BaseVideoParser):
             包含title、desc、author的字典
 
         Raises:
-            RuntimeError: 当API返回错误时
+            RuntimeError: API返回错误时
         """
         api = "https://api.bilibili.com/pgc/view/web/season"
         async with session.get(
@@ -611,7 +637,7 @@ class BilibiliParser(BaseVideoParser):
             分P列表数据
 
         Raises:
-            ValueError: 当bvid和aid都未提供时
+            ValueError: bvid和aid都未提供时
             RuntimeError: 当API返回错误时
         """
         api = "https://api.bilibili.com/x/player/pagelist"
@@ -657,7 +683,7 @@ class BilibiliParser(BaseVideoParser):
             播放地址数据
 
         Raises:
-            ValueError: 当bvid和aid都未提供时
+            ValueError: bvid和aid都未提供时
             RuntimeError: 当API返回错误时
         """
         api = "https://api.bilibili.com/x/player/playurl"
@@ -709,7 +735,7 @@ class BilibiliParser(BaseVideoParser):
             播放地址数据
 
         Raises:
-            RuntimeError: 当API返回错误时
+            RuntimeError: API返回错误时
         """
         api = "https://api.bilibili.com/pgc/player/web/v2/playurl"
         params = {
@@ -738,7 +764,7 @@ class BilibiliParser(BaseVideoParser):
             data: 播放地址数据
 
         Returns:
-            最佳画质代码，如果无法获取返回None
+            最佳画质代码，无法获取时为None
         """
         aq = data.get("accept_quality") or []
         if isinstance(aq, list) and aq:
@@ -761,7 +787,7 @@ class BilibiliParser(BaseVideoParser):
             dash_obj: DASH格式视频数据
 
         Returns:
-            最佳视频流数据，如果未找到返回None
+            最佳视频流数据，未找到时为None
         """
         vids = dash_obj.get("video") or []
         if not vids:
@@ -790,7 +816,7 @@ class BilibiliParser(BaseVideoParser):
             session: aiohttp会话
 
         Returns:
-            视频直链，如果失败返回None
+            视频直链，失败时为None
         """
         FNVAL_MAX = 4048
         if bvid:
@@ -1067,7 +1093,7 @@ class BilibiliParser(BaseVideoParser):
                     "author": final_author,
                     "desc": final_desc,
                     "timestamp": final_timestamp,
-                    "video_urls": video_result.get("video_urls", []),
+                    "video_urls": self._add_range_prefix_to_video_urls(video_result.get("video_urls", [])),
                     "image_urls": video_result.get("image_urls", []),
                     "image_headers": image_headers,
                     "video_headers": video_headers,
@@ -1103,7 +1129,7 @@ class BilibiliParser(BaseVideoParser):
                     "author": author,
                     "desc": final_desc,
                     "timestamp": timestamp,
-                    "video_urls": video_result.get("video_urls", []),
+                    "video_urls": self._add_range_prefix_to_video_urls(video_result.get("video_urls", [])),
                     "image_urls": video_result.get("image_urls", []),
                     "image_headers": image_headers,
                     "video_headers": video_headers,
@@ -1322,7 +1348,7 @@ class BilibiliParser(BaseVideoParser):
             "author": info.get("author", ""),
             "desc": info.get("desc", ""),
             "timestamp": info.get("timestamp", ""),
-            "video_urls": [[direct_url]],
+            "video_urls": self._add_range_prefix_to_video_urls([[direct_url]]),
             "image_urls": [],
             "image_headers": image_headers,
             "video_headers": video_headers,

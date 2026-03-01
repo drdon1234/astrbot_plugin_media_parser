@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import json
 import re
 from datetime import datetime
@@ -44,7 +43,7 @@ class WeiboParser(BaseVideoParser):
             url: 微博链接
             
         Returns:
-            如果是微博链接返回True，否则返回False
+            是否可以解析
         """
         all_patterns = []
         for patterns in self.URL_PATTERNS.values():
@@ -237,7 +236,7 @@ class WeiboParser(BaseVideoParser):
             urls: URL字典，键为清晰度标识，值为URL
             
         Returns:
-            视频URL，如果不存在则返回None
+            视频URL，不存在时为None
         """
         if not urls or not isinstance(urls, dict):
             return None
@@ -268,7 +267,7 @@ class WeiboParser(BaseVideoParser):
             pic_data: 图片数据字典，可能包含 largest, original, large 等字段
             
         Returns:
-            图片URL，如果不存在则返回None
+            图片URL，不存在时为None
         """
         for key in ['largest', 'original', 'large']:
             size_info = pic_data.get(key, {})
@@ -316,7 +315,7 @@ class WeiboParser(BaseVideoParser):
             referer=referer,
             user_agent=user_agent
         )
-        return {
+        result = {
             'url': url,
             'title': '',
             'author': author,
@@ -327,6 +326,9 @@ class WeiboParser(BaseVideoParser):
             'image_headers': image_headers,
             'video_headers': video_headers,
         }
+        if video_urls:
+            result['video_force_download'] = True
+        return result
     
     def _separate_media_urls(self, media_urls: List[str]) -> tuple:
         """将媒体URL列表分离为视频和图片URL列表

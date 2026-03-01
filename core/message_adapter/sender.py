@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from typing import Any, List
 
 from astrbot.api.event import AstrMessageEvent

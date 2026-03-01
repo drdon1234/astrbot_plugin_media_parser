@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 import os
 import re
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 try:
     from astrbot.api import logger
@@ -21,7 +20,7 @@ def validate_content_type(
         is_video: 是否为视频（True为视频，False为图片）
 
     Returns:
-        如果为有效媒体类型返回True，否则返回False
+        是否为有效媒体类型
     """
     if 'application/json' in content_type or 'text/' in content_type:
         return False
@@ -46,7 +45,7 @@ def check_json_error_response(
         media_url: 媒体URL（用于日志）
 
     Returns:
-        如果是JSON错误响应返回True，否则返回False
+        是否为JSON错误响应
     """
     if not content_preview or not content_preview.startswith(b'{'):
         return False
@@ -71,7 +70,7 @@ def extract_size_from_headers(
         response: HTTP响应对象（aiohttp.ClientResponse）
 
     Returns:
-        媒体大小(MB)，如果无法获取返回None
+        媒体大小(MB)，无法获取时为None
     """
     content_range = response.headers.get("Content-Range")
     if content_range:
@@ -95,7 +94,7 @@ def check_cache_dir_available(cache_dir: str) -> bool:
         cache_dir: 缓存目录路径
 
     Returns:
-        如果目录可用返回True，否则返回False
+        目录是否可用
     """
     if not cache_dir:
         return False
@@ -215,4 +214,77 @@ def get_video_suffix(content_type: str = None, url: str = None) -> str:
             return '.wmv'
 
     return '.mp4'
+
+
+def process_gather_results(
+    results: List[Any],
+    items: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """处理 asyncio.gather 返回的下载结果，统一错误处理逻辑
+    
+    Args:
+        results: asyncio.gather 返回的结果列表（可能包含异常）
+        items: 原始媒体项列表
+        
+    Returns:
+        处理后的结果列表，每个项包含url、file_path、success、index等字段
+    """
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            item = items[i] if i < len(items) else {}
+            url_list = item.get('url_list', [])
+            processed_results.append({
+                'url': url_list[0] if url_list else None,
+                'file_path': None,
+                'success': False,
+                'index': item.get('index', i),
+                'error': str(result)
+            })
+        elif isinstance(result, dict):
+            processed_results.append(result)
+        else:
+            item = items[i] if i < len(items) else {}
+            url_list = item.get('url_list', [])
+            processed_results.append({
+                'url': url_list[0] if url_list else None,
+                'file_path': None,
+                'success': False,
+                'index': item.get('index', i),
+                'error': 'Unknown error'
+            })
+    return processed_results
+
+
+def generate_cache_file_path(
+    cache_dir: str,
+    media_id: str,
+    media_type: str,
+    index: int,
+    content_type: str = None,
+    url: str = None
+) -> str:
+    """生成缓存文件路径
+    
+    Args:
+        cache_dir: 缓存目录路径
+        media_id: 媒体ID
+        media_type: 媒体类型，'video' 或 'image'
+        index: 媒体索引
+        content_type: HTTP Content-Type头（可选）
+        url: 媒体URL（可选）
+        
+    Returns:
+        缓存文件路径（已标准化）
+    """
+    if media_type == 'video':
+        suffix = get_video_suffix(content_type, url)
+        filename = f"video_{index}{suffix}"
+    else:
+        suffix = get_image_suffix(content_type, url)
+        filename = f"image_{index}{suffix}"
+    
+    cache_subdir = os.path.join(cache_dir, media_id)
+    os.makedirs(cache_subdir, exist_ok=True)
+    return os.path.normpath(os.path.join(cache_subdir, filename))
 

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import os
 import shutil
 from typing import List, Optional
@@ -18,7 +16,7 @@ def cleanup_file(file_path: str) -> bool:
         file_path: 文件路径
 
     Returns:
-        清理是否成功
+        是否成功
     """
     if not file_path or not os.path.exists(file_path):
         return True
@@ -53,7 +51,7 @@ def cleanup_directory(dir_path: str, ignore_errors: bool = True) -> bool:
         ignore_errors: 是否忽略错误（默认True，与shutil.rmtree行为一致）
 
     Returns:
-        清理是否成功
+        是否成功
     """
     if not dir_path or not os.path.exists(dir_path):
         return True

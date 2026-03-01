@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import re
@@ -16,6 +15,7 @@ except ImportError:
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers, is_live_url, SkipParse
+from ...constants import Config
 
 
 ANDROID_UA = (
@@ -41,7 +41,7 @@ class XiaohongshuParser(BaseVideoParser):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9",
         }
-        self.semaphore = asyncio.Semaphore(10)
+        self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
@@ -50,7 +50,7 @@ class XiaohongshuParser(BaseVideoParser):
             url: 视频链接
             
         Returns:
-            如果可以解析返回True，否则返回False
+            是否可以解析
         """
         if not url:
             return False
@@ -104,7 +104,7 @@ class XiaohongshuParser(BaseVideoParser):
             url: 链接URL
             
         Returns:
-            如果是PC端链接返回True，否则返回False
+            是否为PC端链接
         """
         url_lower = url.lower()
         return (

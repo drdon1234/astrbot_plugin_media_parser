@@ -1,26 +1,10 @@
 # 聚合解析流媒体平台链接，转换为媒体直链发送
 
-## 使用说明
-
-### 🎉 开箱即用
-
-- ✅ 无需配置任何 cookie
-- ✅ 自动识别并解析链接，获取媒体元数据
-
-### ⚙️ 优化体验
-- 配置 **缓存目录** 
-- 打开 **预下载模式**  
-
-> **由于消息平台使用直链发送媒体的局限性（无法指定 header、referer、cookie 等参数）：**
-> - 部分风控严格的平台会返回 403 Forbidden，此时需要先将媒体下载到本地再发送  
-> 
-> **已知受影响的平台包括：**
-> - 部分小红书媒体（视频/图片）  
-> - 全部微博视频
+AstrBot 插件，支持自动解析流媒体平台链接，获取媒体元数据转换为直链发送
 
 ---
 
-## 支持的流媒体平台
+## 📺 支持的流媒体平台
 
 <table class="config-table">
 <thead>
@@ -71,67 +55,57 @@
 
 ---
 
-## 安装
+## 🚀 快速开始
 
-### 依赖库安装（重要）
+### 安装
 
-使用前请先安装依赖库：`aiohttp`
+1. **依赖库**：打开 AstrBot WebUI → 控制台 → 安装 Pip 库，输入 `aiohttp` 并安装
+2. **插件**：打开 AstrBot WebUI → 插件市场搜索 `astrbot_plugin_media_parser` 并安装
 
-1. 打开 **AstrBot WebUI** → **控制台** → **安装 Pip 库**
-2. 在库名栏输入 `aiohttp` 并点击安装
+### 特性
 
-### 插件安装
-
-#### 方式一：通过插件市场安装
-
-1. 打开 **AstrBot WebUI** → **插件市场** → **右上角 Search**
-2. 搜索与本项目相关的关键词，找到插件后点击安装
-3. 推荐通过唯一标识符搜索：`astrbot_plugin_media_parser`
-
-#### 方式二：通过 GitHub 仓库链接安装
-
-1. 打开 **AstrBot WebUI** → **插件市场** → **右下角 '+' 按钮**
-2. 输入以下地址并点击安装：
-   ```
-   https://github.com/drdon1234/astrbot_plugin_media_parser
-   ```
+- ✅ 无需配置任何 cookie
+- ✅ 自动识别并解析链接
 
 ---
 
-## 注意事项
+## ⚙️ 优化体验
 
-1. **B站**：
-- 转发动态会使用"转发动态数据（原始动态数据）"组织文本格式解析结果
+配置 **缓存目录** 和打开 **预下载模式** 可显著提升解析成功率和发送体验。
 
-2. **微博**：
-- 视频直链使用严格风控策略，开启预下载模式保存到本地才能正确发送
+> **原因**：消息平台使用直链发送媒体时无法指定 header、referer、cookie 等参数，部分风控严格的平台会返回 403 Forbidden。  
+> **建议**：同时配置缓存目录和开启预下载模式。
 
-3. **小红书**：
-- 所有链接均有身份验证和时效性，在有效期内发送完整链接才能成功解析
-- 分享链接的解析结果有水印
+### 各平台特殊情况
 
-4. **小黑盒**
-- 不携带 token 的状态只能解析游戏页详情（文字，视频，图片）
-- 游戏预览视频实际从 Steam CDN 请求音视频分片，下载速度不佳时请启用代理
+**硬性要求（必须预下载）**
+- **微博**：所有视频必须正确携带 referer 参数才能下载
+- **小黑盒**：M3U8 格式必须将音视频分片下载到本地再合并
 
-5. **推特**：
-- 解析 API 使用 fxtwitter 服务，无需代理
-- 图片 CDN 大多被墙，建议开启代理
-- 视频 CDN 通常不受影响，可直连
+**概率风控（建议预下载）**
+- **小红书**：部分媒体使用 URL 发送有概率风控
 
-6. **其他**
-- 插件在任何消息中匹配到 ```"原始链接："``` 字段将静默跳过解析
-- 这是为了防止多个使用本插件的 Bot 重复解析其他 Bot 发送的文本格式解析结果
+**提高性能（可选）**
+- **B站、Twitter/X**：支持 Range 请求，配置缓存目录后可并发下载提升速度
+
+> 💡 Range 下载仅为性能优化，未配置缓存目录时会自动退化为单文件下载模式
 
 ---
 
-## 鸣谢
+## 📝 注意事项
 
-- **B站解析端点** 参考自：GitHub 项目 bilibili-API-collect  
-  详见：[bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)
-- **QQ小程序卡片链接提取方法** 参考自：GitHub 用户 tianger-mckz  
-  详见：[issue #1](https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034)
-- **抖音解析方法** 参考自：CSDN 博客文章  
-  详见：[文章链接](https://blog.csdn.net/qq_53153535/article/details/141297614)
-- **推特解析** 使用免费第三方服务：fxtwitter（GitHub 项目 FxEmbed）  
-  详见：[FxEmbed](https://github.com/FxEmbed/FxEmbed)
+- **B站**：转发动态会使用 ```"转发动态数据（原始动态数据）"``` 组织文本格式解析结果
+- **小红书**：链接有身份验证和时效性，分享链接解析结果有水印
+- **小黑盒**：不携带 token 只能解析游戏页详情，游戏预览视频下载速度不佳时请启用代理
+- **推特**：解析 api 使用 fxtwitter 服务可直连，图片 cdn 大多被墙建议开启代理，视频 cdn ~~可直连~~ 近期大多被墙建议开启代理
+- **图片处理** 格式除 ```.jpg```, ```.jpeg```, ```.png``` 外的所有图片会先转换为 ```.png``` 格式再发送
+- **其他**：插件会跳过包含 `"原始链接："` 字段的消息，防止重复解析
+
+---
+
+## 🙏 鸣谢
+
+- [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - B站解析端点
+- [FxEmbed](https://github.com/FxEmbed/FxEmbed) - 推特解析服务
+- [tianger-mckz](https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034) | [ScryAbu](https://github.com/drdon1234/astrbot_plugin_media_parser/issues/16#issuecomment-3726729850) | [WWWA7](https://github.com/drdon1234/astrbot_plugin_media_parser/pull/17#issue-3799325283) - QQ小程序卡片链接提取方法
+- [CSDN 博客](https://blog.csdn.net/qq_53153535/article/details/141297614) - 抖音解析方法

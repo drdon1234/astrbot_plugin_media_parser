@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 
@@ -30,7 +29,7 @@ class BaseVideoParser(ABC):
             url: 视频链接
 
         Returns:
-            如果可以解析返回True，否则返回False
+            是否可以解析
         """
         pass
 
@@ -69,8 +68,7 @@ class BaseVideoParser(ABC):
             - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
             - image_headers: dict，图片下载的完整请求头字典（必需）
             - video_headers: dict，视频下载的完整请求头字典（必需）
-            - image_pre_download: bool，是否必须预下载图片（可选，默认False）。True=必须预下载，如果未启用预下载或预下载失败则跳过；False=根据配置选择
-            - video_pre_download: bool，是否必须预下载视频（可选，默认False）。True=必须预下载，如果未启用预下载或预下载失败则跳过；False=根据配置选择
+            - video_force_download: bool，是否强制下载视频（可选，默认False）。True=必须强制下载，如果未启用预下载或预下载失败则跳过该视频；False=根据配置选择
             - 其他平台特定字段
 
         Raises:

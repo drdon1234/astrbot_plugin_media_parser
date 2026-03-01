@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 import json
 import re
@@ -16,6 +14,7 @@ except ImportError:
 
 from .base import BaseVideoParser
 from ..utils import build_request_headers, is_live_url, SkipParse
+from ...constants import Config
 
 
 class DouyinParser(BaseVideoParser):
@@ -33,7 +32,7 @@ class DouyinParser(BaseVideoParser):
                 'https://www.douyin.com/?is_from_mobile_home=1&recommend=1'
             )
         }
-        self.semaphore = asyncio.Semaphore(10)
+        self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
@@ -42,7 +41,7 @@ class DouyinParser(BaseVideoParser):
             url: 视频链接
 
         Returns:
-            如果可以解析返回True，否则返回False
+            是否可以解析
         """
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
@@ -110,7 +109,7 @@ class DouyinParser(BaseVideoParser):
             text: HTML文本
 
         Returns:
-            ROUTER_DATA JSON字符串，如果未找到返回None
+            ROUTER_DATA JSON字符串，未找到时为None
         """
         start_flag = 'window._ROUTER_DATA = '
         start_idx = text.find(start_flag)
@@ -145,7 +144,7 @@ class DouyinParser(BaseVideoParser):
             is_note: 是否为笔记
 
         Returns:
-            视频/笔记信息字典，如果解析失败返回None
+            视频/笔记信息字典，解析失败时为None
         """
         if is_note:
             url = f'https://www.iesdouyin.com/share/note/{item_id}/'
