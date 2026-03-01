@@ -3,6 +3,7 @@ import json
 from typing import Any, Dict
 
 import aiohttp
+import yt_dlp
 
 try:
     from astrbot.api import logger
@@ -10,6 +11,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
+from astrbot.api.all import command
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.event_message_type import EventMessageType
@@ -31,15 +33,7 @@ from .core.config_manager import ConfigManager
 class VideoParserPlugin(Star):
 
     def __init__(self, context: Context, config: dict):
-        """初始化插件
-
-        Args:
-            context: 上下文对象
-            config: 配置字典
-
-        Raises:
-            ValueError: 没有启用任何解析器时
-        """
+        """初始化插件"""
         super().__init__(context)
         self.logger = logger
         
@@ -80,14 +74,6 @@ class VideoParserPlugin(Star):
             cleanup_directory(self.download_manager.cache_dir)
 
     def _should_parse(self, message_str: str) -> bool:
-        """判断是否应该解析消息
-
-        Args:
-            message_str: 消息文本
-
-        Returns:
-            是否应该解析
-        """
         if self.is_auto_parse:
             return True
         for keyword in self.trigger_keywords:
@@ -95,15 +81,110 @@ class VideoParserPlugin(Star):
                 return True
         return False
 
+    @command("直链")
+    async def cmd_get_direct_url(self, event: AstrMessageEvent, url: str = ""):
+        """提取视频直链，不下载"""
+        raw = event.message_str
+        full_url = url
+        for prefix in ["/直链 ", "直链 "]:
+            if prefix in raw:
+                full_url = raw.split(prefix, 1)[1].strip()
+                break
+        if not full_url:
+            await event.send(event.plain_result("❌ 请提供视频链接，例如: /直链 https://youtube.com/watch?v=..."))
+            return
+
+        await event.send(event.plain_result("⏳ 正在解析直链，请稍候..."))
+
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "noplaylist": True,
+            "skip_download": True,
+        }
+        if self.proxy_addr:
+            opts["proxy"] = self.proxy_addr
+
+        try:
+            def _extract():
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    return ydl.extract_info(full_url, download=False)
+
+            info = await asyncio.get_running_loop().run_in_executor(None, _extract)
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 解析失败: {e}"))
+            return
+
+        if not info:
+            await event.send(event.plain_result("❌ 无法获取视频信息。"))
+            return
+
+        title = info.get("title", "未知标题")
+        duration = info.get("duration")
+        dur_str = f"{int(duration)//60}:{int(duration)%60:02d}" if duration else "未知"
+
+        direct_url = info.get("url")
+        formats = info.get("formats",[])
+
+        best_combined = None
+        best_video = None
+        best_audio = None
+
+        for f in formats:
+            vcodec = f.get("vcodec", "none")
+            acodec = f.get("acodec", "none")
+            if vcodec != "none" and acodec != "none":
+                best_combined = f
+            if vcodec != "none" and acodec == "none":
+                best_video = f
+            if vcodec == "none" and acodec != "none":
+                best_audio = f
+
+        def _format_size(size_bytes):
+            if size_bytes is None: return "未知"
+            if size_bytes < 1024: return f"{size_bytes} B"
+            elif size_bytes < 1024**2: return f"{size_bytes/1024:.2f} KB"
+            elif size_bytes < 1024**3: return f"{size_bytes/1024**2:.2f} MB"
+            else: return f"{size_bytes/1024**3:.2f} GB"
+
+        lines =[]
+        lines.append(f"🎬 标题: {title}")
+        lines.append(f"⏱ 时长: {dur_str}")
+        lines.append("")
+
+        if best_combined and best_combined.get("url"):
+            res_h = best_combined.get("height", "?")
+            res_w = best_combined.get("width", "?")
+            ext = best_combined.get("ext", "?")
+            fsize = _format_size(best_combined.get("filesize") or best_combined.get("filesize_approx"))
+            lines.append(f"✅ 最佳合并流 ({res_w}x{res_h}, {ext}, {fsize}):\n{best_combined['url']}\n")
+        elif direct_url:
+            lines.append(f"✅ 直链:\n{direct_url}\n")
+        else:
+            lines.append("⚠️ 无合并流直链\n")
+
+        if best_video and best_video.get("url"):
+            res_h = best_video.get("height", "?")
+            res_w = best_video.get("width", "?")
+            ext = best_video.get("ext", "?")
+            vcodec = best_video.get("vcodec", "?")
+            fsize = _format_size(best_video.get("filesize") or best_video.get("filesize_approx"))
+            lines.append(f"🎥 最佳视频流 ({res_w}x{res_h}, {vcodec}, {ext}, {fsize}):\n{best_video['url']}\n")
+        
+        if best_audio and best_audio.get("url"):
+            acodec = best_audio.get("acodec", "?")
+            ext = best_audio.get("ext", "?")
+            fsize = _format_size(best_audio.get("filesize") or best_audio.get("filesize_approx"))
+            lines.append(f"🎵 最佳音频流 ({acodec}, {ext}, {fsize}):\n{best_audio['url']}\n")
+
+        lines.append("⚠️ 直链有时效性，请尽快使用。")
+
+        await event.send(event.plain_result("\n".join(lines)))
 
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse(self, event: AstrMessageEvent):
-        """自动解析消息中的视频链接
-
-        Args:
-            event: 消息事件对象
-        """
-        # 白名单检查
+        """自动解析消息中的视频链接"""
         is_private = event.is_private_chat()
         sender_id = event.get_sender_id()
         group_id = None if is_private else event.get_group_id()
@@ -128,7 +209,6 @@ class VideoParserPlugin(Star):
                 msg_data = first_msg.data
                 curl_link = None
         
-                # 方式1: msg_data 已经是解析好的字典
                 if isinstance(msg_data, dict) and not msg_data.get('data'):
                     meta = msg_data.get("meta") or {}
                     detail_1 = meta.get("detail_1") or {}
@@ -137,7 +217,6 @@ class VideoParserPlugin(Star):
                         news = meta.get("news") or {}
                         curl_link = news.get("jumpUrl")
         
-                # 方式2: msg_data 是 {'data': 'json字符串'} 格式
                 if not curl_link:
                     json_str = msg_data.get('data', '') if isinstance(msg_data, dict) else msg_data
                     if json_str and isinstance(json_str, str):
@@ -197,23 +276,8 @@ class VideoParserPlugin(Star):
             
             if self.debug_mode:
                 self.logger.debug(f"解析获得 {len(metadata_list)} 条元数据")
-                for idx, metadata in enumerate(metadata_list):
-                    self.logger.debug(
-                        f"元数据[{idx}]: url={metadata.get('url')}, "
-                        f"video_count={len(metadata.get('video_urls', []))}, "
-                        f"image_count={len(metadata.get('image_urls', []))}, "
-                        f"video_force_download={metadata.get('video_force_download')}"
-                    )
             
             async def process_single_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-                """处理单个元数据
-
-                Args:
-                    metadata: 元数据字典
-
-                Returns:
-                    处理后的元数据字典，异常时包含error字段
-                """
                 if metadata.get('error'):
                     return metadata
                 
@@ -229,34 +293,25 @@ class VideoParserPlugin(Star):
                     metadata['error'] = str(e)
                     return metadata
             
-            tasks = [process_single_metadata(metadata) for metadata in metadata_list]
+            tasks =[process_single_metadata(metadata) for metadata in metadata_list]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            processed_metadata_list = []
+            processed_metadata_list =[]
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     metadata = metadata_list[i] if i < len(metadata_list) else {}
                     error_msg = str(result)
-                    self.logger.exception(
-                        f"处理元数据时发生未捕获的异常: {metadata.get('url', '未知URL')}, "
-                        f"错误类型: {type(result).__name__}, 错误: {error_msg}"
-                    )
                     metadata['error'] = error_msg
                     processed_metadata_list.append(metadata)
                 elif isinstance(result, dict):
                     processed_metadata_list.append(result)
                 else:
                     metadata = metadata_list[i] if i < len(metadata_list) else {}
-                    error_msg = f'未知错误类型: {type(result).__name__}'
-                    self.logger.warning(
-                        f"处理元数据返回了意外的结果类型: {metadata.get('url', '未知URL')}, "
-                        f"类型: {type(result).__name__}"
-                    )
-                    metadata['error'] = error_msg
+                    metadata['error'] = f'未知错误类型: {type(result).__name__}'
                     processed_metadata_list.append(metadata)
             
             temp_files = []
-            video_files = []
+            video_files =[]
             try:
                 all_link_nodes, link_metadata, temp_files, video_files = self.message_manager.build_nodes(
                     processed_metadata_list,

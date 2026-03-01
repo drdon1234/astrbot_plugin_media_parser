@@ -25,18 +25,6 @@ async def validate_media_response(
     is_video: bool = False,
     allow_read_content: bool = True
 ) -> Tuple[bool, Optional[bytes]]:
-    """验证响应是否为有效的媒体响应
-
-    Args:
-        response: HTTP响应对象
-        media_url: 媒体URL（用于日志）
-        is_video: 是否为视频（True为视频，False为图片）
-        allow_read_content: 是否允许读取内容（HEAD请求时为False）
-
-    Returns:
-        (is_valid, content_preview) 元组，is_valid表示是否为有效媒体，
-        content_preview为已读取的内容预览（如果Content-Type为空且允许读取）
-    """
     if response.status != 200:
         if response.status == 403:
             logger.warning(f"媒体URL访问被拒绝(403 Forbidden): {media_url}")
@@ -73,22 +61,12 @@ async def get_video_size(
     headers: dict = None,
     proxy: str = None
 ) -> Tuple[Optional[float], Optional[int]]:
-    """获取视频文件大小
-
-    Args:
-        session: aiohttp会话
-        video_url: 视频URL
-        headers: 请求头（可选）
-        proxy: 代理地址（可选）
-
-    Returns:
-        (size_mb, status_code) 元组，size_mb为视频大小(MB)，无法获取时为None，
-        status_code为HTTP状态码（如果是403等特殊状态码），否则为None
-    """
     if video_url.startswith('m3u8:'):
         video_url = video_url[5:]
     elif video_url.startswith('range:'):
         video_url = video_url[6:]
+    elif video_url.startswith('ytdlp:'):
+        return None, None
     
     try:
         request_headers = headers or {}
@@ -145,23 +123,12 @@ async def validate_media_url(
     proxy: str = None,
     is_video: bool = True
 ) -> Tuple[bool, Optional[int]]:
-    """验证媒体URL是否有效
-
-    Args:
-        session: aiohttp会话
-        media_url: 媒体URL
-        headers: 请求头（可选）
-        proxy: 代理地址（可选）
-        is_video: 是否为视频（True为视频，False为图片）
-
-    Returns:
-        (is_valid, status_code) 元组，is_valid表示媒体URL是否有效，
-        status_code为HTTP状态码（如果是403等特殊状态码），否则为None
-    """
     if media_url.startswith('m3u8:'):
         media_url = media_url[5:]
     elif media_url.startswith('range:'):
         media_url = media_url[6:]
+    elif media_url.startswith('ytdlp:'):
+        return True, None
     
     try:
         request_headers = headers or {}
@@ -199,4 +166,3 @@ async def validate_media_url(
         if '403' in str(e) or 'Forbidden' in str(e):
             return False, 403
         return False, None
-
