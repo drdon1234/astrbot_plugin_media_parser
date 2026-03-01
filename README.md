@@ -98,7 +98,7 @@ AstrBot 插件，支持自动解析流媒体平台链接，获取媒体元数据
 - **小红书**：链接有身份验证和时效性，分享链接解析结果有水印
 - **小黑盒**：不携带 token 只能解析游戏页详情，游戏预览视频下载速度不佳时请启用代理
 - **推特**：解析 api 使用 fxtwitter 服务可直连，图片 cdn 大多被墙建议开启代理，视频 cdn ~~可直连~~ 近期大多被墙建议开启代理
-- **图片处理** 格式除 ```.jpg```, ```.jpeg```, ```.png``` 外的所有图片会先转换为 ```.png``` 格式再发送
+- **图片处理**：格式除 ```.jpg```, ```.jpeg```, ```.png``` 外的所有图片会先转换为 ```.png``` 格式再发送
 - **其他**：插件会跳过包含 `"原始链接："` 字段的消息，防止重复解析
 
 ---
@@ -109,3 +109,7 @@ AstrBot 插件，支持自动解析流媒体平台链接，获取媒体元数据
 - [FxEmbed](https://github.com/FxEmbed/FxEmbed) - 推特解析服务
 - [tianger-mckz](https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034) | [ScryAbu](https://github.com/drdon1234/astrbot_plugin_media_parser/issues/16#issuecomment-3726729850) | [WWWA7](https://github.com/drdon1234/astrbot_plugin_media_parser/pull/17#issue-3799325283) - QQ小程序卡片链接提取方法
 - [CSDN 博客](https://blog.csdn.net/qq_53153535/article/details/141297614) - 抖音解析方法
+
+## 🤝 社区贡献与扩展
+- 如需解析 YouTube 平台链接，请下载带有 v4.3.1-yt-feature 标签的版本
+- 欢迎提交 PR 以添加更多平台解析支持和新功能
