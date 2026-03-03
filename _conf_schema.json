@@ -7,6 +7,7 @@
     },
     "message_setting":{
         "description": "消息设置",
+        "type": "object",
         "items": {
             "first_send":{
                 "description": "开场语",
