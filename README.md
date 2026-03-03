@@ -112,5 +112,5 @@ AstrBot 插件，支持自动解析流媒体平台链接，获取媒体元数据
 - [CSDN 博客](https://blog.csdn.net/qq_53153535/article/details/141297614) - 抖音解析方法
 
 ## 🤝 社区贡献与扩展
-- 如需解析 YouTube 平台链接，请下载带有 v4.3.1-yt-feature 标签的版本
+- 如需解析 YouTube 平台链接，请下载带有 v4.3.1-yt-feature 标签的版本（贡献者：[shangzhimingge](https://github.com/shangzhimingge)）
 - 欢迎提交 PR 以添加更多平台解析支持和新功能
