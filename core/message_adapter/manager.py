@@ -11,6 +11,7 @@ class MessageManager:
 
         Args:
             logger: 日志记录器（可选）
+        """
         self.logger = logger
         self.sender = MessageSender(logger=logger)
     def get_sender_info(self, event) -> tuple:

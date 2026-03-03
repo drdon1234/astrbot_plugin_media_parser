@@ -24,11 +24,15 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, se
         Plain文本节点，无内容时为None
     """
     text_parts = []
+    # 是否发送解析简介
+    if not send_introduction:
+        return None
+
     if metadata.get('title'):
         text_parts.append(f"标题：{metadata['title']}")
     if metadata.get('author'):
         text_parts.append(f"作者：{metadata['author']}")
-    if send_introduction and metadata.get('desc'):
+    if metadata.get('desc'):
         text_parts.append(f"简介：{metadata['desc']}")
     if metadata.get('timestamp'):
         text_parts.append(f"发布时间：{metadata['timestamp']}")
