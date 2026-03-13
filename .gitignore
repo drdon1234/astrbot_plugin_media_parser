@@ -175,5 +175,8 @@ logs/
 .pytest_cache/
 .mypy_cache/
 
+# 敏感运行时凭据（Cookie/登录态）
+core/parser/runtime_manager/**/cookie.json
+
 # Local tests
 /test/

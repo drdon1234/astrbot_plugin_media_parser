@@ -6,7 +6,7 @@
         "default": false
     },
     "trigger_settings": {
-        "description": "触发设置",
+        "description": "触发方式",
         "type": "object",
         "items": {
             "is_auto_parse": {
@@ -17,20 +17,102 @@
             "trigger_keywords": {
                 "description": "手动触发解析的关键词列表",
                 "type": "list",
-                "hint": "当禁用'是否自动解析视频链接'时，消息头使用这些关键词才会触发解析",
-                "default": ["视频解析", "解析视频"]
+                "hint": "当禁用自动解析时，消息头使用这些关键词才会触发解析",
+                "default": [
+                    "视频解析",
+                    "解析视频"
+                ]
+            }
+        }
+    },
+    "permissions": {
+        "description": "权限配置",
+        "type": "object",
+        "hint": "优先级：个人白名单 > 个人黑名单 > 群组白名单 > 群组黑名单",
+        "items": {
+            "admin_id": {
+                "description": "管理员",
+                "type": "string",
+                "hint": "最高权限用户，同时接收插件私聊通知。默认自动加入用户白名单",
+                "default": ""
+            },
+            "whitelist": {
+                "description": "白名单设置",
+                "hint": "如启用白名单但不配置具体名单会导致所有消息均无权限解析",
+                "type": "object",
+                "items": {
+                    "enable": {
+                        "description": "是否启用白名单",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "user": {
+                        "description": "用户白名单",
+                        "type": "list",
+                        "default": []
+                    },
+                    "group": {
+                        "description": "群组白名单",
+                        "type": "list",
+                        "default": []
+                    }
+                }
+            },
+            "blacklist": {
+                "description": "黑名单设置",
+                "type": "object",
+                "items": {
+                    "enable": {
+                        "description": "是否启用黑名单",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "user": {
+                        "description": "用户黑名单",
+                        "type": "list",
+                        "default": []
+                    },
+                    "group": {
+                        "description": "群组黑名单",
+                        "type": "list",
+                        "default": []
+                    }
+                }
+            }
+        }
+    },
+    "text_settings": {
+        "description": "定制文本内容",
+        "type": "object",
+        "items": {
+            "enable_opening_msg": {
+                "description": "是否发送开场语",
+                "type": "bool",
+                "hint": "确认可解析后会发送的回复",
+                "default": true
+            },
+            "opening_msg_content": {
+                "description": "自定义开场语内容",
+                "type": "string",
+                "default": "流媒体解析bot为您服务 ٩( 'ω' )و"
+            },
+            "enable_text_metadata": {
+                "description": "是否发送文本类型元数据",
+                "type": "bool",
+                "hint": "是否以文本格式发送解析出的标题、作者、简介等元数据",
+                "default": true
             }
         }
     },
     "video_size_settings": {
-        "description": "视频大小设置",
+        "description": "视频大小控制",
         "type": "object",
         "items": {
             "max_video_size_mb": {
                 "description": "最大允许发送的视频大小(MB)",
                 "type": "float",
                 "hint": "超过此大小的视频将被跳过，不下载也不发送。设置为0表示不限制",
-                "default": 500.0
+                "default": 1000.0
             },
             "large_video_threshold_mb": {
                 "description": "大视频阈值(MB)",
@@ -41,13 +123,13 @@
         }
     },
     "download_settings": {
-        "description": "下载和缓存设置",
+        "description": "下载和缓存",
         "type": "object",
         "items": {
             "cache_dir": {
                 "description": "媒体缓存目录",
                 "type": "string",
-                "hint": "媒体文件缓存目录，用于Twitter视频和所有超过阈值的大视频",
+                "hint": "Windows/Linux默认使用系统临时目录并忽略此项。Docker环境如需使用默认路径，请同时为astrbot和消息平台挂载/app/sharedFolder目录",
                 "default": "/app/sharedFolder/video_parser/cache"
             },
             "pre_download_all_media": {
@@ -65,43 +147,43 @@
         }
     },
     "parser_enable_settings": {
-        "description": "解析器启用设置",
+        "description": "解析器开关",
         "type": "object",
         "items": {
             "enable_bilibili": {
-                "description": "是否启用B站解析器",
+                "description": "B站",
                 "type": "bool",
                 "default": true
             },
             "enable_douyin": {
-                "description": "是否启用抖音解析器",
+                "description": "抖音",
                 "type": "bool",
                 "default": true
             },
             "enable_kuaishou": {
-                "description": "是否启用快手解析器",
+                "description": "快手",
                 "type": "bool",
                 "default": true
             },
             "enable_weibo": {
-                "description": "是否启用微博解析器",
+                "description": "微博",
                 "type": "bool",
                 "default": true
             },
             "enable_xiaohongshu": {
-                "description": "是否启用小红书解析器",
+                "description": "小红书",
                 "type": "bool",
                 "default": true
             },
             "enable_xiaoheihe": {
-                "description": "是否启用小黑盒解析器",
+                "description": "小黑盒",
                 "type": "bool",
                 "default": true
             },
             "enable_twitter": {
-                "description": "是否启用Twitter/X解析器",
+                "description": "Twitter/X",
                 "type": "bool",
-                "default": false
+                "default": true
             }
         }
     },
@@ -122,8 +204,7 @@
                     "video": {
                         "description": "小黑盒视频下载是否使用代理",
                         "type": "bool",
-                        "hint": "启用后，小黑盒视频下载将通过代理进行",
-                        "default": false
+                        "default": true
                     }
                 }
             },
@@ -134,20 +215,74 @@
                     "parse": {
                         "description": "Twitter解析是否使用代理",
                         "type": "bool",
-                        "hint": "启用后，Twitter API请求将通过代理进行",
                         "default": false
                     },
                     "image": {
                         "description": "Twitter图片下载是否使用代理",
                         "type": "bool",
-                        "hint": "启用后，Twitter图片下载将通过代理进行。图片CDN大多被墙，建议开启以提升成功率",
-                        "default": false
+                        "default": true
                     },
                     "video": {
                         "description": "Twitter视频下载是否使用代理",
                         "type": "bool",
-                        "hint": "启用后，Twitter视频下载将通过代理进行。视频CDN几乎不受影响，通常无需开启以节约流量",
+                        "default": true
+                    }
+                }
+            }
+        }
+    },
+    "cookie_settings": {
+        "description": "Cookie管理",
+        "type": "object",
+        "items": {
+            "bilibili": {
+                "description": "B站",
+                "type": "object",
+                "items": {
+                    "use_cookie_for_parsing": {
+                        "description": "是否携带Cookie解析视频",
+                        "type": "bool",
+                        "hint": "开启并配置有效cookie后可以解析更高画质视频，需同时打开预下载",
                         "default": false
+                    },
+                    "cookie": {
+                        "description": "Cookie",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "enable_admin_assist_on_expire": {
+                        "description": "Cookie过期时通知管理员协助登录",
+                        "type": "bool",
+                        "hint": "启用后，将在Cookie不可用时私聊管理员请求协助登录，登录态持久化数据默认保存在对应平台的runtime_manager目录内",
+                        "default": false
+                    },
+                    "admin_reply_timeout_minutes": {
+                        "description": "管理员回复有效期(分钟)",
+                        "type": "int",
+                        "hint": "开启管理员协助后，每次等待管理员回复“确定”的有效时长",
+                        "default": 1440
+                    },
+                    "admin_request_cooldown_minutes": {
+                        "description": "协助请求冷却时间(分钟)",
+                        "type": "int",
+                        "hint": "开启管理员协助后，每次Cookie过期后再次私聊管理员的最小间隔",
+                        "default": 1440
+                    },
+                    "max_quality": {
+                        "description": "最高画质",
+                        "type": "string",
+                        "options": [
+                            "不限制",
+                            "4K",
+                            "1080P60",
+                            "1080P+",
+                            "1080P",
+                            "720P",
+                            "480P",
+                            "360P"
+                        ],
+                        "hint": "限制解析B站视频时的最高画质，实际画质取决于账号权限和视频源",
+                        "default": "不限制"
                     }
                 }
             }

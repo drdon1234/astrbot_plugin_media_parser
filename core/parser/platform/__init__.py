@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaishouParser

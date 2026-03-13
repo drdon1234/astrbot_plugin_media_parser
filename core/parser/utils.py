@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 from __future__ import annotations
 
 from urllib.parse import parse_qs, unquote, urlparse
@@ -7,6 +5,22 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 class SkipParse(Exception):
     pass
+
+
+def format_duration_ms(duration_ms) -> str:
+    """将毫秒时长格式化为 mm:ss 或 hh:mm:ss。"""
+    if duration_ms is None:
+        return ""
+    try:
+        total_seconds = max(0, int(duration_ms) // 1000)
+    except (TypeError, ValueError):
+        return ""
+
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def _ensure_url_has_scheme(url: str) -> str:

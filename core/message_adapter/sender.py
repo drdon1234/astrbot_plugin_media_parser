@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from typing import Any, List
 
 from astrbot.api.event import AstrMessageEvent
@@ -6,17 +5,18 @@ from astrbot.api.message_components import Nodes, Plain, Image, Node
 
 from .node_builder import is_pure_image_gallery
 from ..file_cleaner import cleanup_files
+from ..logger import logger
 
 
 class MessageSender:
 
-    def __init__(self, logger=None):
+    def __init__(self):
         """初始化消息发送器
 
         Args:
-            logger: 日志记录器（可选）
+            无
         """
-        self.logger = logger
+        pass
 
     def get_sender_info(self, event: AstrMessageEvent) -> tuple:
         """获取发送者信息
@@ -175,22 +175,18 @@ class MessageSender:
                             try:
                                 await event.send(event.chain_result([node]))
                             except Exception as e:
-                                if self.logger:
-                                    self.logger.warning(f"发送大媒体节点失败: {e}")
+                                logger.warning(f"发送大媒体节点失败: {e}")
                 except Exception as e:
-                    if self.logger:
-                        self.logger.warning(f"发送大媒体链接失败: {e}")
+                    logger.warning(f"发送大媒体链接失败: {e}")
                 finally:
                     cleanup_files(link_video_files)
                 if link_idx < len(link_nodes_list) - 1:
                     try:
                         await event.send(event.plain_result(separator))
                     except Exception as e:
-                        if self.logger:
-                            self.logger.warning(f"发送分隔符失败: {e}")
+                        logger.warning(f"发送分隔符失败: {e}")
         except Exception as e:
-            if self.logger:
-                self.logger.exception(f"发送大媒体结果失败: {e}")
+            logger.exception(f"发送大媒体结果失败: {e}")
             cleanup_files(all_video_files_to_cleanup)
             raise
 
@@ -232,8 +228,7 @@ class MessageSender:
                             try:
                                 await event.send(event.chain_result([node]))
                             except Exception as e:
-                                if self.logger:
-                                    self.logger.warning(f"发送节点失败: {e}")
+                                logger.warning(f"发送节点失败: {e}")
             finally:
                 cleanup_files(link_video_files)
             if link_idx < len(all_link_nodes) - 1:

@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
 import asyncio
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 from typing import Dict, Any, List, Optional, Tuple
@@ -11,13 +9,10 @@ from urllib.parse import urljoin
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...logger import logger
 
 from ...file_cleaner import cleanup_directory
+from ...constants import Config
 
 
 class M3U8Handler:
@@ -27,7 +22,7 @@ class M3U8Handler:
         session: aiohttp.ClientSession,
         headers: dict = None,
         proxy: str = None,
-        max_concurrent_segments: int = 10
+        max_concurrent_segments: int = Config.M3U8_MAX_CONCURRENT_SEGMENTS
     ):
         """初始化 M3U8 处理器
 
@@ -95,7 +90,7 @@ class M3U8Handler:
             ) as response:
                 response.raise_for_status()
                 with open(output_path, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(8192):
+                    async for chunk in response.content.iter_chunked(Config.STREAM_DOWNLOAD_CHUNK_SIZE):
                         f.write(chunk)
             return True
         except Exception as e:
@@ -305,15 +300,27 @@ class M3U8Handler:
 
             if use_ffmpeg:
                 try:
-                    subprocess.run([
+                    process = await asyncio.create_subprocess_exec(
                         "ffmpeg", "-y", "-i", video_merged, "-i", audio_merged,
                         "-c", "copy", "-map", "0:v:0", "-map", "1:a:0",
-                        output_path
-                    ], check=True, capture_output=True)
-                    logger.info(f"✓ 视频下载完成: {output_path}")
-                    return True
-                except subprocess.CalledProcessError as e:
-                    logger.warning(f"ffmpeg 合并失败: {e}")
+                        output_path,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    _, stderr = await process.communicate()
+                    if process.returncode == 0:
+                        logger.info(f"✓ 视频下载完成: {output_path}")
+                        return True
+
+                    error_output = (
+                        stderr.decode("utf-8", errors="ignore").strip()
+                        if stderr else
+                        ""
+                    )
+                    logger.warning(
+                        f"ffmpeg 合并失败(退出码 {process.returncode}): "
+                        f"{error_output[:200]}"
+                    )
                     shutil.move(video_merged, output_path)
                     logger.info(f"✓ 视频下载完成（无音频）: {output_path}")
                     return True

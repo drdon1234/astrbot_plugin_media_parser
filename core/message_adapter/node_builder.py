@@ -1,29 +1,30 @@
-# -*- coding: utf-8 -*-
 import os
 from typing import Dict, Any, List, Optional, Tuple, Union
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
 from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
 
 from ..file_cleaner import cleanup_file
+from ..downloader.utils import strip_media_prefixes
 
 
-def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0) -> Optional[Plain]:
+def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, enable_text_metadata: bool = True) -> Optional[Plain]:
     """构建文本节点
 
     Args:
         metadata: 元数据字典
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
+        enable_text_metadata: 是否包含视频图文文本信息的附加文本
 
     Returns:
-        Plain文本节点，如果无内容返回None
+        Plain文本节点，无内容时为None
     """
+    if not enable_text_metadata:
+        return None
+        
     text_parts = []
+    
     if metadata.get('title'):
         text_parts.append(f"标题：{metadata['title']}")
     if metadata.get('author'):
@@ -57,6 +58,35 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0) ->
         metadata.get('desc') or 
         metadata.get('timestamp')
     )
+
+    access_status = metadata.get("access_status")
+    access_message = metadata.get("access_message")
+    available_length_ms = metadata.get("available_length_ms")
+    timelength_ms = metadata.get("timelength_ms")
+    is_preview_only = metadata.get("is_preview_only")
+    if access_status and access_status != "full" and access_message:
+        text_parts.append(f"时长：{access_message}")
+    elif is_preview_only and available_length_ms:
+        try:
+            available_seconds = max(0, int(available_length_ms) // 1000)
+            full_seconds = (
+                max(0, int(timelength_ms) // 1000)
+                if timelength_ms is not None else
+                None
+            )
+            available_min, available_sec = divmod(available_seconds, 60)
+            if full_seconds is not None:
+                full_min, full_sec = divmod(full_seconds, 60)
+                text_parts.append(
+                    f"时长：当前可解析 {available_min:02d}:{available_sec:02d} / "
+                    f"全长 {full_min:02d}:{full_sec:02d}"
+                )
+            else:
+                text_parts.append(
+                    f"时长：当前可解析 {available_min:02d}:{available_sec:02d}"
+                )
+        except (TypeError, ValueError):
+            pass
     
     if metadata.get('error'):
         text_parts.append(f"解析失败：{metadata['error']}")
@@ -170,10 +200,12 @@ def build_media_nodes(
             except Exception as e:
                 logger.warning(f"构建视频节点失败: {video_file_path}, 错误: {e}")
         else:
+            actual_video_url = strip_media_prefixes(video_url)
+            
             try:
-                nodes.append(Video.fromURL(video_url))
+                nodes.append(Video.fromURL(actual_video_url))
             except Exception as e:
-                logger.warning(f"构建视频节点失败: {video_url}, 错误: {e}")
+                logger.warning(f"构建视频节点失败: {actual_video_url}, 错误: {e}")
         
         file_idx += 1
     
@@ -212,7 +244,8 @@ def build_media_nodes(
 def build_nodes_for_link(
     metadata: Dict[str, Any],
     use_local_files: bool = False,
-    max_video_size_mb: float = 0.0
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True
 ) -> List[Union[Plain, Image, Video]]:
     """构建单个链接的节点列表
 
@@ -220,13 +253,14 @@ def build_nodes_for_link(
         metadata: 元数据字典
         use_local_files: 是否使用本地文件
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
+        enable_text_metadata: 是否发送图文文本消息
 
     Returns:
         节点列表（Plain、Image、Video对象）
     """
     nodes = []
     
-    text_node = build_text_node(metadata, max_video_size_mb)
+    text_node = build_text_node(metadata, max_video_size_mb, enable_text_metadata)
     if text_node:
         nodes.append(text_node)
     
@@ -243,7 +277,7 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
         nodes: 节点列表
 
     Returns:
-        如果是纯图片图集返回True，否则返回False
+        是否为纯图片图集
     """
     has_video = False
     has_image = False
@@ -260,7 +294,8 @@ def build_all_nodes(
     metadata_list: List[Dict[str, Any]],
     is_auto_pack: bool,
     large_video_threshold_mb: float = 0.0,
-    max_video_size_mb: float = 0.0
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True
 ) -> Tuple[List[List[Union[Plain, Image, Video]]], List[Dict], List[str], List[str]]:
     """构建所有链接的节点，处理消息打包逻辑
 
@@ -269,6 +304,7 @@ def build_all_nodes(
         is_auto_pack: 是否打包为Node
         large_video_threshold_mb: 大视频阈值(MB)
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
+        enable_text_metadata: 是否发送图文文本消息
 
     Returns:
         包含(all_link_nodes, link_metadata, temp_files, video_files)的元组
@@ -277,7 +313,6 @@ def build_all_nodes(
     link_metadata = []
     temp_files = []
     video_files = []
-    separator = "-------------------------------------"
     
     logger.debug(f"开始构建所有节点，元数据数量: {len(metadata_list)}, 打包模式: {is_auto_pack}")
     
@@ -300,7 +335,8 @@ def build_all_nodes(
         link_nodes = build_nodes_for_link(
             metadata,
             use_local_files,
-            max_video_size_mb
+            max_video_size_mb,
+            enable_text_metadata
         )
         
         logger.debug(f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}")
@@ -313,9 +349,9 @@ def build_all_nodes(
             video_urls = metadata.get('video_urls', [])
             video_count = len(video_urls)
             
-            for idx, file_path in enumerate(link_file_paths):
+            for fp_idx, file_path in enumerate(link_file_paths):
                 if file_path:
-                    if idx < video_count:
+                    if fp_idx < video_count:
                         link_video_files.append(file_path)
                         video_files.append(file_path)
                     else:

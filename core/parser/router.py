@@ -1,14 +1,8 @@
-# -*- coding: utf-8 -*-
-
 from typing import List, Tuple
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
-from .handler.base import BaseVideoParser
+from .platform.base import BaseVideoParser
 from .utils import is_live_url
 
 

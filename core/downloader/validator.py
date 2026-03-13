@@ -1,19 +1,15 @@
-# -*- coding: utf-8 -*-
 import asyncio
 from typing import Optional, Tuple
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
 from .utils import (
     validate_content_type,
     check_json_error_response,
-    extract_size_from_headers
+    extract_size_from_headers,
+    strip_media_prefixes
 )
 from ..constants import Config
 
@@ -83,9 +79,11 @@ async def get_video_size(
         proxy: 代理地址（可选）
 
     Returns:
-        (size_mb, status_code) 元组，size_mb为视频大小(MB)，如果无法获取返回None，
+        (size_mb, status_code) 元组，size_mb为视频大小(MB)，无法获取时为None，
         status_code为HTTP状态码（如果是403等特殊状态码），否则为None
     """
+    video_url = strip_media_prefixes(video_url)
+    
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
@@ -154,6 +152,8 @@ async def validate_media_url(
         (is_valid, status_code) 元组，is_valid表示媒体URL是否有效，
         status_code为HTTP状态码（如果是403等特殊状态码），否则为None
     """
+    media_url = strip_media_prefixes(media_url)
+    
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)

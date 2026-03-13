@@ -1,14 +1,8 @@
-# -*- coding: utf-8 -*-
-
 import os
 import shutil
 from typing import List, Optional
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from .logger import logger
 
 
 def cleanup_file(file_path: str) -> bool:
@@ -18,7 +12,7 @@ def cleanup_file(file_path: str) -> bool:
         file_path: 文件路径
 
     Returns:
-        清理是否成功
+        是否成功
     """
     if not file_path or not os.path.exists(file_path):
         return True
@@ -26,6 +20,7 @@ def cleanup_file(file_path: str) -> bool:
     try:
         if os.path.isfile(file_path):
             os.unlink(file_path)
+            _try_remove_empty_parent(file_path)
             return True
         else:
             logger.warning(f"路径不是文件: {file_path}")
@@ -33,6 +28,17 @@ def cleanup_file(file_path: str) -> bool:
     except Exception as e:
         logger.warning(f"清理文件失败: {file_path}, 错误: {e}")
         return False
+
+
+def _try_remove_empty_parent(file_path: str) -> None:
+    """尝试删除文件所在的空父目录（仅当目录为空时才删除）。"""
+    parent = os.path.dirname(file_path)
+    if not parent:
+        return
+    try:
+        os.rmdir(parent)
+    except OSError:
+        pass
 
 
 def cleanup_files(file_paths: List[str]) -> None:
@@ -53,7 +59,7 @@ def cleanup_directory(dir_path: str, ignore_errors: bool = True) -> bool:
         ignore_errors: 是否忽略错误（默认True，与shutil.rmtree行为一致）
 
     Returns:
-        清理是否成功
+        是否成功
     """
     if not dir_path or not os.path.exists(dir_path):
         return True

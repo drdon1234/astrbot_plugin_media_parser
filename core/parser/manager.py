@@ -1,17 +1,11 @@
-# -*- coding: utf-8 -*-
-
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 
 import aiohttp
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ..logger import logger
 
-from .handler.base import BaseVideoParser
+from .platform.base import BaseVideoParser
 from .router import LinkRouter
 from .utils import SkipParse, is_live_url
 
@@ -25,12 +19,11 @@ class ParserManager:
             parsers: 解析器列表
 
         Raises:
-            ValueError: 当parsers参数为空时
+            ValueError: parsers参数为空时
         """
         if not parsers:
             raise ValueError("parsers 参数不能为空")
         self.parsers = parsers
-        self.logger = logger
         self.link_router = LinkRouter(parsers)
 
     def find_parser(self, url: str) -> Optional[BaseVideoParser]:
@@ -40,7 +33,7 @@ class ParserManager:
             url: 视频链接
 
         Returns:
-            匹配的解析器实例，如果未找到返回None
+            匹配的解析器实例，未找到时为None
         """
         try:
             return self.link_router.find_parser(url)
@@ -61,58 +54,43 @@ class ParserManager:
         """
         return self.link_router.extract_links_with_parser(text)
 
-    def _deduplicate_links(
-        self,
-        links_with_parser: List[Tuple[str, BaseVideoParser]]
-    ) -> Dict[str, BaseVideoParser]:
-        """对链接进行去重
-
-        Args:
-            links_with_parser: 链接和解析器的列表
-
-        Returns:
-            去重后的链接和解析器字典
-        """
-        unique_links = {}
-        for link, parser in links_with_parser:
-            if link not in unique_links:
-                unique_links[link] = parser
-        return unique_links
-
     async def parse_text(
         self,
         text: str,
-        session: aiohttp.ClientSession
+        session: aiohttp.ClientSession,
+        links_with_parser: Optional[List[Tuple[str, BaseVideoParser]]] = None
     ) -> List[Dict[str, Any]]:
         """解析文本中的所有链接
 
         Args:
             text: 输入文本
             session: aiohttp会话
+            links_with_parser: 预先提取好的链接与解析器列表（可选）
 
         Returns:
             解析结果字典列表（元数据列表）
         """
-        links_with_parser = self.extract_all_links(text)
+        if links_with_parser is None:
+            links_with_parser = self.extract_all_links(text)
         if not links_with_parser:
-            self.logger.debug("未提取到任何可解析链接")
+            logger.debug("未提取到任何可解析链接")
             return []
-        unique_links = self._deduplicate_links(links_with_parser)
-        self.logger.debug(f"去重后需要解析 {len(unique_links)} 个链接")
+        unique_links = {link: parser for link, parser in links_with_parser}
+        logger.debug(f"需要解析 {len(unique_links)} 个链接")
         tasks = [
             parser.parse(session, url)
             for url, parser in unique_links.items()
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         metadata_list = []
+        link_items = list(unique_links.items())
         for i, result in enumerate(results):
-            url = list(unique_links.keys())[i]
-            parser = unique_links[url]
+            url, parser = link_items[i]
             if isinstance(result, Exception):
                 if isinstance(result, SkipParse):
-                    self.logger.debug(f"跳过解析: {url}, 原因: {result}")
+                    logger.debug(f"跳过解析: {url}, 原因: {result}")
                     continue
-                self.logger.exception(f"解析URL失败: {url}, 错误: {result}")
+                logger.exception(f"解析URL失败: {url}, 错误: {result}")
                 metadata_list.append({
                     'url': url,
                     'error': str(result),
@@ -127,6 +105,6 @@ class ParserManager:
                 if 'platform' not in result:
                     result['platform'] = parser.name
                 metadata_list.append(result)
-        self.logger.debug(f"解析完成，获得 {len(metadata_list)} 条元数据")
+        logger.debug(f"解析完成，获得 {len(metadata_list)} 条元数据")
         return metadata_list
 

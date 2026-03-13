@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-
 import re
 from typing import Optional, Dict, Any, Literal
 
 import aiohttp
 
-from .handler.image import download_image_to_file
+from .handler.image import download_image_to_cache
 from .handler.normal_video import download_video_to_cache
+from .handler.range_downloader import download_video_with_range_to_cache
+from .handler.dash import download_dash_to_cache
 from .handler.m3u8 import M3U8Handler
 
 
@@ -63,7 +63,7 @@ def detect_media_type(url: str) -> Literal['m3u8', 'image', 'video']:
 async def download_media(
     session: aiohttp.ClientSession,
     media_url: str,
-    media_type: Optional[Literal['m3u8', 'image', 'video']] = None,
+    media_type: Optional[Literal['dash', 'm3u8', 'image', 'video']] = None,
     cache_dir: Optional[str] = None,
     media_id: Optional[str] = None,
     index: int = 0,
@@ -87,10 +87,39 @@ async def download_media(
         use_ffmpeg: 是否使用ffmpeg（仅用于M3U8）
 
     Returns:
-        下载结果字典，包含file_path和size_mb字段，失败返回None
+        下载结果字典，包含file_path和size_mb字段，失败时为None
     """
-    if media_type is None:
+    actual_url = media_url
+    dash_video_url = ""
+    dash_audio_url = ""
+
+    if media_url.startswith('dash:'):
+        payload = media_url[5:]
+        parts = payload.split('||', 1)
+        dash_video_url = parts[0].strip()
+        dash_audio_url = parts[1].strip() if len(parts) > 1 else ""
+        actual_url = dash_video_url
+        media_type = 'dash'
+
+    if media_url.startswith('m3u8:'):
+        actual_url = media_url[5:]
+        media_type = 'm3u8'
+    elif media_type is None:
         media_type = detect_media_type(media_url)
+
+    if media_type == 'dash':
+        if not cache_dir or not dash_video_url:
+            return None
+        return await download_dash_to_cache(
+            session=session,
+            video_url=dash_video_url,
+            audio_url=dash_audio_url,
+            cache_dir=cache_dir,
+            media_id=media_id or 'media',
+            index=index,
+            headers=headers,
+            proxy=proxy
+        )
     
     if media_type == 'm3u8':
         if not cache_dir:
@@ -104,7 +133,7 @@ async def download_media(
             )
         
         return await m3u8_handler.download_m3u8_to_cache(
-            m3u8_url=media_url,
+            m3u8_url=actual_url,
             cache_dir=cache_dir,
             media_id=media_id or 'media',
             index=index,
@@ -112,14 +141,14 @@ async def download_media(
         )
     
     elif media_type == 'image':
-        file_path = await download_image_to_file(
+        file_path = await download_image_to_cache(
             session=session,
-            image_url=media_url,
+            image_url=actual_url,
+            cache_dir=cache_dir or '',
+            media_id=media_id or 'image',
             index=index,
             headers=headers,
-            proxy=proxy,
-            cache_dir=cache_dir,
-            media_id=media_id
+            proxy=proxy
         )
         if file_path:
             return {'file_path': file_path, 'size_mb': None}
@@ -129,12 +158,29 @@ async def download_media(
         if not cache_dir:
             return None
         
-        return await download_video_to_cache(
-            session=session,
-            video_url=media_url,
-            cache_dir=cache_dir,
-            media_id=media_id or 'media',
-            index=index,
-            headers=headers,
-            proxy=proxy
-        )
+        use_range_download = False
+        
+        if actual_url.startswith('range:'):
+            actual_url = actual_url[6:]
+            use_range_download = True
+        
+        if use_range_download:
+            return await download_video_with_range_to_cache(
+                session=session,
+                video_url=actual_url,
+                cache_dir=cache_dir,
+                media_id=media_id or 'media',
+                index=index,
+                headers=headers,
+                proxy=proxy
+            )
+        else:
+            return await download_video_to_cache(
+                session=session,
+                video_url=actual_url,
+                cache_dir=cache_dir,
+                media_id=media_id or 'media',
+                index=index,
+                headers=headers,
+                proxy=proxy
+            )
