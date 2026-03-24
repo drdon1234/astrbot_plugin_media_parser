@@ -1,8 +1,10 @@
+"""下载路由工具，根据链接特征识别媒体类型。"""
 import re
 from typing import Optional, Dict, Any, Literal
 
 import aiohttp
 
+from ..logger import logger
 from .handler.image import download_image_to_cache
 from .handler.normal_video import download_video_to_cache
 from .handler.range_downloader import download_video_with_range_to_cache
@@ -89,6 +91,11 @@ async def download_media(
     Returns:
         下载结果字典，包含file_path和size_mb字段，失败时为None
     """
+    logger.debug(
+        f"下载路由: url={media_url[:80]}..., type={media_type}, "
+        f"cache_dir={'有' if cache_dir else '无'}"
+    )
+
     actual_url = media_url
     dash_video_url = ""
     dash_audio_url = ""

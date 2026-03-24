@@ -1,3 +1,4 @@
+"""链接路由器，负责文本提链与解析器选择。"""
 from typing import List, Tuple
 
 from ..logger import logger
@@ -8,6 +9,7 @@ from .utils import is_live_url
 
 class LinkRouter:
 
+    """链接路由器，负责抽取文本链接并定位可用解析器。"""
     def __init__(self, parsers: List[BaseVideoParser]):
         """初始化链接清洗分流器
 

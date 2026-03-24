@@ -1,3 +1,4 @@
+"core.parser.platform.xiaohongshu 模块。"
 import asyncio
 import json
 import re
@@ -29,15 +30,21 @@ PC_UA = (
 
 class XiaohongshuParser(BaseVideoParser):
 
-    def __init__(self):
+    "XiaohongshuParser 类。"
+    def __init__(self, hot_comment_count: int = 0):
         """初始化小红书解析器"""
         super().__init__("xiaohongshu")
         self.headers = {
             "User-Agent": ANDROID_UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
         }
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError):
+            self.hot_comment_count = 0
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
@@ -105,7 +112,6 @@ class XiaohongshuParser(BaseVideoParser):
         url_lower = url.lower()
         return (
             '/explore/' in url_lower or
-            'xsec_token' in url_lower or
             'xsec_source=pc' in url_lower
         )
 
@@ -185,6 +191,7 @@ class XiaohongshuParser(BaseVideoParser):
                 "User-Agent": PC_UA,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
+                "Accept-Encoding": "gzip, deflate",
                 "Sec-CH-UA-Mobile": "?0",
                 "Sec-CH-UA-Platform": '"Windows"',
             }
@@ -440,6 +447,166 @@ class XiaohongshuParser(BaseVideoParser):
             "image_urls": image_urls,
         }
 
+    @staticmethod
+    def _format_comment_time(timestamp: Any) -> str:
+        "处理format comment time逻辑。"
+        if timestamp is None:
+            return ""
+        try:
+            value = int(timestamp)
+        except Exception:
+            return str(timestamp)
+        if value > 10 ** 12:
+            value = value // 1000
+        if value > 0:
+            return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+        return ""
+
+    def _normalize_hot_comment_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        "处理normalize hot comment item逻辑。"
+        user_info = (
+            item.get("user")
+            or item.get("userInfo")
+            or item.get("user_info")
+            or item.get("author")
+            or {}
+        )
+        user_id = (
+            user_info.get("userId")
+            or user_info.get("user_id")
+            or user_info.get("uid")
+            or user_info.get("id")
+            or item.get("userId")
+            or item.get("user_id")
+            or item.get("uid")
+            or ""
+        )
+        username = (
+            user_info.get("nickname")
+            or user_info.get("nickName")
+            or user_info.get("nick_name")
+            or user_info.get("name")
+            or item.get("nickname")
+            or item.get("user_name")
+            or ""
+        )
+        message = (
+            item.get("content")
+            or item.get("text")
+            or item.get("message")
+            or item.get("desc")
+            or ""
+        )
+        likes = (
+            item.get("likeCount")
+            or item.get("likeViewCount")
+            or item.get("like_count")
+            or item.get("liked_count")
+            or item.get("likes")
+            or item.get("digg_count")
+            or 0
+        )
+        created = (
+            item.get("time")
+            or item.get("create_time")
+            or item.get("createTime")
+            or item.get("ctime")
+        )
+        try:
+            likes_value = int(likes or 0)
+        except (TypeError, ValueError):
+            likes_value = 0
+        return {
+            "username": str(username),
+            "uid": str(user_id),
+            "likes": likes_value,
+            "message": str(message).replace("\n", " ").strip(),
+            "time": self._format_comment_time(created),
+        }
+
+    def _extract_primary_comments(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        "处理extract primary comments逻辑。"
+        note_data_comments = (
+            (
+                (
+                    (state.get("noteData") or {}).get("data") or {}
+                ).get("commentData")
+                or {}
+            ).get("comments")
+            or []
+        )
+        if isinstance(note_data_comments, list) and note_data_comments:
+            return [x for x in note_data_comments if isinstance(x, dict)]
+
+        comment_data_comments = (
+            ((state.get("commentData") or {}).get("comments") or [])
+            if isinstance(state, dict)
+            else []
+        )
+        if isinstance(comment_data_comments, list) and comment_data_comments:
+            return [x for x in comment_data_comments if isinstance(x, dict)]
+
+        note = state.get("note") or {}
+        note_map = note.get("noteDetailMap") or {}
+        if isinstance(note_map, dict):
+            for item in note_map.values():
+                comments_dict = (item or {}).get("comments") or {}
+                comments_list = comments_dict.get("list") or []
+                if isinstance(comments_list, list) and comments_list:
+                    return [x for x in comments_list if isinstance(x, dict)]
+
+        return []
+
+    def _collect_hot_comments_from_state(
+        self,
+        state: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        "处理collect hot comments from state逻辑。"
+        if self.hot_comment_count <= 0:
+            return []
+        candidates = self._extract_primary_comments(state)
+        if not candidates:
+            collected: List[Dict[str, Any]] = []
+
+            def walk(obj: Any) -> None:
+                """递归遍历状态树并收集候选评论项。"""
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        key_lower = key.lower()
+                        if key_lower in {"subcomments", "sub_comments"}:
+                            continue
+                        if key_lower in {"comments", "commentlist"} and isinstance(value, list):
+                            for item in value:
+                                if isinstance(item, dict):
+                                    collected.append(item)
+                        if key_lower == "comments" and isinstance(value, dict):
+                            maybe_list = value.get("list") or []
+                            if isinstance(maybe_list, list):
+                                for item in maybe_list:
+                                    if isinstance(item, dict):
+                                        collected.append(item)
+                        walk(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        walk(item)
+
+            walk(state)
+            candidates = collected
+
+        normalized: List[Dict[str, Any]] = []
+        seen = set()
+        for item in candidates:
+            norm = self._normalize_hot_comment_item(item)
+            if not norm["message"]:
+                continue
+            key = (norm["uid"], norm["message"], norm["time"])
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(norm)
+        normalized.sort(key=lambda x: x.get("likes", 0), reverse=True)
+        return normalized[:self.hot_comment_count]
+
     async def parse(
         self,
         session: aiohttp.ClientSession,
@@ -486,6 +653,7 @@ class XiaohongshuParser(BaseVideoParser):
             html = await self._fetch_page(session, full_url)
             initial_state = self._extract_initial_state(html)
             note_data = self._parse_note_data(initial_state, full_url)
+            hot_comments = self._collect_hot_comments_from_state(initial_state)
             logger.debug(f"[{self.name}] parse: 笔记数据提取成功")
 
             note_type = note_data.get("type", "normal")
@@ -534,6 +702,8 @@ class XiaohongshuParser(BaseVideoParser):
                     "image_headers": image_headers,
                     "video_headers": video_headers,
                 }
+                if hot_comments:
+                    result_dict["hot_comments"] = hot_comments
                 logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}")
                 return result_dict
             else:
@@ -552,5 +722,7 @@ class XiaohongshuParser(BaseVideoParser):
                     "image_headers": image_headers,
                     "video_headers": video_headers,
                 }
+                if hot_comments:
+                    result_dict["hot_comments"] = hot_comments
                 logger.debug(f"[{self.name}] parse: 解析完成(图片) {url}, title={title[:50]}, image_count={len(image_urls)}")
                 return result_dict

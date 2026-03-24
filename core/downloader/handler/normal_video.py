@@ -1,6 +1,7 @@
+"""普通视频直链下载处理器。"""
 import asyncio
 import os
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 import aiohttp
 
@@ -36,9 +37,10 @@ async def download_video_to_cache(
     """
     if not cache_dir:
         return None
-    
+
+    logger.debug(f"开始下载视频: {video_url}, media_id={media_id}, index={index}")
+
     def file_path_generator(content_type: str, url: str) -> str:
-        """生成缓存文件路径"""
         return generate_cache_file_path(
             cache_dir=cache_dir,
             media_id=media_id,
@@ -58,10 +60,12 @@ async def download_video_to_cache(
     )
     
     if file_path:
+        logger.debug(f"视频下载完成: {video_url} -> {file_path}, {size_mb}MB")
         return {
             'file_path': file_path,
             'size_mb': size_mb
         }
+    logger.debug(f"视频下载失败: {video_url}")
     return None
 
 
@@ -91,6 +95,7 @@ async def batch_download_videos(
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def download_one(item: Dict[str, Any]) -> Dict[str, Any]:
+        """下载单条普通视频并返回处理后的元数据。"""
         async with semaphore:
             try:
                 url_list = item.get('url_list', [])

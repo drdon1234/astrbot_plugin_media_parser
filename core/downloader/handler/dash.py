@@ -1,3 +1,4 @@
+"""DASH 下载处理器，负责音视频流下载与合并。"""
 import asyncio
 import os
 from typing import Dict, Any, Optional
@@ -5,7 +6,7 @@ from typing import Dict, Any, Optional
 import aiohttp
 
 from ...logger import logger
-from ...file_cleaner import cleanup_file
+from ...storage import cleanup_file, stamp_subdir
 from .base import download_media_from_url
 
 
@@ -19,6 +20,7 @@ async def _download_stream_normal(
     """普通流式下载。"""
 
     def file_path_generator(content_type: str, url: str) -> str:
+        """根据内容类型与链接生成目标文件路径。"""
         return output_path
 
     file_path, size_mb = await download_media_from_url(
@@ -149,8 +151,14 @@ async def download_dash_to_cache(
     if not cache_dir or not video_url:
         return None
 
+    logger.debug(
+        f"开始DASH下载: video={video_url[:60]}..., "
+        f"audio={'有' if audio_url else '无'}, index={index}"
+    )
+
     cache_subdir = os.path.normpath(os.path.join(cache_dir, media_id))
     os.makedirs(cache_subdir, exist_ok=True)
+    stamp_subdir(cache_subdir)
     video_temp_path = os.path.normpath(
         os.path.join(cache_subdir, f"video_{index}_video.m4s")
     )
@@ -232,6 +240,7 @@ async def download_dash_to_cache(
         except Exception:
             size_mb = None
 
+        logger.debug(f"DASH下载完成: {final_path}, {size_mb}MB")
         return {
             "file_path": os.path.normpath(final_path),
             "size_mb": size_mb

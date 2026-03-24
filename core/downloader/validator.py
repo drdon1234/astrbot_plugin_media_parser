@@ -1,3 +1,4 @@
+"""下载前校验逻辑，确保元数据与链接可用。"""
 import asyncio
 from typing import Optional, Tuple
 
@@ -83,7 +84,8 @@ async def get_video_size(
         status_code为HTTP状态码（如果是403等特殊状态码），否则为None
     """
     video_url = strip_media_prefixes(video_url)
-    
+
+    logger.debug(f"检查视频大小: {video_url}")
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
@@ -101,6 +103,7 @@ async def get_video_size(
                     return None, 403
                 size = extract_size_from_headers(response)
                 if size is not None:
+                    logger.debug(f"视频大小(HEAD): {size:.2f}MB, {video_url}")
                     return size, None
                 is_valid, _ = await validate_media_response(
                     response, video_url, is_video=True, allow_read_content=False
@@ -153,7 +156,8 @@ async def validate_media_url(
         status_code为HTTP状态码（如果是403等特殊状态码），否则为None
     """
     media_url = strip_media_prefixes(media_url)
-    
+
+    logger.debug(f"验证媒体URL: {media_url}, is_video={is_video}")
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
@@ -167,10 +171,12 @@ async def validate_media_url(
                 allow_redirects=True
             ) as response:
                 if response.status == 403:
+                    logger.debug(f"媒体验证: 403, {media_url}")
                     return False, 403
                 is_valid, _ = await validate_media_response(
                     response, media_url, is_video, allow_read_content=False
                 )
+                logger.debug(f"媒体验证: valid={is_valid}, {media_url}")
                 return is_valid, None
         except (aiohttp.ClientError, asyncio.TimeoutError):
             async with session.get(

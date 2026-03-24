@@ -1,5 +1,8 @@
-from __future__ import annotations
+"""core.parser.utils 模块。"""
 
+from __future__ import annotations
+import json
+from typing import Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -84,6 +87,36 @@ def is_live_url(url: str) -> bool:
         return False
 
 
+def extract_url_from_card_data(msg_data) -> Optional[str]:
+    """从单个消息段的 data 字段中提取 QQ 结构化卡片 URL。"""
+    try:
+        curl_link = None
+        if isinstance(msg_data, dict) and not msg_data.get('data'):
+            meta = msg_data.get("meta") or {}
+            detail_1 = meta.get("detail_1") or {}
+            curl_link = detail_1.get("qqdocurl")
+            if not curl_link:
+                news = meta.get("news") or {}
+                curl_link = news.get("jumpUrl")
+
+        if not curl_link:
+            json_str = (
+                msg_data.get('data', '')
+                if isinstance(msg_data, dict) else msg_data
+            )
+            if json_str and isinstance(json_str, str):
+                message_data = json.loads(json_str)
+                meta = message_data.get("meta") or {}
+                detail_1 = meta.get("detail_1") or {}
+                curl_link = detail_1.get("qqdocurl")
+                if not curl_link:
+                    news = meta.get("news") or {}
+                    curl_link = news.get("jumpUrl")
+        return curl_link
+    except (AttributeError, KeyError, json.JSONDecodeError, TypeError):
+        return None
+
+
 def build_request_headers(
     is_video: bool = False,
     referer: str = None,
@@ -126,6 +159,7 @@ def build_request_headers(
             'User-Agent': effective_user_agent,
             'Accept': '*/*',
             'Accept-Language': default_accept_language,
+            'Accept-Encoding': 'gzip, deflate',
         }
     else:
         headers = {
@@ -135,6 +169,7 @@ def build_request_headers(
                 'image/*,*/*;q=0.8'
             ),
             'Accept-Language': default_accept_language,
+            'Accept-Encoding': 'gzip, deflate',
         }
     
     if referer_url:

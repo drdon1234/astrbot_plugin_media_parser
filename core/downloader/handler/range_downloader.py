@@ -1,3 +1,4 @@
+"""Range 分段下载器实现。"""
 from typing import Dict, Any, Optional
 
 import aiohttp

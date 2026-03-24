@@ -1,3 +1,4 @@
+"""解析管理器，维护解析器列表并按链接匹配。"""
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -7,11 +8,12 @@ from ..logger import logger
 
 from .platform.base import BaseVideoParser
 from .router import LinkRouter
-from .utils import SkipParse, is_live_url
+from .utils import SkipParse
 
 
 class ParserManager:
 
+    """解析器管理器，按链接选择并调用具体平台解析器。"""
     def __init__(self, parsers: List[BaseVideoParser]):
         """初始化解析器管理器
 
@@ -93,17 +95,23 @@ class ParserManager:
                 logger.exception(f"解析URL失败: {url}, 错误: {result}")
                 metadata_list.append({
                     'url': url,
+                    'source_url': url,
                     'error': str(result),
                     'video_urls': [],
                     'image_urls': [],
                     'image_headers': {},
                     'video_headers': {},
                     'platform': parser.name,
+                    'parser_name': parser.name,
                     'has_valid_media': False
                 })
             elif result:
                 if 'platform' not in result:
                     result['platform'] = parser.name
+                if 'parser_name' not in result:
+                    result['parser_name'] = parser.name
+                if 'source_url' not in result:
+                    result['source_url'] = url
                 metadata_list.append(result)
         logger.debug(f"解析完成，获得 {len(metadata_list)} 条元数据")
         return metadata_list

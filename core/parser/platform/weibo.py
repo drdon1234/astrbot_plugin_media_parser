@@ -1,3 +1,4 @@
+"""微博解析器实现。"""
 import json
 import re
 from datetime import datetime
@@ -14,6 +15,7 @@ from ..utils import build_request_headers
 
 class WeiboParser(BaseVideoParser):
 
+    """微博解析器实现。"""
     URL_PATTERNS = {
         'weibo_com': [
             r'weibo\.com/\d+/[A-Za-z0-9]+',
@@ -28,9 +30,13 @@ class WeiboParser(BaseVideoParser):
         ],
     }
 
-    def __init__(self):
+    def __init__(self, hot_comment_count: int = 0):
         """初始化微博解析器"""
         super().__init__("weibo")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError):
+            self.hot_comment_count = 0
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
@@ -170,6 +176,7 @@ class WeiboParser(BaseVideoParser):
         headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'content-type': 'application/x-www-form-urlencoded',
+            'accept-encoding': 'gzip, deflate',
         }
 
         data = {'cb': 'visitor_gray_callback'}
@@ -357,6 +364,144 @@ class WeiboParser(BaseVideoParser):
         
         return video_urls, image_urls
 
+    def _build_weibo_headers(self, referer: str, cookies: str) -> Dict[str, str]:
+        """构建微博接口请求头。"""
+        xsrf_token = ""
+        match = re.search(r"(?:^|;\s*)XSRF-TOKEN=([^;]+)", cookies)
+        if match:
+            xsrf_token = match.group(1)
+        headers = {
+            "user-agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0"
+            ),
+            "referer": referer,
+            "cookie": cookies,
+            "accept": "application/json, text/plain, */*",
+            "x-requested-with": "XMLHttpRequest",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
+            "accept-language": "zh-CN,zh;q=0.9",
+        }
+        if xsrf_token:
+            headers["x-xsrf-token"] = xsrf_token
+        return headers
+
+    @staticmethod
+    def _format_comment_time(created_at: str) -> str:
+        """将微博评论时间格式化为统一展示文本。"""
+        if not created_at:
+            return ""
+        try:
+            dt = datetime.strptime(created_at, "%a %b %d %H:%M:%S %z %Y")
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return created_at
+
+    def _normalize_hot_comment_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """将微博热评结构规范化为统一字段。"""
+        user = item.get("user") or {}
+        try:
+            likes = int(item.get("like_counts", 0) or 0)
+        except (TypeError, ValueError):
+            likes = 0
+        message = self._clean_html_text(
+            str(item.get("text_raw") or item.get("text") or "")
+        )
+        time_text = self._format_comment_time(str(item.get("created_at", "") or ""))
+        return {
+            "username": str(user.get("screen_name", "") or ""),
+            "uid": str(user.get("id", "") or ""),
+            "likes": likes,
+            "message": message,
+            "time": time_text,
+        }
+
+    async def _fetch_hot_comments(
+        self,
+        session: aiohttp.ClientSession,
+        cookies: str,
+        status_id: str,
+        uid: str = ""
+    ) -> List[Dict[str, Any]]:
+        """异步拉取微博热评列表。"""
+        if self.hot_comment_count <= 0:
+            return []
+        status_id = str(status_id or "").strip()
+        uid = str(uid or "").strip()
+        if not status_id:
+            return []
+
+        params = {
+            "id": status_id,
+            "flow": 0,
+            "is_reload": 1,
+            "is_show_bulletin": 2,
+            "is_mix": 0,
+            "count": max(20, self.hot_comment_count),
+        }
+        if uid:
+            params["uid"] = uid
+
+        headers = self._build_weibo_headers(
+            referer=f"https://weibo.com/0/{status_id}",
+            cookies=cookies
+        )
+        async with session.get(
+            "https://weibo.com/ajax/statuses/buildComments",
+            headers=headers,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(
+                    f"获取微博热评失败: HTTP {resp.status}, "
+                    f"response: {body[:300]}"
+                )
+            data = await resp.json(content_type=None)
+        comment_list = data.get("data")
+        if not isinstance(comment_list, list):
+            raise RuntimeError(f"微博热评接口返回异常: {data}")
+        comments = [
+            self._normalize_hot_comment_item(item)
+            for item in comment_list
+            if isinstance(item, dict)
+        ]
+        comments = [item for item in comments if item.get("message")]
+        comments.sort(key=lambda x: x.get("likes", 0), reverse=True)
+        return comments[:self.hot_comment_count]
+
+    async def _attach_hot_comments_to_result(
+        self,
+        session: aiohttp.ClientSession,
+        result: Dict[str, Any],
+        cookies: str,
+        status_id: str,
+        uid: str = ""
+    ) -> None:
+        """按配置将热评附加到微博解析结果。"""
+        if self.hot_comment_count <= 0:
+            return
+        if not isinstance(result, dict):
+            return
+        try:
+            comments = await self._fetch_hot_comments(
+                session=session,
+                cookies=cookies,
+                status_id=status_id,
+                uid=uid
+            )
+            if comments:
+                result["hot_comments"] = comments
+        except Exception as e:
+            logger.warning(
+                f"[{self.name}] 获取热评失败: status_id={status_id}, "
+                f"uid={uid}, 错误: {e}"
+            )
+
     async def _parse_weibo_com(
         self,
         session: aiohttp.ClientSession,
@@ -391,6 +536,7 @@ class WeiboParser(BaseVideoParser):
             'referer': url,
             'cookie': cookies,
             'accept': 'application/json, text/plain, */*',
+            'accept-encoding': 'gzip, deflate',
             'x-requested-with': 'XMLHttpRequest',
             'sec-fetch-site': 'same-origin',
             'sec-fetch-mode': 'cors',
@@ -428,10 +574,21 @@ class WeiboParser(BaseVideoParser):
                 author = self._format_author(screen_name, user_id)
 
                 video_urls, image_urls = self._separate_media_urls(media_urls)
-
-                return self._build_result_dict(
+                status_id = str(
+                    json_data.get("id") or json_data.get("mid") or page_id
+                )
+                uid = str(user_id or "")
+                result = self._build_result_dict(
                     url, author, clean_text, formatted_timestamp, video_urls, image_urls
                 )
+                await self._attach_hot_comments_to_result(
+                    session=session,
+                    result=result,
+                    cookies=cookies,
+                    status_id=status_id,
+                    uid=uid
+                )
+                return result
             else:
                 text = await response.text()
                 raise Exception(f"获取微博数据失败，状态码: {response.status}, 响应: {text}")
@@ -462,6 +619,7 @@ class WeiboParser(BaseVideoParser):
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0',
             'referer': 'https://visitor.passport.weibo.cn/',
             'cookie': cookies,
+            'accept-encoding': 'gzip, deflate',
         }
 
         async with session.get(detail_url, headers=headers) as response:
@@ -492,10 +650,23 @@ class WeiboParser(BaseVideoParser):
                             author = self._format_author(screen_name, user_id)
 
                             video_urls, image_urls = self._separate_media_urls(media_urls)
-
-                            return self._build_result_dict(
+                            status_id = str(
+                                status.get("id") or
+                                status.get("mid") or
+                                blog_id
+                            )
+                            uid = str(user_id or "")
+                            result = self._build_result_dict(
                                 url, author, clean_text, formatted_timestamp, video_urls, image_urls
                             )
+                            await self._attach_hot_comments_to_result(
+                                session=session,
+                                result=result,
+                                cookies=cookies,
+                                status_id=status_id,
+                                uid=uid
+                            )
+                            return result
                         else:
                             raise Exception("JSON 数据为空")
                     except json.JSONDecodeError as e:
@@ -534,6 +705,7 @@ class WeiboParser(BaseVideoParser):
             'referer': referer_url,
             'cookie': cookies,
             'content-type': 'application/x-www-form-urlencoded',
+            'accept-encoding': 'gzip, deflate',
         }
 
         payload = {
@@ -555,10 +727,19 @@ class WeiboParser(BaseVideoParser):
                 author = self._format_author(screen_name, user_id)
 
                 video_urls, image_urls = self._separate_media_urls(media_urls)
-
-                return self._build_result_dict(
+                status_id = str(playinfo.get("mid") or "")
+                uid = str(user_id or "")
+                result = self._build_result_dict(
                     url, author, desc, '', video_urls, image_urls
                 )
+                await self._attach_hot_comments_to_result(
+                    session=session,
+                    result=result,
+                    cookies=cookies,
+                    status_id=status_id,
+                    uid=uid
+                )
+                return result
             else:
                 text = await response.text()
                 raise Exception(f"获取视频数据失败，状态码: {response.status}, 响应: {text}")

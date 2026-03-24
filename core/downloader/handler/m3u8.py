@@ -1,9 +1,9 @@
+"""M3U8 下载处理器，负责索引解析、分片下载与拼接。"""
 import asyncio
 import os
 import re
 import shutil
 import tempfile
-import time
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -11,12 +11,13 @@ import aiohttp
 
 from ...logger import logger
 
-from ...file_cleaner import cleanup_directory
+from ...storage import cleanup_directory, stamp_subdir
 from ...constants import Config
 
 
 class M3U8Handler:
 
+    """M3U8 下载处理器，负责分片任务调度与结果合并。"""
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -153,6 +154,7 @@ class M3U8Handler:
         semaphore = asyncio.Semaphore(self.max_concurrent_segments)
 
         async def download_with_limit(i: int, url: str) -> Optional[str]:
+            """在并发信号量限制下下载单个分片。"""
             async with semaphore:
                 return await download_segment(i, url)
 
@@ -366,6 +368,7 @@ class M3U8Handler:
         try:
             cache_subdir = os.path.join(cache_dir, media_id)
             os.makedirs(cache_subdir, exist_ok=True)
+            stamp_subdir(cache_subdir)
             filename = f"video_{index}.mp4"
             output_path = os.path.join(cache_subdir, filename)
 

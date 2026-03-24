@@ -1,3 +1,4 @@
+"""B 站鉴权运行时，管理 Cookie 校验、登录与凭据持久化。"""
 import asyncio
 import json
 import os
@@ -35,6 +36,7 @@ class BilibiliAuthRuntime:
         credential_path: str = "",
         local_debug_mode: bool = False
     ):
+        """初始化鉴权运行时并准备凭据缓存状态。"""
         self.enabled = enabled
         self._configured_cookie = (configured_cookie or "").strip()
         self.credential_path = credential_path
@@ -57,13 +59,16 @@ class BilibiliAuthRuntime:
 
     @property
     def cookie_unavailable_reason(self) -> str:
+        """返回当前 Cookie 不可用原因（若存在）。"""
         return self._cookie_unavailable_reason
 
     def set_configured_cookie(self, cookie_header: str) -> None:
+        """更新配置来源的 Cookie 并重置相关缓存。"""
         self._configured_cookie = (cookie_header or "").strip()
         self._reset_validation_cache()
 
     def mark_cookie_unavailable(self, reason: str) -> None:
+        """标记 Cookie 不可用并记录原因。"""
         reason = reason or "cookie_unavailable"
         if self._cookie_unavailable_reason != reason:
             self._local_prompt_asked = False
@@ -80,16 +85,19 @@ class BilibiliAuthRuntime:
             self._cookie_unavailable_warned = True
 
     def _clear_cookie_unavailable_state(self) -> None:
+        """清除 Cookie 不可用状态标记。"""
         self._cookie_unavailable_reason = ""
         self._cookie_unavailable_warned = False
 
     def _reset_validation_cache(self) -> None:
+        """重置 Cookie 校验缓存。"""
         self._last_cookie_fingerprint = ""
         self._last_validation_ok = None
         self._last_validation_at = 0.0
 
     @staticmethod
     def _build_cookie_header(credentials: Dict[str, Any]) -> str:
+        """将凭据字典转换为 Cookie 请求头字符串。"""
         keys = BilibiliAuthRuntime._PRIMARY_COOKIE_KEYS
         cookie_parts = []
         for key in keys:
@@ -102,11 +110,13 @@ class BilibiliAuthRuntime:
 
     @staticmethod
     def _cookie_fingerprint(cookie_header: str) -> str:
+        """生成用于缓存命中的 Cookie 指纹。"""
         if not cookie_header:
             return ""
         return f"{len(cookie_header)}:{hash(cookie_header)}"
 
     def _load_credentials(self) -> None:
+        """从本地持久化文件加载凭据。"""
         if not self.credential_path:
             return
         if not os.path.exists(self.credential_path):
@@ -121,6 +131,7 @@ class BilibiliAuthRuntime:
             logger.warning(f"[bilibili] 读取运行时Cookie文件失败: {e}")
 
     def _save_credentials(self) -> None:
+        """将凭据写入本地持久化文件。"""
         if not self.credential_path:
             return
         try:
@@ -133,6 +144,7 @@ class BilibiliAuthRuntime:
             logger.warning(f"[bilibili] 保存运行时Cookie文件失败: {e}")
 
     def _active_cookie(self) -> Tuple[str, str]:
+        """返回当前优先使用的 Cookie 字典。"""
         if self._runtime_cookie_header:
             return "runtime", self._runtime_cookie_header
         if self._configured_cookie:
@@ -144,6 +156,7 @@ class BilibiliAuthRuntime:
         session: aiohttp.ClientSession,
         cookie_header: str
     ) -> Optional[bool]:
+        """异步校验 Cookie 的可用性。"""
         headers = {
             "User-Agent": UA,
             "Referer": "https://www.bilibili.com",
@@ -181,6 +194,7 @@ class BilibiliAuthRuntime:
         cookie_header: str,
         force: bool = False
     ) -> Optional[bool]:
+        """带缓存地异步校验 Cookie 可用性。"""
         fingerprint = self._cookie_fingerprint(cookie_header)
         now = time.time()
 
@@ -209,6 +223,7 @@ class BilibiliAuthRuntime:
         self,
         session: aiohttp.ClientSession
     ) -> str:
+        """获取可直接用于请求的 Cookie 请求头。"""
         if not self.enabled:
             return ""
 
@@ -250,6 +265,7 @@ class BilibiliAuthRuntime:
         self,
         session: aiohttp.ClientSession
     ) -> Dict[str, str]:
+        """异步生成扫码登录所需的展示载荷。"""
         headers = {
             "User-Agent": UA,
             "Referer": "https://www.bilibili.com",
@@ -289,6 +305,7 @@ class BilibiliAuthRuntime:
         resp: aiohttp.ClientResponse,
         poll_result: Dict[str, Any]
     ) -> None:
+        """从登录接口响应中提取凭据字段。"""
         cookies_dict: Dict[str, str] = {}
 
         set_cookie_headers = resp.headers.getall("Set-Cookie", [])
@@ -334,6 +351,7 @@ class BilibiliAuthRuntime:
         qrcode_key: str,
         timeout_seconds: int
     ) -> Dict[str, Any]:
+        """轮询登录状态直到完成或超时。"""
         deadline = time.time() + max(1, timeout_seconds)
         headers = {
             "User-Agent": UA,

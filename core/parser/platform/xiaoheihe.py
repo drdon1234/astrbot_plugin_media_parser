@@ -1,3 +1,4 @@
+"core.parser.platform.xiaoheihe 模块。"
 import asyncio
 import html as html_lib
 import json
@@ -22,6 +23,7 @@ UA = (
 
 class XiaoheiheParser(BaseVideoParser):
 
+    "XiaoheiheParser 类。"
     def __init__(
         self,
         use_video_proxy: bool = False,
@@ -40,7 +42,8 @@ class XiaoheiheParser(BaseVideoParser):
         self._default_headers = {
             "User-Agent": UA,
             "Referer": "https://www.xiaoheihe.cn/",
-            "Accept-Language": "zh-CN,zh;q=0.9"
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
         }
     
     def _add_m3u8_prefix_to_urls(self, urls: List[str]) -> List[str]:
@@ -355,6 +358,7 @@ class XiaoheiheParser(BaseVideoParser):
         resolving: set[int] = set()
 
         def resolve(v: Any) -> Any:
+            "处理resolve逻辑。"
             if isinstance(v, int) and 0 <= v < n:
                 return resolve_idx(v)
             if isinstance(v, list):
@@ -377,6 +381,7 @@ class XiaoheiheParser(BaseVideoParser):
             return v
 
         def resolve_idx(idx: int) -> Any:
+            "处理resolve idx逻辑。"
             if idx in memo:
                 return memo[idx]
             if idx in resolving:
@@ -673,6 +678,7 @@ class XiaoheiheParser(BaseVideoParser):
                             stats_map[it["desc"]] = it
 
             def stat_line(desc_key: str, out_label: str, include_rank: bool = False) -> str:
+                """按指标键生成单行展示文本。"""
                 it = stats_map.get(desc_key)
                 if not it:
                     return ""

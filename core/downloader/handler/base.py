@@ -1,3 +1,4 @@
+"""下载处理器基类与通用下载辅助函数。"""
 import asyncio
 import os
 from typing import Optional, Callable, Dict, Any, Tuple
@@ -6,7 +7,7 @@ import aiohttp
 
 from ...logger import logger
 
-from ...file_cleaner import cleanup_file
+from ...storage import cleanup_file
 from ..utils import extract_size_from_headers
 from ..validator import validate_media_response
 from ...constants import Config
@@ -133,6 +134,7 @@ async def range_download_file(
     write_lock = asyncio.Lock()
 
     async def download_chunk(chunk_idx: int, output_file) -> Tuple[int, bool]:
+        """并发下载单个分片并写入目标文件的正确偏移。"""
         async with semaphore:
             start = chunk_idx * chunk_size
             end = min(start + chunk_size - 1, file_size - 1)

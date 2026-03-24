@@ -1,22 +1,16 @@
+"""消息发送封装，统一不同会话场景下的发送行为。"""
 from typing import Any, List
 
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Nodes, Plain, Image, Node
 
 from .node_builder import is_pure_image_gallery
-from ..file_cleaner import cleanup_files
 from ..logger import logger
 
 
 class MessageSender:
 
-    def __init__(self):
-        """初始化消息发送器
-
-        Args:
-            无
-        """
-        pass
+    """消息发送器，封装统一的私聊/群聊发送接口。"""
 
     def get_sender_info(self, event: AstrMessageEvent) -> tuple:
         """获取发送者信息
@@ -70,17 +64,7 @@ class MessageSender:
 
         if normal_link_nodes:
             flat_nodes = []
-            normal_video_files_to_cleanup = []
             for link_idx, link_nodes in enumerate(normal_link_nodes):
-                if link_idx < len(normal_metadata):
-                    link_video_files = normal_metadata[link_idx].get(
-                        'video_files',
-                        []
-                    )
-                    if link_video_files:
-                        normal_video_files_to_cleanup.extend(
-                            link_video_files
-                        )
                 if is_pure_image_gallery(link_nodes):
                     texts = [
                         node for node in link_nodes
@@ -117,10 +101,7 @@ class MessageSender:
                         content=[Plain(separator)]
                     ))
             if flat_nodes:
-                try:
-                    await event.send(event.chain_result([Nodes(flat_nodes)]))
-                finally:
-                    cleanup_files(normal_video_files_to_cleanup)
+                await event.send(event.chain_result([Nodes(flat_nodes)]))
 
         if large_media_link_nodes:
             await self.send_large_media_results(
@@ -161,76 +142,53 @@ class MessageSender:
             f"⚠️ 链接中包含超过{threshold_mb}MB的视频时"
             f"将单独发送所有媒体"
         )
-        all_video_files_to_cleanup = []
-        try:
-            await event.send(event.plain_result(notice_text))
-            for link_idx, link_nodes in enumerate(link_nodes_list):
-                link_video_files = []
-                if link_idx < len(metadata):
-                    link_video_files = metadata[link_idx].get('video_files', [])
-                all_video_files_to_cleanup.extend(link_video_files)
-                try:
-                    for node in link_nodes:
-                        if node is not None:
-                            try:
-                                await event.send(event.chain_result([node]))
-                            except Exception as e:
-                                logger.warning(f"发送大媒体节点失败: {e}")
-                except Exception as e:
-                    logger.warning(f"发送大媒体链接失败: {e}")
-                finally:
-                    cleanup_files(link_video_files)
-                if link_idx < len(link_nodes_list) - 1:
+        await event.send(event.plain_result(notice_text))
+        for link_idx, link_nodes in enumerate(link_nodes_list):
+            for node in link_nodes:
+                if node is not None:
                     try:
-                        await event.send(event.plain_result(separator))
+                        await event.send(event.chain_result([node]))
                     except Exception as e:
-                        logger.warning(f"发送分隔符失败: {e}")
-        except Exception as e:
-            logger.exception(f"发送大媒体结果失败: {e}")
-            cleanup_files(all_video_files_to_cleanup)
-            raise
+                        logger.warning(f"发送大媒体节点失败: {e}")
+            if link_idx < len(link_nodes_list) - 1:
+                try:
+                    await event.send(event.plain_result(separator))
+                except Exception as e:
+                    logger.warning(f"发送分隔符失败: {e}")
 
     async def send_unpacked_results(
         self,
         event: AstrMessageEvent,
-        all_link_nodes: list,
-        link_metadata: list
+        all_link_nodes: list
     ):
         """发送非打包的结果（独立发送）
 
         Args:
             event: 消息事件对象
             all_link_nodes: 所有链接节点列表
-            link_metadata: 链接元数据列表
         """
         separator = "-------------------------------------"
-        for link_idx, (link_nodes, metadata) in enumerate(
-            zip(all_link_nodes, link_metadata)
-        ):
-            link_video_files = metadata.get('video_files', [])
-            try:
-                if is_pure_image_gallery(link_nodes):
-                    texts = [
-                        node for node in link_nodes
-                        if isinstance(node, Plain)
-                    ]
-                    images = [
-                        node for node in link_nodes
-                        if isinstance(node, Image)
-                    ]
-                    for text in texts:
-                        await event.send(event.chain_result([text]))
-                    if images:
-                        await event.send(event.chain_result(images))
-                else:
-                    for node in link_nodes:
-                        if node is not None:
-                            try:
-                                await event.send(event.chain_result([node]))
-                            except Exception as e:
-                                logger.warning(f"发送节点失败: {e}")
-            finally:
-                cleanup_files(link_video_files)
+        for link_idx, link_nodes in enumerate(all_link_nodes):
+            if is_pure_image_gallery(link_nodes):
+                texts = [
+                    node for node in link_nodes
+                    if isinstance(node, Plain)
+                ]
+                images = [
+                    node for node in link_nodes
+                    if isinstance(node, Image)
+                ]
+                for text in texts:
+                    await event.send(event.chain_result([text]))
+                if images:
+                    await event.send(event.chain_result(images))
+            else:
+                for node in link_nodes:
+                    if node is not None:
+                        try:
+                            await event.send(event.chain_result([node]))
+                        except Exception as e:
+                            logger.warning(f"发送节点失败: {e}")
             if link_idx < len(all_link_nodes) - 1:
                 await event.send(event.plain_result(separator))
 

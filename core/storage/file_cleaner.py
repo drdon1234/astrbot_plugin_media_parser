@@ -1,8 +1,10 @@
+"""文件清理工具，负责临时文件与空目录回收。"""
 import os
 import shutil
-from typing import List, Optional
+from typing import List
 
-from .logger import logger
+from ..logger import logger
+from .cache_registry import MARKER_FILE_NAME
 
 
 def cleanup_file(file_path: str) -> bool:
@@ -31,12 +33,21 @@ def cleanup_file(file_path: str) -> bool:
 
 
 def _try_remove_empty_parent(file_path: str) -> None:
-    """尝试删除文件所在的空父目录（仅当目录为空时才删除）。"""
+    """尝试删除文件所在的空父目录。
+
+    若目录仅剩插件标记文件，先清除标记再移除目录，
+    避免留下只含 .astrbot_media_parser 的空壳子目录。
+    """
     parent = os.path.dirname(file_path)
     if not parent:
         return
     try:
-        os.rmdir(parent)
+        remaining = os.listdir(parent)
+        if not remaining:
+            os.rmdir(parent)
+        elif remaining == [MARKER_FILE_NAME]:
+            os.unlink(os.path.join(parent, MARKER_FILE_NAME))
+            os.rmdir(parent)
     except OSError:
         pass
 
@@ -47,6 +58,8 @@ def cleanup_files(file_paths: List[str]) -> None:
     Args:
         file_paths: 文件路径列表
     """
+    if file_paths:
+        logger.debug(f"开始清理 {len(file_paths)} 个文件")
     for file_path in file_paths:
         cleanup_file(file_path)
 
@@ -77,4 +90,3 @@ def cleanup_directory(dir_path: str, ignore_errors: bool = True) -> bool:
             return False
         else:
             raise
-

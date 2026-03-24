@@ -13,15 +13,19 @@ astrbot_plugin_media_parser/
 ├── main.py                          # 插件主入口
 ├── run_local.py                     # 本地测试工具脚本
 ├── core/
-│   ├── config_manager.py            # 配置管理器
+│   ├── config_manager.py            # 配置管理器（含 dataclass 分组：Trigger/Message/Permission/Download/Proxy/Bilibili/Relay/Admin）
 │   ├── logger.py                    # 统一日志打印器
-│   ├── types.py                     # 类型定义
+│   ├── types.py                     # 类型定义（MediaMetadata / LinkBuildMeta / BuildAllNodesResult）
 │   ├── constants.py                 # 常量定义
-│   ├── file_cleaner.py              # 文件清理工具
+│   ├── storage/                     # 存储与缓存管理模块
+│   │   ├── __init__.py              # 导出 cleanup_file/cleanup_files/cleanup_directory/CacheRegistry/stamp_subdir/register_files_with_token_service
+│   │   ├── file_cleaner.py          # 文件清理工具
+│   │   ├── file_token.py            # 文件Token服务集成（注册已下载媒体为可回调的临时URL）
+│   │   └── cache_registry.py        # 缓存目录注册表（跨配置追踪 + 安全清理）
 │   ├── parser/                      # 解析器模块
 │   │   ├── manager.py               # 解析器管理器
 │   │   ├── router.py                # 链接路由分发器
-│   │   ├── utils.py                 # 解析器工具函数
+│   │   ├── utils.py                 # 解析器工具函数（含 extract_url_from_card_data）
 │   │   ├── runtime_manager/         # 平台运行时管理模块（Cookie/登录态）
 │   │   │   └── bilibili/
 │   │   │       └── auth.py          # B站登录态运行时（BilibiliAuthRuntime）
@@ -69,12 +73,16 @@ astrbot_plugin_media_parser/
 #### 1.3.2 核心支撑组件
 - **ConfigManager** (config_manager.py): 配置管理器
   - 解析配置文件，管理解析器启用状态与下载配置
-  - 管理触发设置与黑白名单权限
-  - 处理各项代理配置并在运行时下发
+  - 配置按领域分组为 dataclass：`TriggerConfig`、`MessageConfig`、`PermissionConfig`、`DownloadConfig`、`ProxyConfig`、`BilibiliEnhancedConfig`、`MediaRelayConfig`、`AdminConfig`
+  - `PermissionConfig.check()` 提供权限判定（黑白名单优先级）
+  - `TriggerConfig.should_parse()` / `has_keyword()` 提供触发判定
+  - 提供类型安全的解析辅助方法（`_parse_positive_int`、`_parse_non_negative_float` 等）
 - **Logger** (logger.py): 日志记录器
   - 导出全局统一的 `logger` 对象，方便各模块导入使用
 - **Types** (types.py): 类型模块
-  - 提供 `MediaMetadata` 等 TypedDict，规范系统间数据流
+  - `MediaMetadata`：解析→下载→中转全流程 TypedDict，按阶段分组字段
+  - `LinkBuildMeta`：节点构建阶段的辅助元数据
+  - `BuildAllNodesResult`：`build_all_nodes` 的 NamedTuple 返回类型
 
 #### 1.3.3 解析器模块 (parser/)
 - **ParserManager**: 解析器管理器
@@ -155,11 +163,22 @@ astrbot_plugin_media_parser/
   - 当B站Cookie不可用时，后台触发管理员确认 → 发送登录链接/二维码 → 轮询登录状态
   - 管理员发送可解析链接时不拦截消息（仅拦截纯文本回复）
 
-#### 1.3.7 工具模块
-- **FileCleaner**: 文件清理工具
+#### 1.3.7 存储与工具模块 (storage/)
+- **FileCleaner** (storage/file_cleaner.py): 文件清理工具
   - 清理临时文件
   - 清理缓存目录
-  - 删除文件后自动移除空父目录
+  - 删除文件后自动移除空父目录（感知 `.astrbot_media_parser` 标记文件：若目录仅剩标记则一并清除）
+  - 文件清理统一由 main.py 的 finally 块调度，node_builder/sender 不参与清理
+
+- **FileToken** (storage/file_token.py): 文件Token服务集成
+  - 将已下载的媒体文件注册到 AstrBot 文件 Token 服务
+  - 生成可回调的临时 URL，供消息平台拉取媒体
+
+- **CacheRegistry** (storage/cache_registry.py): 缓存目录注册表
+  - 持久化记录本插件使用过的所有缓存路径（JSON 文件，存于系统临时目录）
+  - 在媒体子目录中放置标记文件（`.astrbot_media_parser`）标识归属
+  - 安全清理：仅删除带标记的子目录，不触碰无标记内容或根目录
+  - 管理员主动清理 / 插件终止时自动清理
 
 - **Constants**: 常量定义
   - 超时时间
@@ -178,13 +197,18 @@ astrbot_plugin_media_parser/
 #### 1.3.9 资源管理
 - **DownloadManager.shutdown()**: 资源清理方法
   - 关闭所有活动的aiohttp会话
-  - 取消所有正在进行的下载任务
+  - 取消所有正在进行的下载任务（含 `_batch_download_media` 内部任务）
   - 在插件terminate时调用
-- **FileCleaner**: 文件清理工具
+- **storage 模块**: 文件与缓存清理
   - 清理临时文件（图片）
   - 清理视频文件（含 DASH 临时 .m4s 文件）
-  - 删除文件后自动移除空父目录
-  - 清理缓存目录
+  - 删除文件后自动移除空的缓存子目录（标记感知：仅剩 `.astrbot_media_parser` 时视为空目录一并删除）
+  - 预下载模式下全部下载失败时，由 `DownloadManager` 主动清理空壳子目录
+  - CacheRegistry 追踪所有缓存根目录，在插件终止或管理员手动清理时安全清理带标记的子目录
+- **文件Token服务模式**: 延迟清理
+  - 当 `use_file_token_service` 启用时，文件在发送后延迟 `file_token_ttl` 秒清理
+  - 延迟清理仅清理当前请求的文件，不做全局目录扫描，避免并发请求间竞态
+  - 确保消息平台有足够时间通过回调 URL 拉取文件
 
 ## 二、程序执行链
 
@@ -197,7 +221,10 @@ astrbot_plugin_media_parser/
   ↓
 权限检查 → 消息文本提取 → 提取可解析链接
   ├─ 有链接 → 跳过交互处理器，进入解析流程
-  └─ 无链接 → 检查管理员交互（handle_admin_reply） → 返回
+  └─ 无链接
+      ├─ 回复触发模式 → 检查回复消息中的链接（enable_reply_trigger）
+      │   └─ 提取到链接 → 进入解析流程
+      └─ 无链接 → 检查管理员交互（handle_admin_reply） → 返回
   ↓
 判断是否需要解析 (ConfigManager)
   ├─ 自动解析模式 → 直接解析
@@ -234,7 +261,9 @@ astrbot_plugin_media_parser/
   │   └─ 大媒体 → 单独发送
   └─ 非打包模式 → 逐个独立发送
   ↓
-清理临时文件 (FileCleaner)
+清理临时文件 (storage)
+  ├─ 文件Token服务模式 → 延迟清理（等待 file_token_ttl 秒）
+  └─ 普通模式 → 立即清理
 ```
 
 ### 2.2 详细程序链
@@ -257,7 +286,14 @@ admin_cookie_assist.try_update_admin_origin(event)
   ↓
 提取可解析链接 (extract_all_links)
   ├─ 有链接 → 进入 _should_parse 检查
-  └─ 无链接 → handle_admin_reply（管理员交互） → 返回
+  └─ 无链接
+      ├─ enable_reply_trigger 且回复文本含触发关键词
+      │   └─ _try_extract_reply_links()
+      │       ├─ 从 Reply.message_str 提取链接
+      │       └─ 从 Reply.chain 提取卡片 URL
+      │       ├─ 提取到链接 → 进入 _should_parse 检查
+      │       └─ 未提取到 → handle_admin_reply → 返回
+      └─ 否则 → handle_admin_reply（管理员交互） → 返回
   ↓
 main.py::VideoParserPlugin._should_parse()
   ├─ is_auto_parse = True → 返回 True
@@ -298,6 +334,7 @@ parser::manager::ParserManager.parse_text()
   ↓
 返回元数据列表
   ├─ url: 原始链接
+  ├─ source_url: 原始来源链接（可选，如短链展开前的地址）
   ├─ title: 标题
   ├─ author: 作者
   ├─ desc: 描述（可选）
@@ -308,9 +345,26 @@ parser::manager::ParserManager.parse_text()
   ├─ video_headers: 视频请求头
   ├─ image_headers: 图片请求头
   ├─ video_force_download: 是否强制下载
+  ├─ access_status: 访问状态（如 "full"、"preview" 等，B站会员/付费限制）
+  ├─ restriction_type: 限制类型（可选）
+  ├─ restriction_label: 限制标签（可选）
+  ├─ can_access_full_video: 是否可访问完整视频
+  ├─ is_preview_only: 是否仅有预览片段
+  ├─ access_message: 访问信息描述（如时长受限说明）
+  ├─ timelength_ms: 视频总时长（毫秒）
+  ├─ available_length_ms: 当前可访问时长（毫秒）
+  ├─ hot_comments: 热评列表（可选，List[Dict]，包含 username/uid/likes/time/message）
   ├─ use_image_proxy: 图片是否使用代理（Twitter等平台）
   ├─ use_video_proxy: 视频是否使用代理（Twitter、小黑盒等平台）
   └─ proxy_url: 代理地址（可选，平台特定）
+  ↓
+触发B站Cookie协助检查
+  └─ _trigger_bilibili_cookie_assist_if_needed()
+  ↓
+检查有效元数据
+  └─ 至少存在一条非 error 的元数据包含 video_urls、image_urls 或 access_message
+  ↓
+发送开场语（若 enable_opening_msg 启用）
 ```
 
 #### 2.2.4 元数据处理阶段
@@ -328,7 +382,7 @@ downloader::manager::DownloadManager.process_metadata()
   ├─ 预下载模式 (effective_pre_download = True)
   │   ├─ 说明：effective_pre_download = pre_download_all_media && 缓存目录可用
   │   ├─ 构建媒体项列表（包含代理配置信息）
-  │   ├─ 批量下载所有媒体（并发控制）
+  │   ├─ 批量下载所有媒体（并发控制，任务注册到 _active_tasks 以支持 shutdown 取消）
   │   │   └─ downloader::router::download_media()
   │   │       ├─ 检测媒体类型（通过URL特征或前缀）
   │   │       └─ 路由到对应下载器（按 dash: → m3u8: → range: → 普通 优先级）
@@ -339,6 +393,7 @@ downloader::manager::DownloadManager.process_metadata()
   │   │           └─ video → handler::normal_video（支持代理）
   │   ├─ 处理下载结果（统计成功/失败数量）
   │   ├─ 处理video_force_download标志（全部失败时跳过视频）
+  │   ├─ 全部下载失败时主动清理空壳缓存子目录（cleanup_directory）
   │   └─ 更新元数据（file_paths, video_sizes, has_valid_media等）
   │
   └─ 直链模式 (effective_pre_download = False)
@@ -347,9 +402,11 @@ downloader::manager::DownloadManager.process_metadata()
       ├─ 检查视频可访问性
       │   └─ validator::get_video_size()（并发检查所有视频）
       │       └─ 检测403访问被拒绝
-      └─ 下载图片到临时目录
-          └─ downloader::manager::DownloadManager._download_images()
-              └─ 并发下载所有图片（支持代理配置）
+      ├─ 下载图片到临时目录
+      │   └─ downloader::manager::DownloadManager._download_images()
+      │       └─ 并发下载所有图片（支持代理配置）
+      ├─ 构建对齐的 file_paths（前置 [None]*视频数 + 图片路径，确保与 build_media_nodes 的 file_idx 一致）
+      └─ 视频超限时立即清理已下载的图片临时文件
   ↓
 返回处理后的元数据
 ```
@@ -359,14 +416,17 @@ downloader::manager::DownloadManager.process_metadata()
 ```
 main.py::VideoParserPlugin.auto_parse()
   ↓
-message_adapter::node_builder::build_all_nodes()
+message_adapter::node_builder::build_all_nodes(enable_text_metadata)
   ├─ 遍历所有元数据
   │   └─ message_adapter::node_builder::build_nodes_for_link()
-  │       ├─ 构建文本节点
+  │       ├─ 构建文本节点（受 enable_text_metadata 控制）
   │       │   └─ message_adapter::node_builder::build_text_node()
-  │       │       ├─ 标题、作者、描述
+  │       │       ├─ 标题、作者、描述、发布时间
   │       │       ├─ 视频大小信息
-  │       │       ├─ 错误信息
+  │       │       ├─ 时长/访问状态（access_message、is_preview_only、timelength_ms、available_length_ms）
+  │       │       ├─ 热评展示（hot_comments）
+  │       │       ├─ 错误信息（解析失败、403被拒、直链无效媒体、超大小限制）
+  │       │       ├─ 下载失败统计（failed_video_count、failed_image_count）
   │       │       └─ 原始链接
   │       │
   │       └─ 构建媒体节点
@@ -419,19 +479,26 @@ main.py::VideoParserPlugin.auto_parse()
   ↓
 finally 块
   ↓
-file_cleaner::cleanup_files()
-  ├─ 清理临时文件（图片）
-  ├─ 清理视频文件
-  └─ 自动移除空的缓存子目录（_try_remove_empty_parent）
+判断清理模式
+  ├─ 文件Token服务模式 (use_file_token_service)
+  │   └─ asyncio.create_task(_delayed_cleanup(files, file_token_ttl))
+  │       ├─ 等待 file_token_ttl 秒
+  │       └─ storage::cleanup_files()（仅清理当前请求的文件，不做全局扫描）
+  └─ 普通模式
+      └─ storage::cleanup_files()
+          ├─ 清理临时文件（图片）
+          ├─ 清理视频文件
+          └─ 自动移除空的缓存子目录（_try_remove_empty_parent，标记感知）
   ↓
 清理完成
 
 注意：
-- 打包模式下，普通媒体的视频文件在发送后立即清理
-- 大媒体单独发送，每个链接发送后立即清理其视频文件
-- 非打包模式下，每个链接发送后立即清理其视频文件
-- 所有临时文件（图片）在finally块中统一清理
+- 所有媒体文件（视频和图片）均在 main.py 的 finally 块中统一清理
+- sender 和 node_builder 不参与文件清理，仅负责发送/构建
 - DASH下载的临时.m4s文件在合并后由dash handler内部清理
+- 文件Token服务模式下，所有文件延迟 file_token_ttl 秒后再清理
+- 逐请求清理不调用 cleanup_marked_in（避免并发竞态），全局清理仅在 terminate() 和管理员手动触发时执行
+- 预下载全部失败时，DownloadManager 在返回元数据前主动 cleanup_directory 清理空壳子目录
 ```
 
 #### 2.2.8 插件终止阶段
@@ -439,14 +506,16 @@ file_cleaner::cleanup_files()
 ```
 main.py::VideoParserPlugin.terminate()
   ↓
+interaction::BilibiliAdminCookieAssistManager.shutdown()
+  └─ 关闭管理员交互会话
+  ↓
 downloader::manager::DownloadManager.shutdown()
   ├─ 设置 _shutting_down 标志
-  ├─ 关闭所有活动的 aiohttp 会话
-  ├─ 取消所有正在进行的下载任务
+  ├─ 取消所有正在进行的下载任务（含 _batch_download_media 内部任务）
   └─ 清理任务列表
   ↓
-file_cleaner::cleanup_directory()
-  └─ 清理缓存目录
+CacheRegistry.cleanup_marked_in(cache_dir)
+  └─ 清理缓存目录中带标记的子目录
   ↓
 终止完成
 ```
@@ -461,7 +530,8 @@ file_cleaner::cleanup_directory()
   ↓
 下载阶段异常
   ├─ 单个媒体下载失败 → 记录警告，继续其他媒体
-  ├─ 全部媒体下载失败 → 标记 has_valid_media = False
+  ├─ 全部媒体下载失败 → 标记 has_valid_media = False，主动清理空壳缓存子目录
+  ├─ asyncio.CancelledError → 由 process_single 捕获，保留已回填的元数据状态
   └─ 继续构建节点（可能只有文本节点）
   ↓
 发送阶段异常
@@ -486,7 +556,7 @@ file_cleaner::cleanup_directory()
   ↓
 媒体下载并发
   ├─ Semaphore 控制最大并发数（max_concurrent_downloads）
-  ├─ 批量下载时并发下载所有媒体项
+  ├─ 批量下载时并发下载所有媒体项（任务注册到 _active_tasks，支持 shutdown 取消）
   ├─ Range视频下载：内部使用Semaphore控制Range请求并发数
   ├─ DASH视频下载：video+audio并发下载（各子流可独立走Range或普通），完成后ffmpeg合并
   ├─ M3U8视频下载：内部使用Semaphore控制分片下载并发数
@@ -525,12 +595,16 @@ file_cleaner::cleanup_directory()
 链接提取 → (链接, 解析器) 列表
   ↓
 解析结果 → 元数据字典
-  ├─ url
-  ├─ title, author, desc
+  ├─ url, source_url
+  ├─ title, author, desc, timestamp
   ├─ video_urls: List[List[str]]
   ├─ image_urls: List[List[str]]
   ├─ video_headers, image_headers
-  └─ video_force_download
+  ├─ video_force_download
+  ├─ access_status, restriction_type, restriction_label
+  ├─ can_access_full_video, is_preview_only, access_message
+  ├─ timelength_ms, available_length_ms
+  └─ hot_comments: List[Dict]
   ↓
 下载处理 → 增强元数据
   ├─ file_paths: List[str]（本地文件路径列表）
@@ -573,12 +647,18 @@ file_cleaner::cleanup_directory()
   ├─ 本地文件 → fromFileSystem()
   └─ 直链 → fromURL()（strip_media_prefixes 剥离所有前缀）
   ↓
+文件Token服务注册（若启用 use_file_token_service）
+  └─ 遍历 file_paths，注册到 file_token_service → 获取回调 URL
+  ↓
 消息发送
   ├─ 打包模式：普通媒体发送后清理视频文件
   ├─ 非打包模式：每个链接发送后清理视频文件
   └─ 所有临时文件在finally块中统一清理
   ↓
-文件清理 → 删除临时文件和视频文件 → 自动移除空父目录
+文件清理
+  ├─ 文件Token服务模式 → 延迟 file_token_ttl 秒后删除（仅当前请求的文件，不做全局扫描）
+  └─ 普通模式 → 立即删除临时文件和视频文件 → 自动移除空父目录（标记感知）
+  全局兜底：terminate() 时 CacheRegistry.cleanup_marked_in() 清理所有残留
 ```
 
 ### 4.3 代理流转

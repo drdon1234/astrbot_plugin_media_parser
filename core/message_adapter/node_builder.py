@@ -1,12 +1,13 @@
+"""消息节点构建器，将解析结果转换为可发送消息节点。"""
 import os
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Union
 
 from ..logger import logger
 
 from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
 
-from ..file_cleaner import cleanup_file
 from ..downloader.utils import strip_media_prefixes
+from ..types import BuildAllNodesResult, LinkBuildMeta
 
 
 def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, enable_text_metadata: bool = True) -> Optional[Plain]:
@@ -87,6 +88,28 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
                 )
         except (TypeError, ValueError):
             pass
+
+    hot_comments = metadata.get("hot_comments", [])
+    if isinstance(hot_comments, list) and hot_comments:
+        text_parts.append(f"热评（{len(hot_comments)}条）:")
+        total = len(hot_comments)
+        for idx, item in enumerate(hot_comments, start=1):
+            if not isinstance(item, dict):
+                continue
+            username = str(item.get("username", "") or "").strip() or "未知用户"
+            uid = str(item.get("uid", "") or "").strip()
+            try:
+                likes = int(item.get("likes", 0) or 0)
+            except (TypeError, ValueError):
+                likes = 0
+            time_text = str(item.get("time", "") or "").strip() or "-"
+            message = str(item.get("message", "") or "").strip() or "（无文本内容）"
+            user_label = f"{username}(uid:{uid})" if uid else username
+            text_parts.append(f"[{idx}] {user_label}")
+            text_parts.append(f"点赞: {likes} | 时间: {time_text}")
+            text_parts.append(message)
+            if idx < total:
+                text_parts.append("")
     
     if metadata.get('error'):
         text_parts.append(f"解析失败：{metadata['error']}")
@@ -163,11 +186,14 @@ def build_media_nodes(
     image_urls = metadata.get('image_urls', [])
     file_paths = metadata.get('file_paths', [])
     video_sizes = metadata.get('video_sizes', [])
+    use_fts = metadata.get('use_file_token_service', False)
+    file_token_urls = metadata.get('file_token_urls', [])
     
     logger.debug(
         f"构建媒体节点: {url}, "
         f"视频: {len(video_urls)}, 图片: {len(image_urls)}, "
-        f"文件路径: {len(file_paths)}, 使用本地文件: {use_local_files}"
+        f"文件路径: {len(file_paths)}, 使用本地文件: {use_local_files}, "
+        f"文件Token服务: {use_fts}"
     )
     
     if not video_urls and not image_urls and not file_paths:
@@ -190,18 +216,32 @@ def build_media_nodes(
             file_idx += 1
             continue
         
-        video_file_path = None
-        if use_local_files and file_idx < len(file_paths):
-            video_file_path = file_paths[file_idx]
-        
-        if use_local_files and video_file_path and os.path.exists(video_file_path):
+        token_url = (
+            file_token_urls[file_idx]
+            if use_fts and file_idx < len(file_token_urls)
+            else None
+        )
+        if token_url:
             try:
-                nodes.append(Video.fromFileSystem(video_file_path))
+                nodes.append(Video.fromURL(token_url))
+                file_idx += 1
+                continue
             except Exception as e:
-                logger.warning(f"构建视频节点失败: {video_file_path}, 错误: {e}")
+                logger.warning(f"使用Token URL构建视频节点失败: {token_url}, 错误: {e}")
+        
+        if use_fts:
+            actual_video_url = strip_media_prefixes(video_url)
+            try:
+                nodes.append(Video.fromURL(actual_video_url))
+            except Exception as e:
+                logger.warning(f"构建视频节点失败(直链回退): {actual_video_url}, 错误: {e}")
+        elif use_local_files and file_idx < len(file_paths) and file_paths[file_idx] and os.path.exists(file_paths[file_idx]):
+            try:
+                nodes.append(Video.fromFileSystem(file_paths[file_idx]))
+            except Exception as e:
+                logger.warning(f"构建视频节点失败: {file_paths[file_idx]}, 错误: {e}")
         else:
             actual_video_url = strip_media_prefixes(video_url)
-            
             try:
                 nodes.append(Video.fromURL(actual_video_url))
             except Exception as e:
@@ -219,16 +259,29 @@ def build_media_nodes(
             file_idx += 1
             continue
         
-        image_file_path = None
-        if use_local_files and file_idx < len(file_paths):
-            image_file_path = file_paths[file_idx]
-        
-        if use_local_files and image_file_path:
+        token_url = (
+            file_token_urls[file_idx]
+            if use_fts and file_idx < len(file_token_urls)
+            else None
+        )
+        if token_url:
             try:
-                nodes.append(Image.fromFileSystem(image_file_path))
+                nodes.append(Image.fromURL(token_url))
+                file_idx += 1
+                continue
             except Exception as e:
-                logger.warning(f"构建图片节点失败: {image_file_path}, 错误: {e}")
-                cleanup_file(image_file_path)
+                logger.warning(f"使用Token URL构建图片节点失败: {token_url}, 错误: {e}")
+        
+        if use_fts:
+            try:
+                nodes.append(Image.fromURL(image_url))
+            except Exception as e:
+                logger.warning(f"构建图片节点失败(直链回退): {image_url}, 错误: {e}")
+        elif use_local_files and file_idx < len(file_paths) and file_paths[file_idx]:
+            try:
+                nodes.append(Image.fromFileSystem(file_paths[file_idx]))
+            except Exception as e:
+                logger.warning(f"构建图片节点失败: {file_paths[file_idx]}, 错误: {e}")
         else:
             try:
                 nodes.append(Image.fromURL(image_url))
@@ -296,7 +349,7 @@ def build_all_nodes(
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True
-) -> Tuple[List[List[Union[Plain, Image, Video]]], List[Dict], List[str], List[str]]:
+) -> BuildAllNodesResult:
     """构建所有链接的节点，处理消息打包逻辑
 
     Args:
@@ -307,7 +360,7 @@ def build_all_nodes(
         enable_text_metadata: 是否发送图文文本消息
 
     Returns:
-        包含(all_link_nodes, link_metadata, temp_files, video_files)的元组
+        BuildAllNodesResult 命名元组
     """
     all_link_nodes = []
     link_metadata = []
@@ -359,13 +412,13 @@ def build_all_nodes(
                         temp_files.append(file_path)
         
         all_link_nodes.append(link_nodes)
-        link_metadata.append({
-            'link_nodes': link_nodes,
-            'is_large_media': is_large_media,
-            'is_normal': not is_large_media,
-            'video_files': link_video_files,
-            'temp_files': link_temp_files
-        })
+        link_metadata.append(LinkBuildMeta(
+            link_nodes=link_nodes,
+            is_large_media=is_large_media,
+            is_normal=not is_large_media,
+            video_files=link_video_files,
+            temp_files=link_temp_files,
+        ))
     
     logger.debug(
         f"所有节点构建完成: "
@@ -374,5 +427,5 @@ def build_all_nodes(
         f"视频文件: {len(video_files)}"
     )
     
-    return all_link_nodes, link_metadata, temp_files, video_files
+    return BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)
 

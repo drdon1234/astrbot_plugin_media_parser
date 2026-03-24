@@ -1,229 +1,311 @@
 {
-    "is_auto_pack": {
-        "description": "是否将解析结果打包为消息集合",
-        "type": "bool",
-        "hint": "Napcat 对打包消息的实现有 BUG，不建议使用",
-        "default": false
-    },
-    "trigger_settings": {
-        "description": "触发方式",
-        "type": "object",
-        "items": {
-            "is_auto_parse": {
-                "description": "是否自动解析链接",
-                "type": "bool",
-                "default": true
-            },
-            "trigger_keywords": {
-                "description": "手动触发解析的关键词列表",
-                "type": "list",
-                "hint": "当禁用自动解析时，消息头使用这些关键词才会触发解析",
-                "default": [
-                    "视频解析",
-                    "解析视频"
-                ]
-            }
-        }
-    },
-    "permissions": {
-        "description": "权限配置",
-        "type": "object",
-        "hint": "优先级：个人白名单 > 个人黑名单 > 群组白名单 > 群组黑名单",
-        "items": {
-            "admin_id": {
-                "description": "管理员",
-                "type": "string",
-                "hint": "最高权限用户，同时接收插件私聊通知。默认自动加入用户白名单",
-                "default": ""
-            },
-            "whitelist": {
-                "description": "白名单设置",
-                "hint": "如启用白名单但不配置具体名单会导致所有消息均无权限解析",
-                "type": "object",
-                "items": {
-                    "enable": {
-                        "description": "是否启用白名单",
-                        "type": "bool",
-                        "default": false
-                    },
-                    "user": {
-                        "description": "用户白名单",
-                        "type": "list",
-                        "default": []
-                    },
-                    "group": {
-                        "description": "群组白名单",
-                        "type": "list",
-                        "default": []
-                    }
-                }
-            },
-            "blacklist": {
-                "description": "黑名单设置",
-                "type": "object",
-                "items": {
-                    "enable": {
-                        "description": "是否启用黑名单",
-                        "type": "bool",
-                        "default": false
-                    },
-                    "user": {
-                        "description": "用户黑名单",
-                        "type": "list",
-                        "default": []
-                    },
-                    "group": {
-                        "description": "群组黑名单",
-                        "type": "list",
-                        "default": []
-                    }
-                }
-            }
-        }
-    },
-    "text_settings": {
-        "description": "定制文本内容",
-        "type": "object",
-        "items": {
-            "enable_opening_msg": {
-                "description": "是否发送开场语",
-                "type": "bool",
-                "hint": "确认可解析后会发送的回复",
-                "default": true
-            },
-            "opening_msg_content": {
-                "description": "自定义开场语内容",
-                "type": "string",
-                "default": "流媒体解析bot为您服务 ٩( 'ω' )و"
-            },
-            "enable_text_metadata": {
-                "description": "是否发送文本类型元数据",
-                "type": "bool",
-                "hint": "是否以文本格式发送解析出的标题、作者、简介等元数据",
-                "default": true
-            }
-        }
-    },
-    "video_size_settings": {
-        "description": "视频大小控制",
-        "type": "object",
-        "items": {
-            "max_video_size_mb": {
-                "description": "最大允许发送的视频大小(MB)",
-                "type": "float",
-                "hint": "超过此大小的视频将被跳过，不下载也不发送。设置为0表示不限制",
-                "default": 1000.0
-            },
-            "large_video_threshold_mb": {
-                "description": "大视频阈值(MB)",
-                "type": "float",
-                "hint": "当视频大小超过此阈值时，将下载到缓存目录。视频会单独发送而不包含在转发消息集合中。不能超过消息适配器100MB硬性阈值。设置为0表示不限制",
-                "default": 100.0
-            }
-        }
-    },
-    "download_settings": {
-        "description": "下载和缓存",
-        "type": "object",
-        "items": {
-            "cache_dir": {
-                "description": "媒体缓存目录",
-                "type": "string",
-                "hint": "Windows/Linux默认使用系统临时目录并忽略此项。Docker环境如需使用默认路径，请同时为astrbot和消息平台挂载/app/sharedFolder目录",
-                "default": "/app/sharedFolder/video_parser/cache"
-            },
-            "pre_download_all_media": {
-                "description": "是否预先下载所有媒体到本地",
-                "type": "bool",
-                "hint": "启用后，所有媒体文件将并发下载到缓存目录，发送时使用本地路径。可以提高发送成功率，减少总下载时间，但会短时间增加磁盘占用",
-                "default": false
-            },
-            "max_concurrent_downloads": {
-                "description": "最大并发下载数",
-                "type": "int",
-                "hint": "当启用预先下载所有媒体到本地时，同时下载的媒体文件数量上限。建议值：3-5",
-                "default": 5
-            }
-        }
-    },
-    "parser_enable_settings": {
+    "parsers": {
         "description": "解析器开关",
         "type": "object",
         "items": {
-            "enable_bilibili": {
+            "bilibili": {
                 "description": "B站",
                 "type": "bool",
                 "default": true
             },
-            "enable_douyin": {
+            "douyin": {
                 "description": "抖音",
                 "type": "bool",
                 "default": true
             },
-            "enable_kuaishou": {
+            "kuaishou": {
                 "description": "快手",
                 "type": "bool",
                 "default": true
             },
-            "enable_weibo": {
+            "weibo": {
                 "description": "微博",
                 "type": "bool",
                 "default": true
             },
-            "enable_xiaohongshu": {
+            "xiaohongshu": {
                 "description": "小红书",
                 "type": "bool",
                 "default": true
             },
-            "enable_xiaoheihe": {
+            "xiaoheihe": {
                 "description": "小黑盒",
                 "type": "bool",
                 "default": true
             },
-            "enable_twitter": {
+            "twitter": {
                 "description": "Twitter/X",
                 "type": "bool",
                 "default": true
             }
         }
     },
-    "proxy_settings": {
-        "description": "代理设置",
+    "trigger": {
+        "description": "触发设置",
         "type": "object",
         "items": {
-            "proxy_addr": {
-                "description": "全局代理地址",
-                "type": "string",
-                "hint": "代理地址格式：http://host:port 或 socks5://host:port。所有解析器共用此代理地址",
-                "default": ""
+            "auto_parse": {
+                "description": "自动解析链接",
+                "type": "bool",
+                "default": true
             },
-            "xiaoheihe": {
-                "description": "小黑盒代理设置",
+            "keywords": {
+                "description": "手动触发关键词",
+                "type": "list",
+                "hint": "关闭自动解析时，消息含关键词才触发",
+                "default": [
+                    "视频解析",
+                    "解析视频"
+                ]
+            },
+            "reply_trigger": {
+                "description": "回复触发解析",
+                "type": "bool",
+                "hint": "引用含链接的消息并附关键词即可触发解析",
+                "default": false
+            }
+        }
+    },
+    "message": {
+        "description": "消息与展示",
+        "type": "object",
+        "items": {
+            "auto_pack": {
+                "description": "打包为消息集合",
+                "type": "bool",
+                "hint": "Napcat 存在兼容问题，不建议启用",
+                "default": false
+            },
+            "opening": {
+                "description": "开场语",
                 "type": "object",
                 "items": {
-                    "video": {
-                        "description": "小黑盒视频下载是否使用代理",
+                    "enable": {
+                        "description": "发送开场语",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "content": {
+                        "description": "开场语内容",
+                        "type": "string",
+                        "default": "流媒体解析bot为您服务 ٩( 'ω' )و"
+                    }
+                }
+            },
+            "text_metadata": {
+                "description": "发送文本元数据",
+                "type": "bool",
+                "hint": "以文本发送标题、作者、简介等信息",
+                "default": true
+            },
+            "hot_comments": {
+                "description": "热评设置",
+                "type": "object",
+                "hint": "需启用文本元数据",
+                "items": {
+                    "count": {
+                        "description": "热评条数",
+                        "type": "int",
+                        "hint": "0 = 不获取",
+                        "default": 0
+                    },
+                    "bilibili": {
+                        "description": "B站",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "weibo": {
+                        "description": "微博",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "xiaohongshu": {
+                        "description": "小红书",
                         "type": "bool",
                         "default": true
                     }
                 }
+            }
+        }
+    },
+    "download": {
+        "description": "下载与缓存",
+        "type": "object",
+        "items": {
+            "pre_download": {
+                "description": "预下载所有媒体",
+                "type": "bool",
+                "hint": "并发下载到本地后发送，提高成功率",
+                "default": false
+            },
+            "max_concurrent": {
+                "description": "最大并发下载数",
+                "type": "int",
+                "hint": "建议 3~5",
+                "default": 5
+            },
+            "cache_dir": {
+                "description": "缓存目录",
+                "type": "string",
+                "hint": "非Docker环境自动使用系统临时目录，Docker需挂载 /app/sharedFolder",
+                "default": "/app/sharedFolder/video_parser/cache"
+            },
+            "max_video_size_mb": {
+                "description": "视频大小上限(MB)",
+                "type": "float",
+                "hint": "超限视频不下载不发送，0 = 不限制",
+                "default": 1000.0
+            },
+            "large_video_threshold_mb": {
+                "description": "大视频阈值(MB)",
+                "type": "float",
+                "hint": "超过阈值单独发送，不放入消息集合，上限100MB，0 = 不限制",
+                "default": 100.0
+            }
+        }
+    },
+    "permissions": {
+        "description": "权限控制",
+        "type": "object",
+        "hint": "优先级：个人白名单 > 个人黑名单 > 群组白名单 > 群组黑名单",
+        "items": {
+            "admin_id": {
+                "description": "管理员ID",
+                "type": "string",
+                "hint": "最高权限，接收私聊通知，自动加入白名单",
+                "default": ""
+            },
+            "whitelist": {
+                "description": "白名单",
+                "type": "object",
+                "hint": "启用但不配置名单会禁止所有用户",
+                "items": {
+                    "enable": {
+                        "description": "启用",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "user": {
+                        "description": "用户",
+                        "type": "list",
+                        "default": []
+                    },
+                    "group": {
+                        "description": "群组",
+                        "type": "list",
+                        "default": []
+                    }
+                }
+            },
+            "blacklist": {
+                "description": "黑名单",
+                "type": "object",
+                "items": {
+                    "enable": {
+                        "description": "启用",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "user": {
+                        "description": "用户",
+                        "type": "list",
+                        "default": []
+                    },
+                    "group": {
+                        "description": "群组",
+                        "type": "list",
+                        "default": []
+                    }
+                }
+            }
+        }
+    },
+    "bilibili_enhanced": {
+        "description": "B站增强",
+        "type": "object",
+        "items": {
+            "use_cookie": {
+                "description": "携带Cookie解析",
+                "type": "bool",
+                "hint": "获取更高画质，需同时开启预下载",
+                "default": false
+            },
+            "cookie": {
+                "description": "Cookie",
+                "type": "string",
+                "default": ""
+            },
+            "max_quality": {
+                "description": "最高画质",
+                "type": "string",
+                "options": [
+                    "不限制",
+                    "4K",
+                    "1080P60",
+                    "1080P+",
+                    "1080P",
+                    "720P",
+                    "480P",
+                    "360P"
+                ],
+                "hint": "实际画质取决于账号权限和视频源",
+                "default": "不限制"
+            },
+            "admin_assist": {
+                "description": "管理员协助登录",
+                "type": "object",
+                "hint": "Cookie失效时私聊管理员协助重新登录",
+                "items": {
+                    "enable": {
+                        "description": "启用",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "reply_timeout_minutes": {
+                        "description": "回复超时(分钟)",
+                        "type": "int",
+                        "default": 1440
+                    },
+                    "request_cooldown_minutes": {
+                        "description": "请求冷却(分钟)",
+                        "type": "int",
+                        "default": 1440
+                    }
+                }
+            }
+        }
+    },
+    "proxy": {
+        "description": "代理设置",
+        "type": "object",
+        "items": {
+            "address": {
+                "description": "代理地址",
+                "type": "string",
+                "hint": "格式：http://host:port 或 socks5://host:port",
+                "default": ""
+            },
+            "xiaoheihe_video": {
+                "description": "小黑盒视频下载使用代理",
+                "type": "bool",
+                "default": true
             },
             "twitter": {
-                "description": "Twitter代理设置",
+                "description": "Twitter代理",
                 "type": "object",
                 "items": {
                     "parse": {
-                        "description": "Twitter解析是否使用代理",
+                        "description": "解析",
                         "type": "bool",
                         "default": false
                     },
                     "image": {
-                        "description": "Twitter图片下载是否使用代理",
+                        "description": "图片下载",
                         "type": "bool",
                         "default": true
                     },
                     "video": {
-                        "description": "Twitter视频下载是否使用代理",
+                        "description": "视频下载",
                         "type": "bool",
                         "default": true
                     }
@@ -231,67 +313,47 @@
             }
         }
     },
-    "cookie_settings": {
-        "description": "Cookie管理",
+    "media_relay": {
+        "description": "媒体中转",
         "type": "object",
+        "hint": "AstrBot与消息平台无共享目录或分属不同服务器时启用",
         "items": {
-            "bilibili": {
-                "description": "B站",
-                "type": "object",
-                "items": {
-                    "use_cookie_for_parsing": {
-                        "description": "是否携带Cookie解析视频",
-                        "type": "bool",
-                        "hint": "开启并配置有效cookie后可以解析更高画质视频，需同时打开预下载",
-                        "default": false
-                    },
-                    "cookie": {
-                        "description": "Cookie",
-                        "type": "string",
-                        "default": ""
-                    },
-                    "enable_admin_assist_on_expire": {
-                        "description": "Cookie过期时通知管理员协助登录",
-                        "type": "bool",
-                        "hint": "启用后，将在Cookie不可用时私聊管理员请求协助登录，登录态持久化数据默认保存在对应平台的runtime_manager目录内",
-                        "default": false
-                    },
-                    "admin_reply_timeout_minutes": {
-                        "description": "管理员回复有效期(分钟)",
-                        "type": "int",
-                        "hint": "开启管理员协助后，每次等待管理员回复“确定”的有效时长",
-                        "default": 1440
-                    },
-                    "admin_request_cooldown_minutes": {
-                        "description": "协助请求冷却时间(分钟)",
-                        "type": "int",
-                        "hint": "开启管理员协助后，每次Cookie过期后再次私聊管理员的最小间隔",
-                        "default": 1440
-                    },
-                    "max_quality": {
-                        "description": "最高画质",
-                        "type": "string",
-                        "options": [
-                            "不限制",
-                            "4K",
-                            "1080P60",
-                            "1080P+",
-                            "1080P",
-                            "720P",
-                            "480P",
-                            "360P"
-                        ],
-                        "hint": "限制解析B站视频时的最高画质，实际画质取决于账号权限和视频源",
-                        "default": "不限制"
-                    }
-                }
+            "enable": {
+                "description": "启用",
+                "type": "bool",
+                "hint": "由AstrBot HTTP服务中转媒体文件，无需挂载共享目录",
+                "default": false
+            },
+            "callback_url": {
+                "description": "AstrBot回调地址",
+                "type": "string",
+                "hint": "消息平台可达的地址，如 http://host:6185，跨服务器需公网可达",
+                "default": ""
+            },
+            "ttl": {
+                "description": "中转缓存有效期(秒)",
+                "type": "int",
+                "hint": "到期后链接失效并清理缓存，建议 ≥ 60",
+                "default": 300
             }
         }
     },
-    "debug": {
-        "description": "是否启用Debug模式",
-        "type": "bool",
-        "hint": "启用后，将使用debug级日志记录完整工作流的详细日志（从解析开始到发送完毕）",
-        "default": false
+    "admin": {
+        "description": "管理与调试",
+        "type": "object",
+        "items": {
+            "clean_cache_keyword": {
+                "description": "清理缓存关键词",
+                "type": "string",
+                "hint": "管理员发送此关键词清除所有媒体缓存",
+                "default": "清理媒体"
+            },
+            "debug": {
+                "description": "Debug模式",
+                "type": "bool",
+                "hint": "输出完整工作流详细日志",
+                "default": false
+            }
+        }
     }
 }

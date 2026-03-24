@@ -1,23 +1,24 @@
+"""下载管理器，按媒体类型分发下载任务并回填元数据。"""
 import asyncio
 import hashlib
-import re
+import os
 import time
 from typing import Dict, Any, List, Optional, Tuple
-from urllib.parse import urlparse
 
 import aiohttp
 
 from ..logger import logger
 
 from .utils import check_cache_dir_available, process_gather_results, strip_media_prefixes
-from .validator import get_video_size, validate_media_url
+from .validator import get_video_size
 from .router import download_media
-from ..file_cleaner import cleanup_files
+from ..storage import cleanup_files, cleanup_directory
 from ..constants import Config
 
 
 class DownloadManager:
 
+    """下载调度器，协调不同处理器完成媒体下载。"""
     def __init__(
         self,
         max_video_size_mb: float = 0.0,
@@ -37,13 +38,7 @@ class DownloadManager:
             max_concurrent_downloads: 最大并发下载数
         """
         self.max_video_size_mb = max_video_size_mb
-        if large_video_threshold_mb > 0:
-            self.large_video_threshold_mb = min(
-                large_video_threshold_mb,
-                Config.MAX_LARGE_VIDEO_THRESHOLD_MB
-            )
-        else:
-            self.large_video_threshold_mb = 0.0
+        self.large_video_threshold_mb = large_video_threshold_mb
         self.cache_dir = cache_dir
         self.max_concurrent_downloads = (
             max_concurrent_downloads 
@@ -430,11 +425,15 @@ class DownloadManager:
         if not cache_dir or not media_items:
             return []
 
+        if self._shutting_down:
+            return []
+
         if max_concurrent is None:
             max_concurrent = self.max_concurrent_downloads
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def download_one(item: Dict[str, Any]) -> Dict[str, Any]:
+            """下载单条媒体并返回包含本地路径的处理结果。"""
             async with semaphore:
                 try:
                     url_list = item.get('url_list', [])
@@ -490,8 +489,13 @@ class DownloadManager:
                         'error': str(e)
                     }
 
-        tasks = [download_one(item) for item in media_items]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [asyncio.create_task(download_one(item)) for item in media_items]
+        self._active_tasks.update(tasks)
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            for task in tasks:
+                self._active_tasks.discard(task)
         return process_gather_results(results, media_items)
 
     def _process_download_results(
@@ -603,6 +607,7 @@ class DownloadManager:
         video_sizes: List[Optional[float]],
         proxy_addr: str = None
     ) -> Dict[str, Any]:
+        """使用预下载策略处理媒体并补齐回传字段。"""
         url = metadata.get('url', '')
         video_force_download = metadata.get('video_force_download', False)
         video_count = len(video_urls)
@@ -683,6 +688,10 @@ class DownloadManager:
             result.get('success') and result.get('file_path')
             for result in download_results
         )
+
+        if not has_valid_media and self.cache_dir:
+            cache_subdir = os.path.join(self.cache_dir, media_id)
+            cleanup_directory(cache_subdir)
         
         metadata['has_valid_media'] = has_valid_media
         metadata['use_local_files'] = has_valid_media
@@ -702,6 +711,7 @@ class DownloadManager:
         proxy_addr: str = None,
         initial_video_has_access_denied: bool = False
     ) -> Dict[str, Any]:
+        """使用直链策略处理媒体并补齐回传字段。"""
         url = metadata.get('url', '')
         video_force_download = metadata.get('video_force_download', False)
         video_count = len(video_urls)
@@ -740,7 +750,9 @@ class DownloadManager:
                 metadata, proxy_addr
             )
             has_valid_images = any(fp for fp in image_file_paths if fp)
-        
+
+        file_paths_aligned = [None] * len(video_urls) + image_file_paths
+
         metadata['video_sizes'] = video_sizes
         metadata['max_video_size_mb'] = max_video_size
         metadata['total_video_size_mb'] = total_video_size
@@ -753,7 +765,7 @@ class DownloadManager:
         
         if not has_valid_media:
             metadata['exceeds_max_size'] = False
-            metadata['file_paths'] = image_file_paths
+            metadata['file_paths'] = file_paths_aligned
             metadata['use_local_files'] = has_valid_images
             metadata['failed_video_count'] = len(video_urls) if video_urls else 0
             metadata['failed_image_count'] = failed_image_count
@@ -763,15 +775,18 @@ class DownloadManager:
             video_sizes, url
         )
         if exceeds_limit:
+            cleanup_files(image_file_paths)
             metadata['exceeds_max_size'] = True
-            metadata['has_valid_media'] = has_valid_images
+            metadata['has_valid_media'] = False
             metadata['max_video_size_mb'] = max_video_size_check
             metadata['failed_video_count'] = len(video_urls) if video_urls else 0
             metadata['failed_image_count'] = failed_image_count
+            metadata['file_paths'] = []
+            metadata['use_local_files'] = False
             return metadata
         
         metadata['exceeds_max_size'] = False
-        metadata['file_paths'] = image_file_paths
+        metadata['file_paths'] = file_paths_aligned
         metadata['use_local_files'] = has_valid_images
         failed_video_count = (
             sum(1 for size in video_sizes if size is None)

@@ -1,3 +1,4 @@
+"""B 站 Cookie 辅助登录交互管理器。"""
 import time
 from typing import Optional, Any
 
@@ -20,6 +21,7 @@ class BilibiliAdminCookieAssistManager(AdminAssistManager):
         reply_timeout_minutes: int,
         request_cooldown_minutes: int
     ):
+        """初始化 B 站 Cookie 辅助管理器。"""
         super().__init__(
             context=context,
             admin_id=admin_id,
@@ -91,11 +93,13 @@ class BilibiliAdminCookieAssistManager(AdminAssistManager):
         return True
 
     def trigger_assist_request(self, reason: str) -> None:
+        """发起一次管理员辅助登录请求。"""
         if not self.enabled:
             return
         self._new_task(self._trigger_assist_request(reason))
 
     async def _trigger_assist_request(self, reason: str) -> None:
+        """异步执行辅助登录请求提交流程。"""
         async with self._lock:
             if self._waiting_confirm:
                 return
@@ -129,6 +133,7 @@ class BilibiliAdminCookieAssistManager(AdminAssistManager):
         qrcode_key: str,
         unified_msg_origin: str
     ) -> None:
+        """异步轮询登录状态并向管理员反馈结果。"""
         timeout = aiohttp.ClientTimeout(total=10)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:

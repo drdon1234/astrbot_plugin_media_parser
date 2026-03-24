@@ -1,8 +1,10 @@
+"""下载通用工具函数集合。"""
 import os
 import re
 from typing import Optional, List, Dict, Any
 
 from ..logger import logger
+from ..storage import stamp_subdir
 
 
 def validate_content_type(
@@ -272,5 +274,6 @@ def generate_cache_file_path(
     
     cache_subdir = os.path.join(cache_dir, media_id)
     os.makedirs(cache_subdir, exist_ok=True)
+    stamp_subdir(cache_subdir)
     return os.path.normpath(os.path.join(cache_subdir, filename))
 

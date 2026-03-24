@@ -1,9 +1,13 @@
+"""B 站解析器，实现视频/动态解析、鉴权与热评提取。"""
 import asyncio
+import hashlib
 import json
 import re
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
 import aiohttp
 
@@ -31,6 +35,15 @@ BV_TABLE = "FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf"
 XOR_CODE = 23442827791579
 MAX_AID = 1 << 51
 BASE = 58
+NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+HOT_COMMENT_API = "https://api.bilibili.com/x/v2/reply/wbi/main"
+HOT_COMMENT_MODE = 3
+MIXIN_KEY_ENC_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
+    27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+    37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
+    22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
+]
 
 
 def av2bv(av: int) -> str:
@@ -61,6 +74,7 @@ def av2bv(av: int) -> str:
 
 class BilibiliParser(BaseVideoParser):
 
+    """B 站解析器，支持视频/动态解析与热评提取。"""
     def __init__(
         self,
         cookie_runtime_enabled: bool = False,
@@ -70,7 +84,8 @@ class BilibiliParser(BaseVideoParser):
         admin_request_cooldown_minutes: int = 1440,
         credential_path: str = "",
         local_debug_mode: bool = False,
-        max_quality: int = 0
+        max_quality: int = 0,
+        hot_comment_count: int = 0
     ):
         """初始化B站解析器"""
         super().__init__("bilibili")
@@ -80,6 +95,10 @@ class BilibiliParser(BaseVideoParser):
             self.max_qn = max(0, int(max_quality))
         except (TypeError, ValueError):
             self.max_qn = 0
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError):
+            self.hot_comment_count = 0
         self.admin_assist_enabled = bool(admin_assist_enabled)
         self.admin_reply_timeout_minutes = max(1, int(admin_reply_timeout_minutes))
         self.admin_request_cooldown_minutes = max(
@@ -97,19 +116,23 @@ class BilibiliParser(BaseVideoParser):
         self._default_headers = {
             "User-Agent": UA,
             "Referer": "https://www.bilibili.com",
-            "Origin": "https://www.bilibili.com"
+            "Origin": "https://www.bilibili.com",
+            "Accept-Encoding": "gzip, deflate",
         }
 
     def get_auth_runtime(self) -> BilibiliAuthRuntime:
+        """返回当前解析器共享的 B 站鉴权运行时对象。"""
         return self.auth_runtime
 
     def consume_assist_request(self) -> Optional[str]:
+        """读取并消费待处理的管理员辅助登录请求原因。"""
         if not self._assist_request_pending:
             return None
         self._assist_request_pending = False
         return self._assist_request_reason or "cookie_unavailable"
 
     def _mark_assist_request(self, reason: str) -> None:
+        """记录需要触发管理员辅助登录的原因。"""
         if not self.cookie_runtime_enabled or not self.admin_assist_enabled:
             return
         self._assist_request_pending = True
@@ -119,6 +142,7 @@ class BilibiliParser(BaseVideoParser):
         self,
         session: aiohttp.ClientSession
     ) -> str:
+        """异步获取当前请求可用的 Cookie 请求头。"""
         if not self.cookie_runtime_enabled:
             return ""
 
@@ -145,6 +169,7 @@ class BilibiliParser(BaseVideoParser):
         referer: Optional[str] = None,
         cookie_header: str = ""
     ) -> Dict[str, str]:
+        """构建访问 B 站 API 所需请求头。"""
         headers = dict(self._default_headers)
         if referer:
             headers["Referer"] = referer
@@ -158,6 +183,7 @@ class BilibiliParser(BaseVideoParser):
         origin: str,
         cookie_header: str = ""
     ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """构建访问媒体资源所需请求头。"""
         custom_headers = {"Cookie": cookie_header} if cookie_header else None
         image_headers = build_request_headers(
             is_video=False,
@@ -172,6 +198,249 @@ class BilibiliParser(BaseVideoParser):
             custom_headers=custom_headers
         )
         return image_headers, video_headers
+
+    @staticmethod
+    def _extract_key_from_url(url: str) -> str:
+        """从 WBI 相关链接中提取密钥片段。"""
+        path = urlparse(url).path
+        return Path(path).stem
+
+    @staticmethod
+    def _get_mixin_key(img_key: str, sub_key: str) -> str:
+        """按 WBI 规则混排密钥并生成 mixin_key。"""
+        raw = img_key + sub_key
+        return "".join(raw[i] for i in MIXIN_KEY_ENC_TAB)[:32]
+
+    async def _get_wbi_mixin_key(
+        self,
+        session: aiohttp.ClientSession,
+        headers: Dict[str, str]
+    ) -> str:
+        """异步拉取导航数据并计算 WBI mixin_key。"""
+        request_headers = dict(headers)
+        request_headers["Accept"] = "application/json, text/plain, */*"
+        async with session.get(
+            NAV_API,
+            headers=request_headers,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            j = await self._check_json_response(resp)
+        nav_data = j.get("data") or {}
+        wbi_img = nav_data.get("wbi_img") or {}
+        img_url = str(wbi_img.get("img_url", "")).strip()
+        sub_url = str(wbi_img.get("sub_url", "")).strip()
+        if not img_url or not sub_url:
+            raise RuntimeError(
+                "获取B站WBI签名密钥失败：缺少img_url/sub_url"
+            )
+        img_key = self._extract_key_from_url(img_url)
+        sub_key = self._extract_key_from_url(sub_url)
+        if not img_key or not sub_key:
+            raise RuntimeError(
+                "获取B站WBI签名密钥失败：img_key/sub_key为空"
+            )
+        return self._get_mixin_key(img_key, sub_key)
+
+    @staticmethod
+    def _sign_wbi_params(
+        params: Dict[str, Any],
+        mixin_key: str
+    ) -> Dict[str, Any]:
+        """为请求参数追加 WBI 签名字段。"""
+        signed_params = dict(params)
+        signed_params["wts"] = int(time.time())
+        signed_params = dict(
+            sorted(signed_params.items(), key=lambda item: item[0])
+        )
+        filtered_params = {}
+        remove_chars = "!'()*"
+        for key, value in signed_params.items():
+            text = str(value)
+            for ch in remove_chars:
+                text = text.replace(ch, "")
+            filtered_params[key] = text
+        query = urlencode(filtered_params)
+        w_rid = hashlib.md5(
+            (query + mixin_key).encode("utf-8")
+        ).hexdigest()
+        filtered_params["w_rid"] = w_rid
+        return filtered_params
+
+    @staticmethod
+    def _extract_initial_state_from_html(html: str) -> Dict[str, Any]:
+        """从 HTML 中提取页面初始化状态 JSON。"""
+        match = re.search(
+            r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\});",
+            html,
+            re.DOTALL
+        )
+        if not match:
+            match = re.search(
+                r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>",
+                html,
+                re.DOTALL
+            )
+        if not match:
+            return {}
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return {}
+
+    async def _resolve_opus_comment_subject(
+        self,
+        session: aiohttp.ClientSession,
+        opus_url: str,
+        headers: Dict[str, str]
+    ) -> Optional[Tuple[int, int]]:
+        """解析动态评论接口所需的 oid/type 参数。"""
+        async with session.get(
+            opus_url,
+            headers=headers,
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            html = await resp.text()
+        state = self._extract_initial_state_from_html(html)
+        detail = state.get("detail") or {}
+        basic = detail.get("basic") or {}
+        comment_id_str = str(basic.get("comment_id_str") or "").strip()
+        comment_type = basic.get("comment_type")
+        if comment_id_str.isdigit() and isinstance(comment_type, int):
+            return int(comment_id_str), int(comment_type)
+        return None
+
+    @staticmethod
+    def _normalize_hot_comment_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        """将原始热评结构标准化为统一字段。"""
+        member = item.get("member") or {}
+        content = item.get("content") or {}
+        ctime = item.get("ctime")
+        if isinstance(ctime, int):
+            time_text = datetime.fromtimestamp(ctime).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        else:
+            time_text = ""
+        try:
+            likes = int(item.get("like", 0) or 0)
+        except (TypeError, ValueError):
+            likes = 0
+        return {
+            "username": str(member.get("uname", "") or ""),
+            "uid": str(member.get("mid", "") or ""),
+            "likes": likes,
+            "message": str(content.get("message", "") or "").replace(
+                "\n",
+                " "
+            ).strip(),
+            "time": time_text,
+        }
+
+    async def _fetch_hot_comments(
+        self,
+        session: aiohttp.ClientSession,
+        oid: int,
+        comment_type: int,
+        referer: str,
+        cookie_header: str = ""
+    ) -> List[Dict[str, Any]]:
+        """异步请求并提取热评列表。"""
+        if self.hot_comment_count <= 0:
+            return []
+        if not isinstance(oid, int) or oid <= 0:
+            return []
+
+        headers = self._build_api_headers(
+            referer=referer,
+            cookie_header=cookie_header
+        )
+        headers["Accept"] = "application/json, text/plain, */*"
+        mixin_key = await self._get_wbi_mixin_key(session, headers)
+        params = {
+            "oid": oid,
+            "type": comment_type,
+            "mode": HOT_COMMENT_MODE,
+            "next": 0,
+            "plat": 1,
+        }
+        signed_params = self._sign_wbi_params(params, mixin_key)
+
+        async with session.get(
+            HOT_COMMENT_API,
+            headers=headers,
+            params=signed_params,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            j = await self._check_json_response(resp)
+        await self._handle_api_response(j, "hot comments")
+        data_obj = j.get("data") or {}
+        replies = data_obj.get("replies") or []
+        top_replies = data_obj.get("top_replies") or []
+
+        all_items: List[Dict[str, Any]] = []
+        if isinstance(top_replies, list):
+            all_items.extend(x for x in top_replies if isinstance(x, dict))
+        if isinstance(replies, list):
+            all_items.extend(x for x in replies if isinstance(x, dict))
+
+        deduped_items: List[Dict[str, Any]] = []
+        seen_rpid = set()
+        for item in all_items:
+            rpid = item.get("rpid")
+            dedupe_key = rpid if rpid is not None else id(item)
+            if dedupe_key in seen_rpid:
+                continue
+            seen_rpid.add(dedupe_key)
+            deduped_items.append(item)
+
+        comments = [
+            self._normalize_hot_comment_item(item)
+            for item in deduped_items
+        ]
+        comments = [item for item in comments if item.get("message")]
+        comments.sort(key=lambda x: x.get("likes", 0), reverse=True)
+        return comments[:self.hot_comment_count]
+
+    async def _attach_hot_comments_to_result(
+        self,
+        session: aiohttp.ClientSession,
+        result: Dict[str, Any],
+        oid: Optional[int],
+        comment_type: int,
+        referer: str,
+        cookie_header: str = ""
+    ) -> None:
+        """按配置将热评附加到解析结果中。"""
+        if self.hot_comment_count <= 0:
+            return
+        if not isinstance(result, dict):
+            return
+        if oid is None:
+            return
+        try:
+            oid_int = int(oid)
+        except (TypeError, ValueError):
+            return
+        if oid_int <= 0:
+            return
+        try:
+            comments = await self._fetch_hot_comments(
+                session=session,
+                oid=oid_int,
+                comment_type=comment_type,
+                referer=referer,
+                cookie_header=cookie_header
+            )
+            if comments:
+                result["hot_comments"] = comments
+        except Exception as e:
+            logger.warning(
+                f"[{self.name}] 获取热评失败: oid={oid_int}, "
+                f"type={comment_type}, 错误: {e}"
+            )
     
     def _prepare_aid_param(self, aid: str) -> int:
         """将aid转换为整数
@@ -440,7 +709,8 @@ class BilibiliParser(BaseVideoParser):
         if urlparse(url).netloc.lower() == B23_HOST:
             headers = {
                 "User-Agent": UA,
-                "Referer": "https://www.bilibili.com"
+                "Referer": "https://www.bilibili.com",
+                "Accept-Encoding": "gzip, deflate",
             }
             try:
                 async with session.get(
@@ -645,11 +915,17 @@ class BilibiliParser(BaseVideoParser):
             timestamp = dt.strftime("%Y-%m-%d")
         
         rights = data.get("rights") or {}
+        aid_value = data.get("aid")
+        try:
+            aid_value = int(aid_value) if aid_value is not None else None
+        except (TypeError, ValueError):
+            aid_value = None
         return {
             "title": title,
             "desc": desc,
             "author": author,
             "timestamp": timestamp,
+            "aid": aid_value,
             "content_access_type_hint": (
                 "charge_exclusive" if data.get("is_upower_exclusive")
                 else "paid_exclusive" if any(
@@ -728,8 +1004,24 @@ class BilibiliParser(BaseVideoParser):
             if pub_time:
                 dt = datetime.fromtimestamp(int(pub_time))
                 timestamp = dt.strftime("%Y-%m-%d")
-        
-        return {"title": title, "desc": desc, "author": author, "timestamp": timestamp}
+
+        aid_value = None
+        if isinstance(ep_obj, dict):
+            aid_value = ep_obj.get("aid")
+        if aid_value is None:
+            aid_value = result.get("aid")
+        try:
+            aid_value = int(aid_value) if aid_value is not None else None
+        except (TypeError, ValueError):
+            aid_value = None
+
+        return {
+            "title": title,
+            "desc": desc,
+            "author": author,
+            "timestamp": timestamp,
+            "aid": aid_value,
+        }
 
     async def get_first_ep_id_by_season(
         self,
@@ -1007,6 +1299,7 @@ class BilibiliParser(BaseVideoParser):
 
     @staticmethod
     def _sum_durl_length(durl_list: List[Dict[str, Any]]) -> Optional[int]:
+        """累计 durl 分段时长并返回毫秒值。"""
         total = 0
         found = False
         for item in durl_list or []:
@@ -1021,6 +1314,7 @@ class BilibiliParser(BaseVideoParser):
         return total if found else None
 
     def _extract_available_length_ms(self, payload: Dict[str, Any]) -> Optional[int]:
+        """提取当前可用播放时长（毫秒）。"""
         durl_length = self._sum_durl_length(payload.get("durl") or [])
         if durl_length is not None:
             return durl_length
@@ -1046,6 +1340,7 @@ class BilibiliParser(BaseVideoParser):
         content_meta: Optional[Dict[str, Any]] = None,
         cookie_header: str = ""
     ) -> Tuple[str, str]:
+        """根据响应内容推断访问受限原因。"""
         hint = ""
         if isinstance(content_meta, dict):
             hint = content_meta.get("content_access_type_hint", "") or ""
@@ -1071,6 +1366,7 @@ class BilibiliParser(BaseVideoParser):
         return restriction_type, restriction_label
 
     def _build_access_message(self, access_info: Dict[str, Any]) -> str:
+        """将访问分析结果格式化为可读提示。"""
         status = access_info.get("status")
         restriction_label = access_info.get("restriction_label", "")
 
@@ -1120,6 +1416,7 @@ class BilibiliParser(BaseVideoParser):
         content_meta: Optional[Dict[str, Any]] = None,
         cookie_header: str = ""
     ) -> Dict[str, Any]:
+        """分析播放接口响应并判断可访问性。"""
         if error is not None:
             access_info = {
                 "status": "unavailable",
@@ -1222,6 +1519,7 @@ class BilibiliParser(BaseVideoParser):
         cid: int = None,
         ep_id: str = None,
     ) -> Dict[str, Any]:
+        """异步检测目标链接访问状态并返回分析结果。"""
         try:
             if vtype == "ugc":
                 data = await self.ugc_playurl(
@@ -1257,6 +1555,7 @@ class BilibiliParser(BaseVideoParser):
 
     @staticmethod
     def _access_fields_from_info(access_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """从访问分析信息中提取对外字段。"""
         if not isinstance(access_info, dict):
             return {}
         return {
@@ -1367,7 +1666,8 @@ class BilibiliParser(BaseVideoParser):
         self,
         url: str,
         session: aiohttp.ClientSession,
-        cookie_header: str = ""
+        cookie_header: str = "",
+        enable_hot_comments: bool = True
     ) -> Optional[Dict[str, Any]]:
         """解析B站动态链接
 
@@ -1394,6 +1694,29 @@ class BilibiliParser(BaseVideoParser):
         opus_id = self.extract_opus_id(url)
         if not opus_id:
             raise RuntimeError(f"无法从URL中提取opus ID: {url}")
+        comment_oid: Optional[int] = None
+        comment_type = 17
+        if enable_hot_comments and self.hot_comment_count > 0:
+            try:
+                subject = await self._resolve_opus_comment_subject(
+                    session=session,
+                    opus_url=url,
+                    headers=self._build_api_headers(
+                        referer=url,
+                        cookie_header=cookie_header
+                    )
+                )
+                if subject:
+                    comment_oid, comment_type = subject
+            except Exception as e:
+                logger.debug(
+                    f"[{self.name}] 解析动态评论主体失败: {url}, 错误: {e}"
+                )
+            if comment_oid is None:
+                try:
+                    comment_oid = int(opus_id)
+                except (TypeError, ValueError):
+                    comment_oid = None
 
         data = await self.get_opus_info(
             opus_id,
@@ -1499,7 +1822,8 @@ class BilibiliParser(BaseVideoParser):
             video_result = await self.parse_bilibili_minimal(
                 video_url,
                 session=session,
-                cookie_header_override=cookie_header
+                cookie_header_override=cookie_header,
+                enable_hot_comments=False
             )
 
             if not video_result:
@@ -1572,7 +1896,7 @@ class BilibiliParser(BaseVideoParser):
                     origin=origin,
                     cookie_header=cookie_header
                 )
-                return {
+                result = {
                     "url": final_url,
                     "title": final_title,
                     "author": final_author,
@@ -1591,6 +1915,16 @@ class BilibiliParser(BaseVideoParser):
                     "timelength_ms": video_result.get("timelength_ms"),
                     "available_length_ms": video_result.get("available_length_ms"),
                 }
+                if enable_hot_comments:
+                    await self._attach_hot_comments_to_result(
+                        session=session,
+                        result=result,
+                        oid=comment_oid,
+                        comment_type=comment_type,
+                        referer=url,
+                        cookie_header=cookie_header
+                    )
+                return result
             else:
                 final_title = title
                 if not final_title or final_title == f"动态 #{opus_id}":
@@ -1611,7 +1945,7 @@ class BilibiliParser(BaseVideoParser):
                     origin=origin,
                     cookie_header=cookie_header
                 )
-                return {
+                result = {
                     "url": original_url if B23_HOST in urlparse(original_url).netloc.lower() else url,
                     "title": final_title,
                     "author": author,
@@ -1630,6 +1964,16 @@ class BilibiliParser(BaseVideoParser):
                     "timelength_ms": video_result.get("timelength_ms"),
                     "available_length_ms": video_result.get("available_length_ms"),
                 }
+                if enable_hot_comments:
+                    await self._attach_hot_comments_to_result(
+                        session=session,
+                        result=result,
+                        oid=comment_oid,
+                        comment_type=comment_type,
+                        referer=url,
+                        cookie_header=cookie_header
+                    )
+                return result
 
         image_urls = []
         if isinstance(item, dict):
@@ -1653,7 +1997,7 @@ class BilibiliParser(BaseVideoParser):
             cookie_header=cookie_header
         )
 
-        return {
+        result = {
             "url": display_url,
             "title": title,
             "author": author,
@@ -1664,6 +2008,16 @@ class BilibiliParser(BaseVideoParser):
             "image_headers": image_headers,
             "video_headers": video_headers,
         }
+        if enable_hot_comments:
+            await self._attach_hot_comments_to_result(
+                session=session,
+                result=result,
+                oid=comment_oid,
+                comment_type=comment_type,
+                referer=url,
+                cookie_header=cookie_header
+            )
+        return result
 
     async def parse(
         self,
@@ -1705,7 +2059,8 @@ class BilibiliParser(BaseVideoParser):
         url: str,
         p: Optional[int] = None,
         session: aiohttp.ClientSession = None,
-        cookie_header_override: Optional[str] = None
+        cookie_header_override: Optional[str] = None,
+        enable_hot_comments: bool = True
     ) -> Optional[Dict[str, Any]]:
         """解析B站链接，返回视频或动态信息
 
@@ -1730,7 +2085,8 @@ class BilibiliParser(BaseVideoParser):
                     url,
                     p,
                     sess,
-                    cookie_header_override=cookie_header_override
+                    cookie_header_override=cookie_header_override,
+                    enable_hot_comments=enable_hot_comments
                 )
         logger.debug(f"[{self.name}] parse_bilibili_minimal: 开始处理 {url}")
         original_url = url
@@ -1753,7 +2109,8 @@ class BilibiliParser(BaseVideoParser):
             return await self.parse_opus(
                 page_url,
                 session,
-                cookie_header=cookie_header
+                cookie_header=cookie_header,
+                enable_hot_comments=enable_hot_comments
             )
 
         if not self.can_parse(page_url):
@@ -1763,6 +2120,8 @@ class BilibiliParser(BaseVideoParser):
         if not vtype:
             raise RuntimeError(f"无法识别视频类型: {url}")
         access_info: Dict[str, Any] = {}
+        comment_oid: Optional[int] = None
+        comment_type = 1
         if vtype == "ugc":
             logger.debug(f"[{self.name}] parse_bilibili_minimal: 处理UGC视频，分P={p_index}")
             bvid = ident.get("bvid")
@@ -1793,6 +2152,13 @@ class BilibiliParser(BaseVideoParser):
                 )
             else:
                 raise RuntimeError(f"无法获取视频信息: {url}")
+            comment_oid_raw = info.get("aid")
+            if comment_oid_raw is None:
+                comment_oid_raw = aid
+            try:
+                comment_oid = int(comment_oid_raw) if comment_oid_raw is not None else None
+            except (TypeError, ValueError):
+                comment_oid = None
             logger.debug(f"[{self.name}] parse_bilibili_minimal: 视频信息获取成功，共{len(pages)}个分P")
             if p_index > len(pages):
                 raise RuntimeError(f"分P序号超出范围: {p_index}")
@@ -1838,6 +2204,11 @@ class BilibiliParser(BaseVideoParser):
                 session,
                 cookie_header=cookie_header
             )
+            comment_oid_raw = info.get("aid")
+            try:
+                comment_oid = int(comment_oid_raw) if comment_oid_raw is not None else None
+            except (TypeError, ValueError):
+                comment_oid = None
             access_info = await self._analyze_target_access(
                 vtype="pgc",
                 referer=page_url,
@@ -1908,6 +2279,15 @@ class BilibiliParser(BaseVideoParser):
             }
             result.update(self._access_fields_from_info(access_info))
             if result.get("access_status") in ("preview_only", "restricted", "unavailable"):
+                if enable_hot_comments:
+                    await self._attach_hot_comments_to_result(
+                        session=session,
+                        result=result,
+                        oid=comment_oid,
+                        comment_type=comment_type,
+                        referer=page_url,
+                        cookie_header=cookie_header
+                    )
                 return result
             raise RuntimeError(f"无法获取视频直链: {url}")
         is_b23_short = urlparse(original_url).netloc.lower() == B23_HOST
@@ -1932,6 +2312,15 @@ class BilibiliParser(BaseVideoParser):
             "video_headers": video_headers,
         }
         result.update(self._access_fields_from_info(access_info))
+        if enable_hot_comments:
+            await self._attach_hot_comments_to_result(
+                session=session,
+                result=result,
+                oid=comment_oid,
+                comment_type=comment_type,
+                referer=page_url,
+                cookie_header=cookie_header
+            )
         logger.debug(f"[{self.name}] parse_bilibili_minimal: 解析完成 {url}, title={result.get('title', '')[:50]}")
         return result
 

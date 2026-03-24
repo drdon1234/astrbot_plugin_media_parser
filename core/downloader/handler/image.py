@@ -1,3 +1,4 @@
+"""图片下载处理器，负责格式识别与可选转换。"""
 import asyncio
 import os
 import tempfile

@@ -175,8 +175,17 @@ logs/
 .pytest_cache/
 .mypy_cache/
 
-# 敏感运行时凭据（Cookie/登录态）
+# 运行时数据（凭据、缓存注册表等）
+core/runtime_manager/
 core/parser/runtime_manager/**/cookie.json
+core/parser/runtime_manager/**/*.json
+
+# 缓存标记文件（由 stamp_subdir 自动生成）
+.astrbot_media_parser
+
+# 媒体分片临时文件（dash/m3u8 下载中间产物）
+*.m4s
+*.m3u8
 
 # Local tests
 /test/

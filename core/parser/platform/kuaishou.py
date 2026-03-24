@@ -1,3 +1,4 @@
+"""快手解析器实现。"""
 import asyncio
 import json
 import re
@@ -26,6 +27,7 @@ MOBILE_HEADERS = {
 
 class KuaishouParser(BaseVideoParser):
 
+    """快手解析器实现。"""
     def __init__(self):
         """初始化快手解析器"""
         super().__init__("kuaishou")

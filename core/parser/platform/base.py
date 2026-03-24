@@ -1,5 +1,6 @@
+"""平台解析器抽象基类，定义统一接口与结果规范。"""
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
+from typing import Optional, List
 
 import aiohttp
 
@@ -9,6 +10,7 @@ from ...types import MediaMetadata
 
 class BaseVideoParser(ABC):
 
+    """平台解析器抽象基类，定义统一解析接口和结果结构。"""
     def __init__(self, name: str):
         """初始化视频解析器基类
 

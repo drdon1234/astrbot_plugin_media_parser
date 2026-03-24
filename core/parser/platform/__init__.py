@@ -1,3 +1,4 @@
+"""平台解析器导出入口。"""
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
 from .kuaishou import KuaishouParser

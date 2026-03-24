@@ -1,3 +1,4 @@
+"""抖音解析器实现。"""
 import asyncio
 import json
 import re
@@ -15,6 +16,7 @@ from ...constants import Config
 
 class DouyinParser(BaseVideoParser):
 
+    """抖音解析器实现。"""
     def __init__(self):
         """初始化抖音解析器"""
         super().__init__("douyin")
@@ -26,7 +28,8 @@ class DouyinParser(BaseVideoParser):
             ),
             'Referer': (
                 'https://www.douyin.com/?is_from_mobile_home=1&recommend=1'
-            )
+            ),
+            'Accept-Encoding': 'gzip, deflate',
         }
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 

@@ -1,3 +1,4 @@
+"""本地调试脚本，用于在命令行环境验证解析与下载流程。"""
 import sys
 import os
 import logging
