@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
-from urllib.parse import urlparse, parse_qs, urlencode
+from urllib.parse import urlparse, parse_qs, urlencode, urljoin
 
 import aiohttp
 
@@ -706,7 +706,7 @@ class BilibiliParser(BaseVideoParser):
         Returns:
             展开后的URL，如果展开失败返回原URL
         """
-        if urlparse(url).netloc.lower() == B23_HOST:
+        if urlparse(url).hostname == B23_HOST:
             headers = {
                 "User-Agent": UA,
                 "Referer": "https://www.bilibili.com",
@@ -716,13 +716,24 @@ class BilibiliParser(BaseVideoParser):
                 async with session.get(
                     url,
                     headers=headers,
-                    allow_redirects=True,
+                    allow_redirects=False,
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as r:
+                    location = r.headers.get("Location")
+                    if location:
+                        return urljoin(str(r.url), location)
                     expanded_url = str(r.url)
-                    return expanded_url
-            except Exception:
-                return url
+                    if expanded_url != url:
+                        return expanded_url
+                    logger.debug(
+                        f"[{self.name}] expand_b23: 未获取到重定向地址 "
+                        f"{url}, status={r.status}"
+                    )
+            except Exception as e:
+                logger.debug(
+                    f"[{self.name}] expand_b23: 获取短链重定向失败 "
+                    f"{url}, 错误: {e}"
+                )
         return url
 
     def extract_p(self, url: str) -> int:

@@ -1,5 +1,6 @@
 """解析管理器，维护解析器列表并按链接匹配。"""
 import asyncio
+import traceback
 from typing import List, Dict, Any, Optional, Tuple
 
 import aiohttp
@@ -92,7 +93,16 @@ class ParserManager:
                 if isinstance(result, SkipParse):
                     logger.debug(f"跳过解析: {url}, 原因: {result}")
                     continue
-                logger.exception(f"解析URL失败: {url}, 错误: {result}")
+                error_traceback = "".join(
+                    traceback.format_exception(
+                        type(result),
+                        result,
+                        result.__traceback__
+                    )
+                ).strip()
+                logger.error(
+                    f"解析URL失败: {url}, 错误: {result}\n{error_traceback}"
+                )
                 metadata_list.append({
                     'url': url,
                     'source_url': url,
