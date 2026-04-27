@@ -148,7 +148,7 @@ async def download_media(
         )
     
     elif media_type == 'image':
-        file_path = await download_image_to_cache(
+        result = await download_image_to_cache(
             session=session,
             image_url=actual_url,
             cache_dir=cache_dir or '',
@@ -157,8 +157,8 @@ async def download_media(
             headers=headers,
             proxy=proxy
         )
-        if file_path:
-            return {'file_path': file_path, 'size_mb': None}
+        if result:
+            return result
         return None
     
     else:

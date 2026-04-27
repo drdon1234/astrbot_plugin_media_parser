@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 import aiohttp
 
 from ...logger import logger
+from ...constants import Config
 from ...storage import cleanup_file, stamp_subdir
 from .base import download_media_from_url
 
@@ -23,7 +24,7 @@ async def _download_stream_normal(
         """根据内容类型与链接生成目标文件路径。"""
         return output_path
 
-    file_path, size_mb = await download_media_from_url(
+    file_path, size_mb, status_code, error = await download_media_from_url(
         session=session,
         media_url=media_url,
         file_path_generator=file_path_generator,
@@ -32,7 +33,12 @@ async def _download_stream_normal(
         proxy=proxy
     )
     if not file_path:
-        return None
+        return {
+            "file_path": None,
+            "size_mb": None,
+            "status_code": status_code,
+            "error": error or "下载失败"
+        }
 
     if size_mb is None:
         try:
@@ -42,7 +48,8 @@ async def _download_stream_normal(
 
     return {
         "file_path": os.path.normpath(file_path),
-        "size_mb": size_mb
+        "size_mb": size_mb,
+        "status_code": status_code
     }
 
 
@@ -91,6 +98,7 @@ async def _merge_dash_streams(
     output_path: str
 ) -> bool:
     """使用 ffmpeg 异步合并 DASH 音视频。"""
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
@@ -99,7 +107,10 @@ async def _merge_dash_streams(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        _, stderr = await process.communicate()
+        _, stderr = await asyncio.wait_for(
+            process.communicate(),
+            timeout=Config.VIDEO_DOWNLOAD_TIMEOUT
+        )
         if process.returncode == 0:
             return True
 
@@ -113,12 +124,36 @@ async def _merge_dash_streams(
             f"{error_output[:200]}"
         )
         return False
+    except asyncio.TimeoutError:
+        await _terminate_ffmpeg_process(process, "DASH ffmpeg 合并")
+        logger.warning("DASH ffmpeg 合并超时")
+        return False
+    except asyncio.CancelledError:
+        await _terminate_ffmpeg_process(process, "DASH ffmpeg 合并")
+        raise
     except FileNotFoundError:
-        logger.warning("ffmpeg 未找到，DASH 合并将降级为仅视频")
+        logger.warning("ffmpeg 未找到，无法合并DASH音视频")
         return False
     except Exception as e:
         logger.warning(f"DASH ffmpeg 合并异常: {e}")
         return False
+
+
+async def _terminate_ffmpeg_process(process, label: str) -> None:
+    """取消或超时时终止并回收 ffmpeg 子进程。"""
+    if process is None:
+        return
+    try:
+        if process.returncode is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
+    except Exception as e:
+        logger.warning(f"{label} 进程终止失败: {e}")
+    try:
+        await process.communicate()
+    except Exception as e:
+        logger.warning(f"{label} 进程回收失败: {e}")
 
 
 def _replace_as_output(src_path: str, output_path: str) -> bool:
@@ -206,7 +241,32 @@ async def download_dash_to_cache(
         if not video_result or not video_result.get("file_path"):
             cleanup_file(video_temp_path)
             cleanup_file(audio_temp_path)
-            return None
+            return {
+                "file_path": None,
+                "size_mb": None,
+                "status_code": (
+                    video_result or {}
+                ).get("status_code"),
+                "error": (video_result or {}).get("error") or "DASH视频流下载失败"
+            }
+
+        if audio_url and (
+            not audio_result or not audio_result.get("file_path")
+        ):
+            cleanup_file(video_result.get("file_path"))
+            cleanup_file(video_temp_path)
+            cleanup_file(audio_temp_path)
+            return {
+                "file_path": None,
+                "size_mb": None,
+                "status_code": (
+                    audio_result or {}
+                ).get("status_code"),
+                "error": (
+                    (audio_result or {}).get("error") or
+                    "DASH音频流下载失败"
+                )
+            }
 
         video_file_path = video_result["file_path"]
         audio_file_path = audio_result["file_path"] if audio_result else None
@@ -222,18 +282,36 @@ async def download_dash_to_cache(
                 cleanup_file(audio_file_path)
                 final_path = output_path
             else:
-                logger.warning("DASH 合并失败，降级为仅视频输出")
+                logger.warning("DASH 合并失败，跳过该媒体")
+                cleanup_file(video_file_path)
                 cleanup_file(audio_file_path)
-                if not _replace_as_output(video_file_path, output_path):
-                    return None
-                final_path = output_path
+                cleanup_file(output_path)
+                return {
+                    "file_path": None,
+                    "size_mb": None,
+                    "status_code": (
+                        video_result.get("status_code") or
+                        audio_result.get("status_code")
+                    ),
+                    "error": "DASH音视频合并失败"
+                }
         else:
             if not _replace_as_output(video_file_path, output_path):
-                return None
+                return {
+                    "file_path": None,
+                    "size_mb": None,
+                    "status_code": video_result.get("status_code"),
+                    "error": "DASH视频输出移动失败"
+                }
             final_path = output_path
 
         if not os.path.exists(final_path):
-            return None
+            return {
+                "file_path": None,
+                "size_mb": None,
+                "status_code": video_result.get("status_code"),
+                "error": "DASH视频输出文件不存在"
+            }
 
         try:
             size_mb = os.path.getsize(final_path) / (1024 * 1024)
@@ -241,9 +319,13 @@ async def download_dash_to_cache(
             size_mb = None
 
         logger.debug(f"DASH下载完成: {final_path}, {size_mb}MB")
+        status_code = video_result.get("status_code")
+        if audio_result and audio_result.get("status_code") is not None:
+            status_code = status_code or audio_result.get("status_code")
         return {
             "file_path": os.path.normpath(final_path),
-            "size_mb": size_mb
+            "size_mb": size_mb,
+            "status_code": status_code
         }
     except Exception as e:
         logger.warning(f"DASH 下载失败: video={video_url}, 错误: {e}")

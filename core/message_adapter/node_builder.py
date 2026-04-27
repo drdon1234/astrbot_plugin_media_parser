@@ -4,10 +4,79 @@ from typing import Dict, Any, List, Optional, Union
 
 from ..logger import logger
 
-from astrbot.api.message_components import Plain, Image, Video, Node, Nodes
+from astrbot.api.message_components import Plain, Image, Video
 
 from ..downloader.utils import strip_media_prefixes
 from ..types import BuildAllNodesResult, LinkBuildMeta
+
+
+def _resolve_output_flag(
+    metadata: Dict[str, Any],
+    key: str,
+    default: bool
+) -> bool:
+    value = metadata.get(key)
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+def _append_media_skip_summary(text_parts: List[str], metadata: Dict[str, Any]) -> None:
+    """将媒体跳过统计和逐项原因追加到文本节点。"""
+    video_reasons = metadata.get('video_skip_reasons', []) or []
+    image_reasons = metadata.get('image_skip_reasons', []) or []
+    video_count = metadata.get('video_count', len(metadata.get('video_urls', [])))
+    image_count = metadata.get('image_count', len(metadata.get('image_urls', [])))
+    skipped_videos = [
+        (idx + 1, reason)
+        for idx, reason in enumerate(video_reasons)
+        if reason
+    ]
+    skipped_images = [
+        (idx + 1, reason)
+        for idx, reason in enumerate(image_reasons)
+        if reason
+    ]
+    if not skipped_videos and not skipped_images:
+        return
+
+    summary_parts = []
+    if video_count:
+        summary_parts.append(f"视频 {len(skipped_videos)}/{video_count}")
+    if image_count:
+        summary_parts.append(f"图片 {len(skipped_images)}/{image_count}")
+    if summary_parts:
+        text_parts.append(f"媒体跳过：{', '.join(summary_parts)}")
+
+    for idx, reason in skipped_videos[:5]:
+        text_parts.append(f"  视频[{idx}]：{reason}")
+    for idx, reason in skipped_images[:5]:
+        text_parts.append(f"  图片[{idx}]：{reason}")
+
+
+def _mark_media_failure(
+    metadata: Dict[str, Any],
+    kind: str,
+    index: int,
+    reason: str
+) -> None:
+    """节点构建失败时回填跳过原因，供文本节点或调试使用。"""
+    key = 'video_skip_reasons' if kind == 'video' else 'image_skip_reasons'
+    modes_key = 'video_modes' if kind == 'video' else 'image_modes'
+    count_key = 'failed_video_count' if kind == 'video' else 'failed_image_count'
+    reasons = metadata.setdefault(key, [])
+    while len(reasons) <= index:
+        reasons.append(None)
+    if not reasons[index]:
+        reasons[index] = reason
+    modes = metadata.setdefault(modes_key, [])
+    while len(modes) <= index:
+        modes.append('skip')
+    modes[index] = 'skip'
+    try:
+        metadata[count_key] = int(metadata.get(count_key, 0) or 0) + 1
+    except (TypeError, ValueError):
+        metadata[count_key] = 1
 
 
 def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, enable_text_metadata: bool = True) -> Optional[Plain]:
@@ -130,19 +199,7 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
             else:
                 text_parts.append(f"解析失败：视频大小超过限制（{actual_video_size:.1f}MB）")
     
-    failed_video_count = metadata.get('failed_video_count', 0)
-    failed_image_count = metadata.get('failed_image_count', 0)
-    video_count = metadata.get('video_count', 0)
-    image_count = metadata.get('image_count', 0)
-    
-    if (failed_video_count > 0 or failed_image_count > 0) and (video_count > 0 or image_count > 0):
-        failure_parts = []
-        if video_count > 0:
-            failure_parts.append(f"视频 {failed_video_count}/{video_count}")
-        if image_count > 0:
-            failure_parts.append(f"图片 {failed_image_count}/{image_count}")
-        if failure_parts:
-            text_parts.append(f"下载失败：{', '.join(failure_parts)}")
+    _append_media_skip_summary(text_parts, metadata)
     
     if metadata.get('url'):
         text_parts.append(f"原始链接：{metadata['url']}")
@@ -155,19 +212,25 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
 
 def build_media_nodes(
     metadata: Dict[str, Any],
-    use_local_files: bool = False
+    use_local_files: bool = False,
+    enable_rich_media: bool = True
 ) -> List[Union[Image, Video]]:
     """构建媒体节点
 
     Args:
         metadata: 元数据字典
         use_local_files: 是否使用本地文件
+        enable_rich_media: 是否构建富媒体节点
 
     Returns:
         媒体节点列表（Image或Video节点）
     """
     nodes = []
     url = metadata.get('url', '')
+
+    if not enable_rich_media:
+        logger.debug(f"富媒体输出已关闭，跳过媒体节点: {url}")
+        return nodes
     
     if metadata.get('exceeds_max_size'):
         logger.debug(f"媒体超过大小限制，跳过节点构建: {url}")
@@ -185,7 +248,8 @@ def build_media_nodes(
     video_urls = metadata.get('video_urls', [])
     image_urls = metadata.get('image_urls', [])
     file_paths = metadata.get('file_paths', [])
-    video_sizes = metadata.get('video_sizes', [])
+    video_modes = metadata.get('video_modes') or []
+    image_modes = metadata.get('image_modes') or []
     use_fts = metadata.get('use_file_token_service', False)
     file_token_urls = metadata.get('file_token_urls', [])
     
@@ -203,11 +267,13 @@ def build_media_nodes(
     file_idx = 0
     
     for idx, url_list in enumerate(video_urls):
-        if not url_list or not isinstance(url_list, list):
+        mode = video_modes[idx] if idx < len(video_modes) else (
+            'local' if use_local_files else 'direct'
+        )
+        if mode == 'skip':
             file_idx += 1
             continue
-        
-        if video_sizes and idx < len(video_sizes) and video_sizes[idx] is None:
+        if not url_list or not isinstance(url_list, list):
             file_idx += 1
             continue
         
@@ -229,27 +295,31 @@ def build_media_nodes(
             except Exception as e:
                 logger.warning(f"使用Token URL构建视频节点失败: {token_url}, 错误: {e}")
         
-        if use_fts:
-            actual_video_url = strip_media_prefixes(video_url)
-            try:
-                nodes.append(Video.fromURL(actual_video_url))
-            except Exception as e:
-                logger.warning(f"构建视频节点失败(直链回退): {actual_video_url}, 错误: {e}")
-        elif use_local_files and file_idx < len(file_paths) and file_paths[file_idx] and os.path.exists(file_paths[file_idx]):
+        if mode == 'local' and file_idx < len(file_paths) and file_paths[file_idx] and os.path.exists(file_paths[file_idx]):
             try:
                 nodes.append(Video.fromFileSystem(file_paths[file_idx]))
             except Exception as e:
                 logger.warning(f"构建视频节点失败: {file_paths[file_idx]}, 错误: {e}")
+                _mark_media_failure(metadata, 'video', idx, f"构建本地视频节点失败: {e}")
+        elif mode == 'local':
+            _mark_media_failure(metadata, 'video', idx, "本地视频文件不存在或不可访问")
         else:
             actual_video_url = strip_media_prefixes(video_url)
             try:
                 nodes.append(Video.fromURL(actual_video_url))
             except Exception as e:
                 logger.warning(f"构建视频节点失败: {actual_video_url}, 错误: {e}")
+                _mark_media_failure(metadata, 'video', idx, f"构建视频URL节点失败: {e}")
         
         file_idx += 1
     
-    for url_list in image_urls:
+    for image_idx, url_list in enumerate(image_urls):
+        mode = image_modes[image_idx] if image_idx < len(image_modes) else (
+            'local' if use_local_files else 'direct'
+        )
+        if mode == 'skip':
+            file_idx += 1
+            continue
         if not url_list or not isinstance(url_list, list):
             file_idx += 1
             continue
@@ -272,21 +342,20 @@ def build_media_nodes(
             except Exception as e:
                 logger.warning(f"使用Token URL构建图片节点失败: {token_url}, 错误: {e}")
         
-        if use_fts:
-            try:
-                nodes.append(Image.fromURL(image_url))
-            except Exception as e:
-                logger.warning(f"构建图片节点失败(直链回退): {image_url}, 错误: {e}")
-        elif use_local_files and file_idx < len(file_paths) and file_paths[file_idx]:
+        if mode == 'local' and file_idx < len(file_paths) and file_paths[file_idx]:
             try:
                 nodes.append(Image.fromFileSystem(file_paths[file_idx]))
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {file_paths[file_idx]}, 错误: {e}")
+                _mark_media_failure(metadata, 'image', image_idx, f"构建本地图片节点失败: {e}")
+        elif mode == 'local':
+            _mark_media_failure(metadata, 'image', image_idx, "本地图片文件不存在或不可访问")
         else:
             try:
                 nodes.append(Image.fromURL(image_url))
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {image_url}, 错误: {e}")
+                _mark_media_failure(metadata, 'image', image_idx, f"构建图片URL节点失败: {e}")
         
         file_idx += 1
     
@@ -298,7 +367,8 @@ def build_nodes_for_link(
     metadata: Dict[str, Any],
     use_local_files: bool = False,
     max_video_size_mb: float = 0.0,
-    enable_text_metadata: bool = True
+    enable_text_metadata: bool = True,
+    enable_rich_media: bool = True
 ) -> List[Union[Plain, Image, Video]]:
     """构建单个链接的节点列表
 
@@ -307,17 +377,35 @@ def build_nodes_for_link(
         use_local_files: 是否使用本地文件
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
         enable_text_metadata: 是否发送图文文本消息
+        enable_rich_media: 是否发送图片/视频
 
     Returns:
         节点列表（Plain、Image、Video对象）
     """
     nodes = []
-    
-    text_node = build_text_node(metadata, max_video_size_mb, enable_text_metadata)
+    effective_text_metadata = _resolve_output_flag(
+        metadata,
+        "_enable_text_metadata",
+        enable_text_metadata,
+    )
+    effective_rich_media = _resolve_output_flag(
+        metadata,
+        "_enable_rich_media",
+        enable_rich_media,
+    )
+
+    media_nodes = build_media_nodes(
+        metadata,
+        use_local_files,
+        effective_rich_media,
+    )
+    text_node = build_text_node(
+        metadata,
+        max_video_size_mb,
+        effective_text_metadata,
+    )
     if text_node:
         nodes.append(text_node)
-    
-    media_nodes = build_media_nodes(metadata, use_local_files)
     nodes.extend(media_nodes)
     
     return nodes
@@ -348,7 +436,8 @@ def build_all_nodes(
     is_auto_pack: bool,
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
-    enable_text_metadata: bool = True
+    enable_text_metadata: bool = True,
+    enable_rich_media: bool = True
 ) -> BuildAllNodesResult:
     """构建所有链接的节点，处理消息打包逻辑
 
@@ -358,6 +447,7 @@ def build_all_nodes(
         large_video_threshold_mb: 大视频阈值(MB)
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
         enable_text_metadata: 是否发送图文文本消息
+        enable_rich_media: 是否发送图片/视频
 
     Returns:
         BuildAllNodesResult 命名元组
@@ -389,7 +479,8 @@ def build_all_nodes(
             metadata,
             use_local_files,
             max_video_size_mb,
-            enable_text_metadata
+            enable_text_metadata,
+            enable_rich_media
         )
         
         logger.debug(f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}")
@@ -398,27 +489,37 @@ def build_all_nodes(
         link_video_files = []
         link_temp_files = []
         
-        if use_local_files:
-            video_urls = metadata.get('video_urls', [])
-            video_count = len(video_urls)
-            
-            for fp_idx, file_path in enumerate(link_file_paths):
-                if file_path:
-                    if fp_idx < video_count:
-                        link_video_files.append(file_path)
-                        video_files.append(file_path)
-                    else:
-                        link_temp_files.append(file_path)
-                        temp_files.append(file_path)
+        video_urls = metadata.get('video_urls', [])
+        video_count = len(video_urls)
+        video_modes = metadata.get('video_modes') or []
+        image_modes = metadata.get('image_modes') or []
+
+        for fp_idx, file_path in enumerate(link_file_paths):
+            if not file_path:
+                continue
+            if fp_idx < video_count:
+                mode = video_modes[fp_idx] if fp_idx < len(video_modes) else ''
+                if mode == 'local':
+                    link_video_files.append(file_path)
+                    video_files.append(file_path)
+            else:
+                img_idx = fp_idx - video_count
+                mode = image_modes[img_idx] if img_idx < len(image_modes) else ''
+                if mode == 'local':
+                    link_temp_files.append(file_path)
+                    temp_files.append(file_path)
         
-        all_link_nodes.append(link_nodes)
-        link_metadata.append(LinkBuildMeta(
-            link_nodes=link_nodes,
-            is_large_media=is_large_media,
-            is_normal=not is_large_media,
-            video_files=link_video_files,
-            temp_files=link_temp_files,
-        ))
+        if link_nodes:
+            all_link_nodes.append(link_nodes)
+            link_metadata.append(LinkBuildMeta(
+                link_nodes=link_nodes,
+                is_large_media=is_large_media,
+                is_normal=not is_large_media,
+                video_files=link_video_files,
+                temp_files=link_temp_files,
+            ))
+        else:
+            logger.debug(f"节点为空，跳过发送队列: {url}")
     
     logger.debug(
         f"所有节点构建完成: "

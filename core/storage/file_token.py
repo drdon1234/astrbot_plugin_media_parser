@@ -12,14 +12,24 @@ async def register_files_with_token_service(
 ) -> None:
     """将已下载的媒体文件注册到 AstrBot 文件 Token 服务。
 
-    无论注册是否成功，都会设置 use_file_token_service 标志，
-    确保节点构建时不会回退到 fromFileSystem（临时目录下的文件
-    对消息平台不可达）。注册失败时回退到原始直链。
+    Token 服务只增强已经缓存到本地文件的媒体。注册失败不会改变解析结果，
+    节点构建时会回退为本地文件发送。
     """
-    metadata['use_file_token_service'] = True
+    metadata['use_file_token_service'] = False
+    metadata['file_token_urls'] = []
 
     file_paths = metadata.get('file_paths', [])
     if not file_paths or metadata.get('error'):
+        return
+
+    local_modes = list(metadata.get('video_modes') or []) + list(
+        metadata.get('image_modes') or []
+    )
+    if not any(
+        fp and os.path.exists(fp) and idx < len(local_modes)
+        and local_modes[idx] == "local"
+        for idx, fp in enumerate(file_paths)
+    ):
         return
 
     try:
@@ -27,7 +37,7 @@ async def register_files_with_token_service(
     except ImportError:
         logger.warning(
             "无法导入astrbot.core的file_token_service，"
-            "文件Token服务不可用，将回退为直链模式"
+            "文件Token服务不可用，将回退为本地文件发送"
         )
         return
 
@@ -39,13 +49,14 @@ async def register_files_with_token_service(
         logger.warning(
             "文件Token服务模式已启用，但未配置回调地址"
             "（插件配置 callback_api_base 或 AstrBot 全局 callback_api_base 均为空），"
-            "将回退为直链模式"
+            "将回退为本地文件发送"
         )
         return
 
     file_token_urls: List[Optional[str]] = []
-    for fp in file_paths:
-        if fp and os.path.exists(fp):
+    for idx, fp in enumerate(file_paths):
+        is_local = idx < len(local_modes) and local_modes[idx] == "local"
+        if is_local and fp and os.path.exists(fp):
             try:
                 token = await file_token_service.register_file(
                     fp, timeout=file_token_ttl
@@ -60,3 +71,6 @@ async def register_files_with_token_service(
             file_token_urls.append(None)
 
     metadata['file_token_urls'] = file_token_urls
+    metadata['use_file_token_service'] = any(
+        url is not None for url in file_token_urls
+    )

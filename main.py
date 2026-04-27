@@ -12,7 +12,11 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from .core.parser import ParserManager
 from .core.parser.utils import extract_url_from_card_data
 from .core.downloader import DownloadManager
-from .core.storage import cleanup_files, CacheRegistry, register_files_with_token_service
+from .core.storage import (
+    cleanup_files,
+    cleanup_marked_in,
+    register_files_with_token_service,
+)
 from .core.constants import Config
 from .core.message_adapter.sender import MessageSender
 from .core.message_adapter.node_builder import build_all_nodes
@@ -24,7 +28,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "0.6.0"
+    "0.7.0"
 )
 class VideoParserPlugin(Star):
 
@@ -48,16 +52,12 @@ class VideoParserPlugin(Star):
             max_video_size_mb=cfg.download.max_video_size_mb,
             large_video_threshold_mb=cfg.download.large_video_threshold_mb,
             cache_dir=cfg.download.cache_dir,
-            pre_download_all_media=cfg.download.pre_download_all_media,
+            cache_dir_available=cfg.download.cache_dir_available,
             max_concurrent_downloads=cfg.download.max_concurrent_downloads,
         )
 
-        self.cache_registry = CacheRegistry()
-        if cfg.download.cache_dir:
-            label = "media_relay" if cfg.relay.enabled else "pre_download"
-            self.cache_registry.register(cfg.download.cache_dir, label)
-
         self.message_sender = MessageSender()
+        self._cleanup_tasks: set[asyncio.Task] = set()
         self.admin_cookie_assist = BilibiliAdminCookieAssistManager(
             context=self.context,
             admin_id=cfg.permission.admin_id,
@@ -70,11 +70,12 @@ class VideoParserPlugin(Star):
         )
 
     async def terminate(self):
+        await self._shutdown_delayed_cleanups()
         await self.admin_cookie_assist.shutdown()
         await self.download_manager.shutdown()
 
         if self.download_manager.cache_dir:
-            CacheRegistry.cleanup_marked_in(self.download_manager.cache_dir)
+            cleanup_marked_in(self.download_manager.cache_dir)
 
     # ── 内部辅助 ────────────────────────────────────────
 
@@ -95,6 +96,20 @@ class VideoParserPlugin(Star):
             pass
         except Exception as e:
             logger.warning(f"延迟清理文件失败: {e}")
+
+    def _schedule_delayed_cleanup(self, files, delay: int):
+        task = asyncio.create_task(self._delayed_cleanup(list(files), delay))
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def _shutdown_delayed_cleanups(self):
+        tasks = list(self._cleanup_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_tasks.clear()
 
     def _extract_url_from_json_card(
         self, event: AstrMessageEvent
@@ -144,30 +159,98 @@ class VideoParserPlugin(Star):
 
         return []
 
+    @staticmethod
+    def _has_sendable_rich_media(metadata_list) -> bool:
+        """判断整条消息是否至少有一个可发送的富媒体。"""
+        for metadata in metadata_list:
+            video_modes = metadata.get("video_modes") or []
+            image_modes = metadata.get("image_modes") or []
+            if any(mode in ("local", "direct") for mode in video_modes):
+                return True
+            if any(mode in ("local", "direct") for mode in image_modes):
+                return True
+        return False
+
+    @staticmethod
+    def _has_text_metadata(metadata: Dict[str, Any]) -> bool:
+        """判断解析结果是否包含可发送的文本元数据。"""
+        return any(
+            bool(str(metadata.get(key) or "").strip())
+            for key in ("title", "author", "desc", "timestamp")
+        )
+
+    def _filter_links_by_output(self, links_with_parser):
+        """过滤掉当前配置下不会产生任何输出的控制器链接。"""
+        cfg = self.config_manager
+        filtered = []
+        for link, parser in links_with_parser:
+            parser_name = getattr(parser, "name", "")
+            if cfg.message.controller_has_any_output(parser_name):
+                filtered.append((link, parser))
+            elif cfg.admin.debug_mode:
+                self.logger.debug(
+                    f"控制器 {parser_name} 的文本元数据和富媒体均关闭，"
+                    f"跳过链接: {link}"
+                )
+        return filtered
+
+    def _apply_output_flags(self, metadata_list) -> None:
+        """将每条解析结果的有效输出开关写入 metadata。"""
+        for metadata in metadata_list:
+            text_enabled, rich_enabled = (
+                self.config_manager.message.output_for_metadata(metadata)
+            )
+            metadata["_enable_text_metadata"] = text_enabled
+            metadata["_enable_rich_media"] = rich_enabled
+
+    def _metadata_has_output_candidate(
+        self,
+        metadata: Dict[str, Any]
+    ) -> bool:
+        """判断 metadata 在当前输出策略下是否可能构建出节点。"""
+        if metadata.get("error"):
+            return False
+
+        text_enabled = bool(
+            metadata.get(
+                "_enable_text_metadata",
+                True
+            )
+        )
+        rich_enabled = bool(
+            metadata.get(
+                "_enable_rich_media",
+                True
+            )
+        )
+        has_media = bool(metadata.get("video_urls")) or bool(
+            metadata.get("image_urls")
+        )
+        has_text = (
+            self._has_text_metadata(metadata) or
+            bool(metadata.get("access_message")) or
+            has_media
+        )
+        return bool((rich_enabled and has_media) or (text_enabled and has_text))
+
     async def _handle_clean_cache(self, event: AstrMessageEvent):
-        registered = self.cache_registry.get_all()
-        if not registered:
-            await event.send(event.plain_result("无已注册的缓存目录"))
+        cache_dir = self.download_manager.cache_dir
+        if not cache_dir:
+            await event.send(event.plain_result("未配置媒体文件缓存目录"))
             return
 
         try:
-            subdirs_cleaned, files_cleaned, skipped = (
-                self.cache_registry.cleanup_all()
-            )
-            parts = [
-                f"缓存清理完成: "
+            subdirs_cleaned, files_cleaned = cleanup_marked_in(cache_dir)
+            msg = (
+                "缓存清理完成: "
                 f"{subdirs_cleaned} 个媒体子目录, {files_cleaned} 个文件"
-            ]
-            if skipped:
-                parts.append(
-                    f"以下根目录无可清理内容: {', '.join(skipped)}"
-                )
-            msg = "\n".join(parts)
+            )
             await event.send(event.plain_result(msg))
             sender_id = str(event.get_sender_id() or "").strip()
             logger.info(
                 f"管理员 {sender_id} 主动清理缓存: "
-                f"{subdirs_cleaned} 个子目录, {files_cleaned} 个文件"
+                f"{cache_dir}, {subdirs_cleaned} 个子目录, "
+                f"{files_cleaned} 个文件"
             )
         except Exception as e:
             logger.warning(f"管理员清理缓存失败: {e}")
@@ -180,6 +263,11 @@ class VideoParserPlugin(Star):
         cfg = self.config_manager
         self.admin_cookie_assist.try_update_admin_origin(event)
 
+        if not cfg.message.has_any_output():
+            if cfg.admin.debug_mode:
+                self.logger.debug("文本元数据和富媒体均关闭，跳过解析")
+            return
+
         is_private = event.is_private_chat()
         sender_id = event.get_sender_id()
         group_id = None if is_private else event.get_group_id()
@@ -187,10 +275,11 @@ class VideoParserPlugin(Star):
         if not cfg.permission.check(is_private, sender_id, group_id):
             return
 
-        message_text = event.message_str
+        original_message_text = event.message_str or ""
+        parse_text = original_message_text
 
         clean_kw = cfg.admin.clean_cache_keyword
-        if clean_kw and message_text.strip() == clean_kw:
+        if clean_kw and original_message_text.strip() == clean_kw:
             if (
                 is_private
                 and cfg.permission.admin_id
@@ -205,18 +294,26 @@ class VideoParserPlugin(Star):
                 self.logger.debug(
                     f"[media_parser] 从JSON卡片提取到链接: {card_url}"
                 )
-            message_text = card_url
+            parse_text = card_url
 
         links_with_parser = self.parser_manager.extract_all_links(
-            message_text
+            parse_text
         )
+        found_direct_links = bool(links_with_parser)
+        if found_direct_links:
+            links_with_parser = self._filter_links_by_output(links_with_parser)
+            if not links_with_parser:
+                return
 
         if not links_with_parser:
             if (
                 cfg.trigger.reply_trigger
-                and cfg.trigger.has_keyword(event.message_str)
+                and cfg.trigger.has_keyword(original_message_text)
             ):
                 links_with_parser = self._try_extract_reply_links(event)
+                links_with_parser = self._filter_links_by_output(
+                    links_with_parser
+                )
                 if links_with_parser and cfg.admin.debug_mode:
                     self.logger.debug(
                         f"通过回复触发解析，提取到 "
@@ -229,7 +326,7 @@ class VideoParserPlugin(Star):
                 )
                 return
 
-        if not cfg.trigger.should_parse(message_text):
+        if not cfg.trigger.should_parse(original_message_text):
             return
 
         if cfg.admin.debug_mode:
@@ -243,7 +340,7 @@ class VideoParserPlugin(Star):
         timeout = aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             metadata_list = await self.parser_manager.parse_text(
-                message_text,
+                parse_text,
                 session,
                 links_with_parser=links_with_parser
             )
@@ -252,14 +349,10 @@ class VideoParserPlugin(Star):
                 if cfg.admin.debug_mode:
                     self.logger.debug("解析后未获得任何元数据")
                 return
+            self._apply_output_flags(metadata_list)
 
             has_valid_metadata = any(
-                not metadata.get('error') and
-                (
-                    bool(metadata.get('video_urls')) or
-                    bool(metadata.get('image_urls')) or
-                    bool(metadata.get('access_message'))
-                )
+                self._metadata_has_output_candidate(metadata)
                 for metadata in metadata_list
             )
 
@@ -270,13 +363,6 @@ class VideoParserPlugin(Star):
                         "（可能是直播链接或解析失败）"
                     )
                 return
-
-            if cfg.message.opening_enabled:
-                msg_text = (
-                    cfg.message.opening_content
-                    or "流媒体解析bot为您服务 ٩( 'ω' )و"
-                )
-                await event.send(event.plain_result(msg_text))
 
             if cfg.admin.debug_mode:
                 self.logger.debug(
@@ -293,58 +379,114 @@ class VideoParserPlugin(Star):
 
             # ── 元数据处理（下载）────────────────────────
 
-            async def process_single(
-                metadata: Dict[str, Any]
-            ) -> Dict[str, Any]:
-                if metadata.get('error'):
-                    return metadata
+            opening_sent = False
+            should_process_rich_media = any(
+                bool(metadata.get("_enable_rich_media", True))
+                for metadata in metadata_list
+            )
+            if should_process_rich_media:
+                opening_lock = asyncio.Lock()
+
+                async def send_opening_once() -> None:
+                    nonlocal opening_sent
+                    if not cfg.message.opening_enabled:
+                        return
+                    async with opening_lock:
+                        if opening_sent:
+                            return
+                        msg_text = (
+                            cfg.message.opening_content
+                            or "流媒体解析bot为您服务 ٩( 'ω' )و"
+                        )
+                        try:
+                            await event.send(event.plain_result(msg_text))
+                            opening_sent = True
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            self.logger.warning(f"发送开场语失败: {e}")
+
+                async def process_single(
+                    metadata: Dict[str, Any]
+                ) -> Dict[str, Any]:
+                    if (
+                        metadata.get('error') or
+                        not metadata.get(
+                            "_enable_rich_media",
+                            True
+                        )
+                    ):
+                        return metadata
+                    try:
+                        return await self.download_manager.process_metadata(
+                            session,
+                            metadata,
+                            proxy_addr=cfg.proxy.address,
+                            on_sendable_media=send_opening_once,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self.logger.exception(
+                            f"处理元数据失败: "
+                            f"{metadata.get('url', '')}, 错误: {e}"
+                        )
+                        metadata['error'] = str(e)
+                        return metadata
+
+                async def process_indexed(
+                    index: int,
+                    metadata: Dict[str, Any]
+                ):
+                    return index, await process_single(metadata)
+
+                tasks = [
+                    asyncio.create_task(process_indexed(i, m))
+                    for i, m in enumerate(metadata_list)
+                ]
+                processed_metadata_list = [None] * len(metadata_list)
+
                 try:
-                    return await self.download_manager.process_metadata(
-                        session,
-                        metadata,
-                        proxy_addr=cfg.proxy.address
-                    )
-                except (Exception, asyncio.CancelledError) as e:
-                    self.logger.exception(
-                        f"处理元数据失败: "
-                        f"{metadata.get('url', '')}, 错误: {e}"
-                    )
-                    metadata['error'] = str(e)
-                    return metadata
+                    for completed in asyncio.as_completed(tasks):
+                        i, md = await completed
+                        processed_metadata_list[i] = md
 
-            tasks = [process_single(m) for m in metadata_list]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+                        if (
+                            not opening_sent and
+                            self._has_sendable_rich_media([md])
+                        ):
+                            await send_opening_once()
+                except asyncio.CancelledError:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                except Exception:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
 
-            processed_metadata_list = []
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    md = metadata_list[i] if i < len(metadata_list) else {}
-                    error_msg = str(result)
-                    self.logger.exception(
-                        f"处理元数据时发生未捕获的异常: "
-                        f"{md.get('url', '未知URL')}, "
-                        f"错误类型: {type(result).__name__}, "
-                        f"错误: {error_msg}"
-                    )
-                    md['error'] = error_msg
-                    processed_metadata_list.append(md)
-                elif isinstance(result, dict):
-                    processed_metadata_list.append(result)
-                else:
-                    md = metadata_list[i] if i < len(metadata_list) else {}
-                    error_msg = f'未知错误类型: {type(result).__name__}'
-                    self.logger.warning(
-                        f"处理元数据返回了意外的结果类型: "
-                        f"{md.get('url', '未知URL')}, "
-                        f"类型: {type(result).__name__}"
-                    )
-                    md['error'] = error_msg
-                    processed_metadata_list.append(md)
+                processed_metadata_list = [
+                    md if md is not None else metadata_list[i]
+                    for i, md in enumerate(processed_metadata_list)
+                ]
+            else:
+                if cfg.admin.debug_mode:
+                    self.logger.debug("富媒体输出已关闭，跳过下载阶段")
+                processed_metadata_list = metadata_list
 
             # ── 文件 Token 服务注册 ──────────────────────
 
             if cfg.relay.enabled:
                 for metadata in processed_metadata_list:
+                    if not metadata.get(
+                        "_enable_rich_media",
+                        True
+                    ):
+                        continue
                     await register_files_with_token_service(
                         metadata,
                         cfg.relay.callback_api_base,
@@ -358,7 +500,8 @@ class VideoParserPlugin(Star):
                 cfg.message.auto_pack,
                 cfg.download.large_video_threshold_mb,
                 cfg.download.max_video_size_mb,
-                cfg.message.text_metadata,
+                True,
+                True,
             )
 
             if cfg.admin.debug_mode:
@@ -372,6 +515,17 @@ class VideoParserPlugin(Star):
             if not build_result.all_link_nodes:
                 if cfg.admin.debug_mode:
                     self.logger.debug("未构建任何节点，跳过发送")
+                if opening_sent:
+                    try:
+                        await event.send(event.plain_result(
+                            "解析完成，但没有可发送的媒体内容，"
+                            "可能是下载失败或媒体不可访问。"
+                        ))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self.logger.warning(f"发送空结果提示失败: {e}")
+                cleanup_files(build_result.temp_files + build_result.video_files)
                 return
 
             if cfg.admin.debug_mode:
@@ -414,9 +568,7 @@ class VideoParserPlugin(Star):
                             f"文件Token服务模式下延迟 {delay}s 后清理 "
                             f"{len(all_files)} 个文件"
                         )
-                    asyncio.create_task(
-                        self._delayed_cleanup(all_files, delay)
-                    )
+                    self._schedule_delayed_cleanup(all_files, delay)
                 elif all_files:
                     cleanup_files(all_files)
                     if cfg.admin.debug_mode:

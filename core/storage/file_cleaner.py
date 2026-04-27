@@ -4,7 +4,7 @@ import shutil
 from typing import List
 
 from ..logger import logger
-from .cache_registry import MARKER_FILE_NAME
+from .cache_marker import MARKER_FILE_NAME
 
 
 def cleanup_file(file_path: str) -> bool:

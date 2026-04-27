@@ -50,7 +50,7 @@ async def download_video_to_cache(
             url=url
         )
     
-    file_path, size_mb = await download_media_from_url(
+    file_path, size_mb, status_code, error = await download_media_from_url(
         session=session,
         media_url=video_url,
         file_path_generator=file_path_generator,
@@ -63,10 +63,16 @@ async def download_video_to_cache(
         logger.debug(f"视频下载完成: {video_url} -> {file_path}, {size_mb}MB")
         return {
             'file_path': file_path,
-            'size_mb': size_mb
+            'size_mb': size_mb,
+            'status_code': status_code
         }
     logger.debug(f"视频下载失败: {video_url}")
-    return None
+    return {
+        'file_path': None,
+        'size_mb': None,
+        'status_code': status_code,
+        'error': error or '下载失败'
+    }
 
 
 async def batch_download_videos(

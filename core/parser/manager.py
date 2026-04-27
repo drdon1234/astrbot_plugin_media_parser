@@ -28,6 +28,32 @@ class ParserManager:
         self.parsers = parsers
         self.link_router = LinkRouter(parsers)
 
+    @staticmethod
+    def _resolve_platform_name(
+        parser: BaseVideoParser,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """按解析结果归一平台名。"""
+        explicit = (metadata or {}).get("platform")
+        return explicit or parser.name
+
+    def _normalize_metadata(
+        self,
+        url: str,
+        parser: BaseVideoParser,
+        metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """补齐解析结果的统一字段。"""
+        platform = self._resolve_platform_name(parser, metadata)
+        metadata["platform"] = platform
+        metadata.setdefault("parser_name", parser.name)
+        metadata.setdefault("source_url", url)
+        metadata.setdefault("video_urls", [])
+        metadata.setdefault("image_urls", [])
+        metadata.setdefault("image_headers", {})
+        metadata.setdefault("video_headers", {})
+        return metadata
+
     def find_parser(self, url: str) -> Optional[BaseVideoParser]:
         """根据URL查找合适的解析器
 
@@ -88,11 +114,14 @@ class ParserManager:
         link_items = list(unique_links.items())
         for i, result in enumerate(results):
             url, parser = link_items[i]
+            if isinstance(result, asyncio.CancelledError):
+                raise result
             if isinstance(result, Exception):
                 if isinstance(result, SkipParse):
                     logger.debug(f"跳过解析: {url}, 原因: {result}")
                     continue
-                logger.exception(f"解析URL失败: {url}, 错误: {result}")
+                logger.error(f"解析URL失败: {url}, 错误: {result}")
+                platform = self._resolve_platform_name(parser)
                 metadata_list.append({
                     'url': url,
                     'source_url': url,
@@ -101,18 +130,16 @@ class ParserManager:
                     'image_urls': [],
                     'image_headers': {},
                     'video_headers': {},
-                    'platform': parser.name,
+                    'platform': platform,
                     'parser_name': parser.name,
                     'has_valid_media': False
                 })
+            elif isinstance(result, BaseException):
+                raise result
             elif result:
-                if 'platform' not in result:
-                    result['platform'] = parser.name
-                if 'parser_name' not in result:
-                    result['parser_name'] = parser.name
-                if 'source_url' not in result:
-                    result['source_url'] = url
-                metadata_list.append(result)
+                metadata_list.append(
+                    self._normalize_metadata(url, parser, result)
+                )
         logger.debug(f"解析完成，获得 {len(metadata_list)} 条元数据")
         return metadata_list
 

@@ -24,6 +24,7 @@ class MediaMetadata(TypedDict, total=False):
     image_headers: Dict[str, str]
     video_headers: Dict[str, str]
     video_force_download: bool
+    video_force_downloads: List[bool]
 
     access_status: str
     restriction_type: str
@@ -40,11 +41,20 @@ class MediaMetadata(TypedDict, total=False):
     proxy_url: str
 
     error: str
+    _enable_text_metadata: bool
+    _enable_rich_media: bool
 
     # ── 下载阶段（DownloadManager 回填）─────────────────
 
     file_paths: List[Optional[str]]
     video_sizes: List[Optional[float]]
+    video_status_codes: List[Optional[int]]
+    image_status_codes: List[Optional[int]]
+    video_modes: List[str]
+    image_modes: List[str]
+    video_skip_reasons: List[Optional[str]]
+    image_skip_reasons: List[Optional[str]]
+    media_cache_dir_available: bool
     max_video_size_mb: float
     total_video_size_mb: float
     video_count: int

@@ -13,6 +13,47 @@ from ..validator import validate_media_response
 from ...constants import Config
 
 
+def _is_retryable_exception(exc: BaseException) -> bool:
+    """判断异常是否适合短暂重试。"""
+    if isinstance(exc, asyncio.CancelledError):
+        return False
+    retryable_types = (
+        aiohttp.ClientConnectionError,
+        aiohttp.ServerDisconnectedError,
+        aiohttp.ServerTimeoutError,
+        aiohttp.ClientOSError,
+        asyncio.TimeoutError,
+    )
+    if isinstance(exc, retryable_types):
+        return True
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status in {408, 425, 429, 500, 502, 503, 504}
+    return False
+
+
+async def _sleep_before_retry(attempt: int) -> None:
+    """按指数退避等待下一次重试。"""
+    delay = Config.DOWNLOAD_RETRY_BASE_DELAY * (2 ** max(0, attempt - 1))
+    await asyncio.sleep(delay)
+
+
+def _format_download_error(exc: BaseException) -> str:
+    """将下载异常格式化为用户可读的短文本。"""
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return f"HTTP {exc.status}: {exc.message}"
+    if isinstance(exc, asyncio.TimeoutError):
+        return "请求超时"
+    text = str(exc).strip()
+    return text or type(exc).__name__
+
+
+def _status_code_from_exception(exc: BaseException) -> Optional[int]:
+    """从 aiohttp 异常中提取 HTTP 状态码。"""
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status
+    return None
+
+
 async def _get_file_size(
     session: aiohttp.ClientSession,
     url: str,
@@ -265,8 +306,9 @@ async def download_media_from_url(
     file_path_generator: Callable[[str, str], str],
     is_video: bool = True,
     headers: dict = None,
-    proxy: str = None
-) -> Tuple[Optional[str], Optional[float]]:
+    proxy: str = None,
+    retry_enabled: bool = True
+) -> Tuple[Optional[str], Optional[float], Optional[int], Optional[str]]:
     """通用媒体下载函数，封装公共的下载逻辑
 
     Args:
@@ -278,44 +320,73 @@ async def download_media_from_url(
         proxy: 代理地址（可选）
 
     Returns:
-        (file_path, size_mb) 元组，失败返回 (None, None)
+        (file_path, size_mb, status_code, error) 元组；
+        成功时 error 为 None，失败时尽量保留 HTTP 状态码与错误文本。
     """
-    try:
-        request_headers = headers or {}
-        
-        timeout = aiohttp.ClientTimeout(
-            total=Config.VIDEO_DOWNLOAD_TIMEOUT if is_video else Config.IMAGE_DOWNLOAD_TIMEOUT
-        )
-        
-        async with session.get(
-            media_url,
-            headers=request_headers,
-            timeout=timeout,
-            proxy=proxy
-        ) as response:
-            response.raise_for_status()
-            
-            is_valid, content_preview = await validate_media_response(
-                response, media_url, is_video=is_video, allow_read_content=True
+    attempts = Config.DOWNLOAD_RETRY_ATTEMPTS if retry_enabled else 1
+    last_error = None
+    last_status_code = None
+    for attempt in range(1, attempts + 1):
+        try:
+            request_headers = headers or {}
+            timeout = aiohttp.ClientTimeout(
+                total=Config.VIDEO_DOWNLOAD_TIMEOUT if is_video else Config.IMAGE_DOWNLOAD_TIMEOUT
             )
-            if not is_valid:
-                return None, None
-            
-            content_type = response.headers.get('Content-Type', '')
-            size_mb = extract_size_from_headers(response)
-            
-            file_path = file_path_generator(content_type, media_url)
-            
-            if await download_media_stream(response, file_path, content_preview, is_video=is_video):
-                if size_mb is None:
-                    try:
-                        file_size_bytes = os.path.getsize(file_path)
-                        size_mb = file_size_bytes / (1024 * 1024)
-                    except Exception:
-                        pass
-                return os.path.normpath(file_path), size_mb
-            return None, None
-    except Exception as e:
-        logger.warning(f"下载媒体失败: {media_url}, 错误: {e}")
-        return None, None
+            async with session.get(
+                media_url,
+                headers=request_headers,
+                timeout=timeout,
+                proxy=proxy
+            ) as response:
+                last_status_code = response.status
+                response.raise_for_status()
+                is_valid, content_preview = await validate_media_response(
+                    response, media_url, is_video=is_video, allow_read_content=True
+                )
+                if not is_valid:
+                    return (
+                        None,
+                        None,
+                        response.status,
+                        "响应不是有效媒体"
+                    )
+
+                content_type = response.headers.get('Content-Type', '')
+                size_mb = extract_size_from_headers(response)
+                file_path = file_path_generator(content_type, media_url)
+
+                if await download_media_stream(response, file_path, content_preview, is_video=is_video):
+                    if size_mb is None:
+                        try:
+                            file_size_bytes = os.path.getsize(file_path)
+                            size_mb = file_size_bytes / (1024 * 1024)
+                        except Exception:
+                            pass
+                    return os.path.normpath(file_path), size_mb, response.status, None
+                return None, None, response.status, "写入媒体文件失败"
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            last_error = e
+            last_status_code = _status_code_from_exception(e) or last_status_code
+            if attempt < attempts and _is_retryable_exception(e):
+                logger.debug(
+                    f"下载媒体失败，将重试({attempt}/{attempts}): "
+                    f"{media_url}, 错误: {_format_download_error(e)}"
+                )
+                await _sleep_before_retry(attempt)
+                continue
+            logger.warning(
+                f"下载媒体失败: {media_url}, "
+                f"错误: {_format_download_error(e)}"
+            )
+            break
+    if last_error:
+        logger.debug(f"最终下载错误: {_format_download_error(last_error)}")
+    return (
+        None,
+        None,
+        last_status_code,
+        _format_download_error(last_error) if last_error else "下载失败"
+    )
 

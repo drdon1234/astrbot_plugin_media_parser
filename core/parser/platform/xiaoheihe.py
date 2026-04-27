@@ -1,8 +1,14 @@
 "core.parser.platform.xiaoheihe 模块。"
+import base64
 import asyncio
+import gzip
 import html as html_lib
+import hashlib
 import json
+import random
 import re
+import time
+import uuid
 from typing import Optional, Dict, Any, List, Tuple, Iterable
 from urllib.parse import urlparse, parse_qs
 
@@ -14,11 +20,297 @@ from .base import BaseVideoParser
 from ..utils import build_request_headers
 from ...constants import Config
 
+try:
+    from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher
+    from cryptography.hazmat.primitives.ciphers.algorithms import AES
+    from cryptography.hazmat.primitives.ciphers.modes import CBC, ECB
+    CRYPTOGRAPHY_AVAILABLE = True
+except Exception as _crypto_import_error:
+    TripleDES = None
+    serialization = None
+    padding = None
+    Cipher = None
+    AES = None
+    CBC = None
+    ECB = None
+    CRYPTOGRAPHY_AVAILABLE = False
+    CRYPTOGRAPHY_IMPORT_ERROR = _crypto_import_error
+else:
+    CRYPTOGRAPHY_IMPORT_ERROR = None
+
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+
+
+class XiaoheiheSign:
+    """小黑盒 Web API hkey 签名生成器。"""
+
+    CHAR_TABLE = "AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89"
+    _OFFSET_MAP = {
+        "a": -1, "b": -2, "c": -3, "d": -4, "e": -5,
+        "f": 0, "g": 1, "h": 2, "i": 3, "j": 4, "k": 5,
+    }
+
+    def __init__(self, method_key: str = "g"):
+        self._offset = self._OFFSET_MAP.get(method_key, 1)
+
+    def sign(self, path: str) -> Dict[str, Any]:
+        current = int(time.time())
+        nonce = hashlib.md5(
+            (str(current) + str(random.random())).encode()
+        ).hexdigest().upper()
+        return {
+            "hkey": self._ov(path, current + self._offset, nonce),
+            "_time": current,
+            "nonce": nonce,
+        }
+
+    def _ov(self, path: str, timestamp: int, nonce: str) -> str:
+        path = "/" + "/".join(p for p in path.split("/") if p) + "/"
+        mapped = [
+            self._av(str(timestamp), self.CHAR_TABLE, -2),
+            self._sv(path, self.CHAR_TABLE),
+            self._sv(nonce, self.CHAR_TABLE),
+        ]
+        interleaved = self._interleave(mapped)[:20]
+        md5_hex = hashlib.md5(interleaved.encode()).hexdigest()
+        tail_codes = [ord(c) for c in md5_hex[-6:]]
+        mixed = self._mix_columns(tail_codes)
+        suffix = str(sum(mixed) % 100).zfill(2)
+        prefix = self._av(md5_hex[:5], self.CHAR_TABLE, -4)
+        return prefix + suffix
+
+    @staticmethod
+    def _av(text: str, table: str, cut: int) -> str:
+        sub_table = table[:cut]
+        return "".join(sub_table[ord(c) % len(sub_table)] for c in text)
+
+    @staticmethod
+    def _sv(text: str, table: str) -> str:
+        return "".join(table[ord(c) % len(table)] for c in text)
+
+    @staticmethod
+    def _interleave(values: List[str]) -> str:
+        out = []
+        for idx in range(max(len(v) for v in values)):
+            for value in values:
+                if idx < len(value):
+                    out.append(value[idx])
+        return "".join(out)
+
+    @staticmethod
+    def _xtime(value: int) -> int:
+        return (value << 1 ^ 27) & 0xFF if value & 128 else value << 1
+
+    @classmethod
+    def _mul3(cls, value: int) -> int:
+        return cls._xtime(value) ^ value
+
+    @classmethod
+    def _mul6(cls, value: int) -> int:
+        return cls._mul3(cls._xtime(value))
+
+    @classmethod
+    def _mul12(cls, value: int) -> int:
+        return cls._mul6(cls._mul3(cls._xtime(value)))
+
+    @classmethod
+    def _mul14(cls, value: int) -> int:
+        return cls._mul12(value) ^ cls._mul6(value) ^ cls._mul3(value)
+
+    @classmethod
+    def _mix_columns(cls, col: List[int]) -> List[int]:
+        while len(col) < 4:
+            col.append(0)
+        return [
+            cls._mul14(col[0]) ^ cls._mul12(col[1]) ^ cls._mul6(col[2]) ^ cls._mul3(col[3]),
+            cls._mul3(col[0]) ^ cls._mul14(col[1]) ^ cls._mul12(col[2]) ^ cls._mul6(col[3]),
+            cls._mul6(col[0]) ^ cls._mul3(col[1]) ^ cls._mul14(col[2]) ^ cls._mul12(col[3]),
+            cls._mul12(col[0]) ^ cls._mul6(col[1]) ^ cls._mul3(col[2]) ^ cls._mul14(col[3]),
+            *col[4:],
+        ]
+
+
+class XiaoheiheDevice:
+    """生成小黑盒 Web API 所需的数美设备 token。"""
+
+    DEVICES_INFO_URL = "https://fp-it.portal101.cn/deviceprofile/v4"
+    SM_CONFIG = {
+        "organization": "0yD85BjYvGFAvHaSQ1mc",
+        "appId": "heybox_website",
+        "publicKey": (
+            "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCXj9exmI4nQjmT52iwr+yf7hAQ06bfSZHTAH"
+            "UfRBYiagCf/whhd8es0R79wBigpiHLd28TKA8b8mGR8OiiI1hV+qfynCWihvp3mdj8MiiH6SU3"
+            "lhro2hkfYzImZB0RmWr2zE4Xt1+A6Oyp6bf+W7JSxYUXHw3nNv7Td4jw4jEFKQIDAQAB"
+        ),
+    }
+    DES_RULE = {
+        "appId": {"cipher": "DES", "is_encrypt": 1, "key": "uy7mzc4h", "obfuscated_name": "xx"},
+        "box": {"is_encrypt": 0, "obfuscated_name": "jf"},
+        "canvas": {"cipher": "DES", "is_encrypt": 1, "key": "snrn887t", "obfuscated_name": "yk"},
+        "clientSize": {"cipher": "DES", "is_encrypt": 1, "key": "cpmjjgsu", "obfuscated_name": "zx"},
+        "organization": {"cipher": "DES", "is_encrypt": 1, "key": "78moqjfc", "obfuscated_name": "dp"},
+        "os": {"cipher": "DES", "is_encrypt": 1, "key": "je6vk6t4", "obfuscated_name": "pj"},
+        "platform": {"cipher": "DES", "is_encrypt": 1, "key": "pakxhcd2", "obfuscated_name": "gm"},
+        "plugins": {"cipher": "DES", "is_encrypt": 1, "key": "v51m3pzl", "obfuscated_name": "kq"},
+        "pmf": {"cipher": "DES", "is_encrypt": 1, "key": "2mdeslu3", "obfuscated_name": "vw"},
+        "protocol": {"is_encrypt": 0, "obfuscated_name": "protocol"},
+        "referer": {"cipher": "DES", "is_encrypt": 1, "key": "y7bmrjlc", "obfuscated_name": "ab"},
+        "res": {"cipher": "DES", "is_encrypt": 1, "key": "whxqm2a7", "obfuscated_name": "hf"},
+        "rtype": {"cipher": "DES", "is_encrypt": 1, "key": "x8o2h2bl", "obfuscated_name": "lo"},
+        "sdkver": {"cipher": "DES", "is_encrypt": 1, "key": "9q3dcxp2", "obfuscated_name": "sc"},
+        "status": {"cipher": "DES", "is_encrypt": 1, "key": "2jbrxxw4", "obfuscated_name": "an"},
+        "subVersion": {"cipher": "DES", "is_encrypt": 1, "key": "eo3i2puh", "obfuscated_name": "ns"},
+        "svm": {"cipher": "DES", "is_encrypt": 1, "key": "fzj3kaeh", "obfuscated_name": "qr"},
+        "time": {"cipher": "DES", "is_encrypt": 1, "key": "q2t3odsk", "obfuscated_name": "nb"},
+        "timezone": {"cipher": "DES", "is_encrypt": 1, "key": "1uv05lj5", "obfuscated_name": "as"},
+        "tn": {"cipher": "DES", "is_encrypt": 1, "key": "x9nzj1bp", "obfuscated_name": "py"},
+        "trees": {"cipher": "DES", "is_encrypt": 1, "key": "acfs0xo4", "obfuscated_name": "pi"},
+        "ua": {"cipher": "DES", "is_encrypt": 1, "key": "k92crp1t", "obfuscated_name": "bj"},
+        "url": {"cipher": "DES", "is_encrypt": 1, "key": "y95hjkoo", "obfuscated_name": "cf"},
+        "version": {"is_encrypt": 0, "obfuscated_name": "version"},
+        "vpw": {"cipher": "DES", "is_encrypt": 1, "key": "r9924ab5", "obfuscated_name": "ca"},
+    }
+    BROWSER_ENV = {
+        "plugins": (
+            "MicrosoftEdgePDFPluginPortableDocumentFormatinternal-pdf-viewer1,"
+            "MicrosoftEdgePDFViewermhjfbmdgcfjbbpaeojofohoefgiehjai1"
+        ),
+        "ua": UA,
+        "canvas": "259ffe69",
+        "timezone": -480,
+        "platform": "Win32",
+        "url": "https://www.xiaoheihe.cn/",
+        "referer": "",
+        "res": "1920_1080_24_1.25",
+        "clientSize": "0_0_1080_1920_1920_1080_1920_1080",
+        "status": "0011",
+    }
+
+    @classmethod
+    def _ensure_crypto(cls) -> None:
+        if not CRYPTOGRAPHY_AVAILABLE:
+            raise RuntimeError(
+                "小黑盒签名依赖 cryptography 不可用，请安装 requirements.txt "
+                f"中的 cryptography。原始错误: {CRYPTOGRAPHY_IMPORT_ERROR}"
+            )
+
+    @classmethod
+    def _des(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        cls._ensure_crypto()
+        result = {}
+        for key, value in data.items():
+            rule = cls.DES_RULE.get(key)
+            if not rule:
+                result[key] = value
+                continue
+            out = value
+            if rule["is_encrypt"] == 1:
+                cipher = Cipher(TripleDES(rule["key"].encode("utf-8")), ECB())
+                raw = str(value).encode("utf-8") + b"\x00" * 8
+                out = base64.b64encode(cipher.encryptor().update(raw)).decode("utf-8")
+            result[rule["obfuscated_name"]] = out
+        return result
+
+    @classmethod
+    def _aes(cls, value: bytes, key: bytes) -> str:
+        cls._ensure_crypto()
+        value += b"\x00"
+        while len(value) % 16 != 0:
+            value += b"\x00"
+        cipher = Cipher(AES(key), CBC(b"0102030405060708"))
+        return cipher.encryptor().update(value).hex()
+
+    @staticmethod
+    def _gzip(data: Dict[str, Any]) -> bytes:
+        raw = json.dumps(data, ensure_ascii=False)
+        return base64.b64encode(gzip.compress(raw.encode("utf-8"), 2, mtime=0))
+
+    @classmethod
+    def _tn(cls, data: Dict[str, Any]) -> str:
+        parts = []
+        for key in sorted(data.keys()):
+            value = data[key]
+            if isinstance(value, (int, float)):
+                value = str(value * 10000)
+            elif isinstance(value, dict):
+                value = cls._tn(value)
+            parts.append(str(value))
+        return "".join(parts)
+
+    @staticmethod
+    def get_smid() -> str:
+        now = time.localtime()
+        prefix = (
+            f"{now.tm_year}{now.tm_mon:0>2d}{now.tm_mday:0>2d}"
+            f"{now.tm_hour:0>2d}{now.tm_min:0>2d}{now.tm_sec:0>2d}"
+        )
+        uid = str(uuid.uuid4())
+        value = prefix + hashlib.md5(uid.encode("utf-8")).hexdigest() + "00"
+        suffix = hashlib.md5(("smsk_web_" + value).encode("utf-8")).hexdigest()[:14]
+        return value + suffix + "0"
+
+    @classmethod
+    async def get_token_id(
+        cls,
+        session: aiohttp.ClientSession,
+        proxy: Optional[str] = None
+    ) -> str:
+        cls._ensure_crypto()
+        uid = str(uuid.uuid4()).encode("utf-8")
+        pri_id = hashlib.md5(uid).hexdigest()[:16]
+        public_key = serialization.load_der_public_key(
+            base64.b64decode(cls.SM_CONFIG["publicKey"])
+        )
+        ep = base64.b64encode(public_key.encrypt(uid, padding.PKCS1v15())).decode("utf-8")
+        current_ms = int(time.time() * 1000)
+        browser = dict(cls.BROWSER_ENV)
+        browser.update({
+            "vpw": str(uuid.uuid4()),
+            "svm": current_ms,
+            "trees": str(uuid.uuid4()),
+            "pmf": current_ms,
+        })
+        payload = {
+            **browser,
+            "protocol": 102,
+            "organization": cls.SM_CONFIG["organization"],
+            "appId": cls.SM_CONFIG["appId"],
+            "os": "web",
+            "version": "3.0.0",
+            "sdkver": "3.0.0",
+            "box": "",
+            "rtype": "all",
+            "smid": cls.get_smid(),
+            "subVersion": "1.0.0",
+            "time": 0,
+        }
+        payload["tn"] = hashlib.md5(cls._tn(payload).encode()).hexdigest()
+        encrypted = cls._aes(cls._gzip(cls._des(payload)), pri_id.encode("utf-8"))
+        async with session.post(
+            cls.DEVICES_INFO_URL,
+            json={
+                "appId": "heybox_website",
+                "compress": 2,
+                "data": encrypted,
+                "encode": 5,
+                "ep": ep,
+                "organization": cls.SM_CONFIG["organization"],
+                "os": "web",
+            },
+            proxy=proxy,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as response:
+            data = await response.json(content_type=None)
+        if data.get("code") != 1100:
+            raise RuntimeError(f"小黑盒设备 token 获取失败: {data}")
+        return "B" + str((data.get("detail") or {}).get("deviceId") or "")
 
 
 class XiaoheiheParser(BaseVideoParser):
@@ -83,6 +375,9 @@ class XiaoheiheParser(BaseVideoParser):
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
+        if self._extract_bbs_link_id(url):
+            logger.debug(f"[{self.name}] can_parse: 匹配BBS链接 {url}")
+            return True
         appid, game_type = self._extract_appid_game_type(url)
         ok = bool(appid and game_type)
         logger.debug(
@@ -105,13 +400,19 @@ class XiaoheiheParser(BaseVideoParser):
         app_pattern = r"https?://api\.xiaoheihe\.cn/game/share_game_detail[^\s<>\"'()]+"
         candidates.update(re.findall(app_pattern, text, re.IGNORECASE))
 
+        bbs_pattern = r"https?://(?:www\.)?xiaoheihe\.cn/(?:app|v3)/bbs/(?:link|app)/[^\s<>\"'()]+"
+        candidates.update(re.findall(bbs_pattern, text, re.IGNORECASE))
+
+        bbs_api_pattern = r"https?://api\.xiaoheihe\.cn/v3/bbs/app/api/web/share[^\s<>\"'()]+"
+        candidates.update(re.findall(bbs_api_pattern, text, re.IGNORECASE))
+
         web_pattern = r"https?://(?:www\.)?xiaoheihe\.cn/[^\s<>\"'()]+"
         candidates.update(re.findall(web_pattern, text, re.IGNORECASE))
 
         result: List[str] = []
         for u in candidates:
             appid, game_type = self._extract_appid_game_type(u)
-            if appid and game_type:
+            if (appid and game_type) or self._extract_bbs_link_id(u):
                 result.append(u)
 
         if result:
@@ -122,6 +423,28 @@ class XiaoheiheParser(BaseVideoParser):
         else:
             logger.debug(f"[{self.name}] extract_links: 未提取到链接")
         return result
+
+    @staticmethod
+    def _extract_bbs_link_id(url: str) -> Optional[str]:
+        """从小黑盒 BBS 分享链接中提取 link_id。"""
+        if not url:
+            return None
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return None
+        host = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+        qs = parse_qs(parsed.query or "")
+        for key in ("link_id", "linkid", "id"):
+            value = (qs.get(key) or [None])[0]
+            if value:
+                return str(value)
+        if "xiaoheihe.cn" in host:
+            match = re.search(r"/bbs/link/([^/?#]+)", path, re.I)
+            if match:
+                return match.group(1)
+        return None
 
     def _extract_appid_game_type(self, url: str) -> Tuple[Optional[int], Optional[str]]:
         """从 URL 中提取 appid 与 game_type。
@@ -561,6 +884,157 @@ class XiaoheiheParser(BaseVideoParser):
             parts.append(f"[ {' '.join(group2_tags)} ]")
         return " ".join(parts).strip()
 
+    async def _fetch_signed_api(
+        self,
+        session: aiohttp.ClientSession,
+        path: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """请求小黑盒签名 API，并对 token/captcha 状态做有限重试。"""
+        base_params = {
+            "os_type": "web",
+            "app": "heybox",
+            "client_type": "web",
+            "version": "999.0.4",
+            "web_version": "2.5",
+            "x_client_type": "web",
+            "x_app": "heybox_website",
+            "heybox_id": "",
+            "x_os_type": "Windows",
+            "device_info": "Chrome",
+        }
+        api_url = f"https://api.xiaoheihe.cn{path}"
+        proxy = self.proxy_url if self.use_video_proxy else None
+        last_error = None
+        for attempt in range(2):
+            signed = XiaoheiheSign().sign(path)
+            token = await XiaoheiheDevice.get_token_id(session, proxy=proxy)
+            try:
+                async with session.get(
+                    api_url,
+                    params={**base_params, **params, **signed},
+                    cookies={"x_xhh_tokenid": token},
+                    headers={**self._default_headers, "Accept": "application/json"},
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=20)
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json(content_type=None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                last_error = e
+                continue
+
+            status = data.get("status")
+            if status == "ok":
+                result = data.get("result")
+                return result if isinstance(result, dict) else {}
+            if status in {"lack_token", "show_captcha"} and attempt == 0:
+                last_error = RuntimeError(str(data.get("msg") or status))
+                continue
+            raise RuntimeError(f"小黑盒API返回异常: {status} {data.get('msg')}")
+        raise RuntimeError(f"小黑盒API请求失败: {last_error}")
+
+    def _extract_bbs_text_and_media(
+        self,
+        link: Dict[str, Any]
+    ) -> Tuple[str, List[List[str]], List[List[str]]]:
+        """解析 BBS link 的正文、视频和图片。"""
+        text = str(link.get("text") or "")
+        desc = text
+        video_urls: List[List[str]] = []
+        image_urls: List[List[str]] = []
+
+        if link.get("has_video") and link.get("video_url"):
+            video_url = str(link.get("video_url") or "")
+            if ".m3u8" in video_url.lower() and not video_url.startswith("m3u8:"):
+                video_url = f"m3u8:{video_url}"
+            video_urls.append([video_url])
+
+        try:
+            text_items = json.loads(text) if text else []
+        except Exception:
+            text_items = []
+
+        if isinstance(text_items, list) and text_items:
+            desc_parts: List[str] = []
+            for item in text_items:
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get("type")
+                if item_type == "html":
+                    desc_parts.append(self._strip_tags(str(item.get("text") or "")))
+                elif item_type == "text":
+                    desc_parts.append(str(item.get("text") or ""))
+                elif item_type == "img":
+                    img_url = str(item.get("url") or "")
+                    if img_url:
+                        image_urls.append([img_url])
+                elif item_type in {"video", "gif"}:
+                    media_url = str(item.get("url") or item.get("video_url") or "")
+                    if not media_url:
+                        continue
+                    if ".m3u8" in media_url.lower() and not media_url.startswith("m3u8:"):
+                        media_url = f"m3u8:{media_url}"
+                    if item_type == "gif" and ".gif" in media_url.lower():
+                        image_urls.append([media_url])
+                    else:
+                        video_urls.append([media_url])
+            desc = "\n".join(part for part in desc_parts if part).strip()
+
+        return desc, video_urls, image_urls
+
+    async def _parse_bbs_link(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        link_id: str
+    ) -> Dict[str, Any]:
+        """解析小黑盒 BBS/link 分享。"""
+        data = await self._fetch_signed_api(
+            session,
+            "/bbs/app/link/tree",
+            {
+                "link_id": str(link_id),
+                "owner_only": "1",
+            }
+        )
+        link = data.get("link") or {}
+        if not isinstance(link, dict):
+            raise RuntimeError("小黑盒BBS响应缺少link字段")
+        title = str(link.get("title") or "小黑盒帖子")
+        author = ""
+        user = link.get("user") or link.get("author") or {}
+        if isinstance(user, dict):
+            nickname = str(user.get("nickname") or user.get("username") or "")
+            uid = str(user.get("heybox_id") or user.get("uid") or "")
+            author = f"{nickname}(uid:{uid})" if nickname and uid else nickname
+
+        desc, video_urls, image_urls = self._extract_bbs_text_and_media(link)
+        if not video_urls and not image_urls:
+            raise RuntimeError("小黑盒BBS帖子未找到媒体")
+
+        referer = "https://www.xiaoheihe.cn/"
+        image_headers = build_request_headers(is_video=False, referer=referer)
+        video_headers = build_request_headers(is_video=True, referer=referer)
+        result = {
+            "url": url,
+            "title": title,
+            "author": author,
+            "desc": desc,
+            "timestamp": "",
+            "video_urls": video_urls,
+            "image_urls": image_urls,
+            "image_headers": image_headers,
+            "video_headers": video_headers,
+            "use_video_proxy": self.use_video_proxy,
+            "proxy_url": self.proxy_url if self.use_video_proxy else None,
+        }
+        if video_urls:
+            result["video_force_download"] = True
+        return result
+
     async def parse(
         self,
         session: aiohttp.ClientSession,
@@ -586,6 +1060,10 @@ class XiaoheiheParser(BaseVideoParser):
         """
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
+            link_id = self._extract_bbs_link_id(url)
+            if link_id:
+                return await self._parse_bbs_link(session, url, link_id)
+
             appid, game_type = self._extract_appid_game_type(url)
             if not appid or not game_type:
                 raise RuntimeError(f"无法从URL提取 appid/game_type: {url}")

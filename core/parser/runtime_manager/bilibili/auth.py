@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import sys
 import time
 from http.cookies import SimpleCookie
 from typing import Any, Dict, Optional, Tuple
@@ -15,6 +16,89 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+
+
+async def _read_console_line(prompt: str, timeout_seconds: int) -> str:
+    """可取消地读取一行控制台输入，避免占用不可终止的 executor 线程。"""
+    timeout = max(1, int(timeout_seconds or 1))
+    if os.name == "nt":
+        return await _read_console_line_windows(prompt, timeout)
+    return await _read_console_line_posix(prompt, timeout)
+
+
+async def _read_console_line_windows(prompt: str, timeout_seconds: int) -> str:
+    """Windows 控制台输入轮询；协程取消时不会留下阻塞线程。"""
+    try:
+        import msvcrt
+    except ImportError:
+        logger.warning("[bilibili] 当前环境不支持可取消控制台输入")
+        return ""
+
+    print(prompt, end="", flush=True)
+    chars = []
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            has_key = msvcrt.kbhit()
+        except OSError:
+            logger.warning("[bilibili] 当前stdin不是可轮询的Windows控制台")
+            print()
+            return ""
+        while has_key:
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"):
+                print()
+                return "".join(chars)
+            if ch == "\003":
+                raise KeyboardInterrupt
+            if ch == "\b":
+                if chars:
+                    chars.pop()
+                    print("\b \b", end="", flush=True)
+                continue
+            if ch in ("\x00", "\xe0"):
+                if msvcrt.kbhit():
+                    msvcrt.getwch()
+            else:
+                chars.append(ch)
+                print(ch, end="", flush=True)
+            try:
+                has_key = msvcrt.kbhit()
+            except OSError:
+                logger.warning("[bilibili] 当前stdin不是可轮询的Windows控制台")
+                print()
+                return ""
+        await asyncio.sleep(0.05)
+    print()
+    return ""
+
+
+async def _read_console_line_posix(prompt: str, timeout_seconds: int) -> str:
+    """POSIX 控制台输入；使用 add_reader 支持取消。"""
+    print(prompt, end="", flush=True)
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    try:
+        fd = sys.stdin.fileno()
+        loop.add_reader(fd, lambda: (
+            None if future.done() else future.set_result(sys.stdin.readline())
+        ))
+    except (NotImplementedError, OSError, ValueError):
+        logger.warning("[bilibili] 当前环境不支持可取消控制台输入")
+        print()
+        return ""
+
+    try:
+        line = await asyncio.wait_for(future, timeout=timeout_seconds)
+        return (line or "").strip()
+    except asyncio.TimeoutError:
+        print()
+        return ""
+    finally:
+        try:
+            loop.remove_reader(fd)
+        except Exception:
+            pass
 
 
 class BilibiliAuthRuntime:
@@ -410,9 +494,9 @@ class BilibiliAuthRuntime:
         print(f"二维码链接: {payload['qr_code_url']}")
         print("=" * 60)
 
-        answer = await asyncio.to_thread(
-            input,
-            "是否协助登录? (y/n): "
+        answer = await _read_console_line(
+            "是否协助登录? (y/n): ",
+            timeout_seconds=max(1, timeout_seconds)
         )
         answer = (answer or "").strip().lower()
         if answer not in ("y", "yes", "是", "确定"):

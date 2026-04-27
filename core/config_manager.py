@@ -1,8 +1,7 @@
 """配置管理模块，负责默认值处理、类型转换与配置兜底。"""
 import os
-import tempfile
 from dataclasses import dataclass, field
-from typing import Any, List
+from typing import Any, Dict, List, Tuple
 
 from .logger import logger
 
@@ -11,6 +10,7 @@ from .downloader.utils import check_cache_dir_available
 from .parser.platform import (
     BilibiliParser,
     DouyinParser,
+    TikTokParser,
     KuaishouParser,
     WeiboParser,
     XiaohongshuParser,
@@ -29,6 +29,64 @@ BILIBILI_QUALITY_MAP = {
     "480P": 32,
     "360P": 16,
 }
+
+PARSER_OUTPUT_KEYS = (
+    "bilibili",
+    "douyin",
+    "tiktok",
+    "kuaishou",
+    "weibo",
+    "xiaohongshu",
+    "xiaoheihe",
+    "twitter",
+)
+
+OUTPUT_MODE_DISABLED = "关闭"
+OUTPUT_MODE_ALL = "全部发送"
+OUTPUT_MODE_TEXT_ONLY = "仅文本"
+OUTPUT_MODE_RICH_ONLY = "仅富媒体"
+
+OUTPUT_MODE_FLAGS = {
+    OUTPUT_MODE_DISABLED: (False, False),
+    OUTPUT_MODE_ALL: (True, True),
+    OUTPUT_MODE_TEXT_ONLY: (True, False),
+    OUTPUT_MODE_RICH_ONLY: (False, True),
+}
+
+
+def _is_docker_environment() -> bool:
+    """判断当前是否运行在 Docker 容器内。"""
+    return os.path.exists("/.dockerenv")
+
+
+def _get_astrbot_plugin_cache_dir() -> str:
+    """获取默认媒体缓存目录；本地调试时回退到项目 cache 目录。"""
+    try:
+        from astrbot.core import astrbot_config
+        data_dir = str(astrbot_config.get("data_dir") or "").strip()
+        if data_dir:
+            prefix = os.path.join(
+                data_dir,
+                "plugin_data",
+                Config.PLUGIN_NAME,
+            )
+            return Config.build_cache_dir(prefix)
+    except Exception:
+        pass
+
+    try:
+        from astrbot.core.utils.io import get_astrbot_data_path
+        prefix = os.path.join(
+            get_astrbot_data_path(),
+            "plugin_data",
+            Config.PLUGIN_NAME,
+        )
+        return Config.build_cache_dir(prefix)
+    except Exception:
+        pass
+
+    prefix = os.getcwd()
+    return Config.build_cache_dir(prefix)
 
 
 # ── 配置分组 dataclass ──────────────────────────────────
@@ -57,11 +115,49 @@ class MessageConfig:
     auto_pack: bool = False
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
-    text_metadata: bool = True
     hot_comment_count: int = 0
     hot_comment_bilibili: bool = True
     hot_comment_weibo: bool = True
     hot_comment_xiaohongshu: bool = True
+    parser_outputs: Dict[str, str] = field(default_factory=dict)
+
+    def has_any_output(self) -> bool:
+        """至少有一个解析器会发送文本元数据或富媒体。"""
+        return any(
+            any(OUTPUT_MODE_FLAGS.get(mode, (False, False)))
+            for mode in self.parser_outputs.values()
+        )
+
+    def _flags_for_mode(self, mode: str) -> Tuple[bool, bool]:
+        return OUTPUT_MODE_FLAGS.get(mode, OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL])
+
+    def output_for_controller(self, controller: Any) -> Tuple[bool, bool]:
+        """返回指定解析器的文本/富媒体发送开关。"""
+        key = str(controller or "").strip()
+        mode = self.parser_outputs.get(key, OUTPUT_MODE_ALL)
+        return self._flags_for_mode(mode)
+
+    def controller_has_any_output(self, controller: Any) -> bool:
+        """指定解析器是否至少会发送一种输出。"""
+        return any(self.output_for_controller(controller))
+
+    def output_for_metadata(
+        self,
+        metadata: Dict[str, Any]
+    ) -> Tuple[bool, bool]:
+        """按 metadata 的平台名或解析器名返回有效输出开关。"""
+        keys = [
+            str(metadata.get("platform") or "").strip(),
+            str(metadata.get("parser_name") or "").strip(),
+        ]
+        seen = set()
+        for key in keys:
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if key in self.parser_outputs:
+                return self._flags_for_mode(self.parser_outputs[key])
+        return OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL]
 
 
 @dataclass
@@ -103,7 +199,7 @@ class DownloadConfig:
     max_video_size_mb: float = 1000.0
     large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
     cache_dir: str = ""
-    pre_download_all_media: bool = False
+    cache_dir_available: bool = False
     max_concurrent_downloads: int = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
 
 
@@ -114,6 +210,7 @@ class ProxyConfig:
     twitter_use_parse_proxy: bool = False
     twitter_use_image_proxy: bool = True
     twitter_use_video_proxy: bool = True
+    tiktok_use_proxy: bool = False
 
 
 @dataclass
@@ -149,17 +246,16 @@ class ConfigManager:
 
     """配置读取门面，向业务层提供类型安全的配置访问。"""
     def __init__(self, config: dict):
-        self._config = config
         self.bilibili_parser = None
-        self._parse_config()
+        self._parse_config(config)
 
     # ── 内部解析 ────────────────────────────────────────
 
-    def _parse_config(self):
+    def _parse_config(self, config: dict):
         """解析原始 dict，填充各领域配置分组。"""
 
         # --- trigger ---
-        trigger_raw = self._config.get("trigger", {})
+        trigger_raw = config.get("trigger", {})
         self.trigger = TriggerConfig(
             auto_parse=trigger_raw.get("auto_parse", True),
             keywords=trigger_raw.get("keywords", ["视频解析", "解析视频"]),
@@ -175,18 +271,36 @@ class ConfigManager:
                 "回复触发也已禁用，解析功能将完全不可用"
             )
 
+        # --- parsers/output modes ---
+        parsers_raw = config.get("parsers", {})
+        self.parser_outputs = self._parse_parser_outputs(parsers_raw)
+        self._enable_bilibili = self._parser_enabled("bilibili")
+        self._enable_douyin = self._parser_enabled("douyin")
+        self._enable_tiktok = self._parser_enabled("tiktok")
+        self._enable_kuaishou = self._parser_enabled("kuaishou")
+        self._enable_weibo = self._parser_enabled("weibo")
+        self._enable_xiaohongshu = self._parser_enabled("xiaohongshu")
+        self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
+        self._enable_twitter = self._parser_enabled("twitter")
+
         # --- message ---
-        message_raw = self._config.get("message", {})
+        message_raw = config.get("message", {})
         opening = message_raw.get("opening", {})
         hot_comments = message_raw.get("hot_comments", {})
         if not isinstance(hot_comments, dict):
             hot_comments = {}
 
-        text_metadata_enabled = message_raw.get("text_metadata", True)
         hot_count = self._parse_non_negative_int(
             hot_comments.get("count", 0), 0
         )
-        if not text_metadata_enabled:
+        any_text_output_enabled = any(
+            flags[0]
+            for flags in (
+                OUTPUT_MODE_FLAGS.get(mode, (False, False))
+                for mode in self.parser_outputs.values()
+            )
+        )
+        if not any_text_output_enabled:
             hot_count = 0
 
         self.message = MessageConfig(
@@ -195,17 +309,21 @@ class ConfigManager:
             opening_content=opening.get(
                 "content", "流媒体解析bot为您服务 ٩( 'ω' )و"
             ),
-            text_metadata=text_metadata_enabled,
             hot_comment_count=hot_count,
             hot_comment_bilibili=bool(hot_comments.get("bilibili", True)),
             hot_comment_weibo=bool(hot_comments.get("weibo", True)),
             hot_comment_xiaohongshu=bool(
                 hot_comments.get("xiaohongshu", True)
             ),
+            parser_outputs=self.parser_outputs,
         )
+        if not self.message.has_any_output():
+            logger.warning(
+                "所有解析器输出均已关闭，插件将不会触发解析。"
+            )
 
         # --- permissions ---
-        permissions_raw = self._config.get("permissions", {})
+        permissions_raw = config.get("permissions", {})
         whitelist = permissions_raw.get("whitelist", {})
         blacklist = permissions_raw.get("blacklist", {})
         admin_id = str(permissions_raw.get("admin_id", "") or "").strip()
@@ -230,7 +348,7 @@ class ConfigManager:
         )
 
         # --- download ---
-        download_raw = self._config.get("download", {})
+        download_raw = config.get("download", {})
 
         max_video_size_mb = self._parse_non_negative_float(
             download_raw.get("max_video_size_mb", 1000.0), 1000.0
@@ -248,23 +366,12 @@ class ConfigManager:
                 Config.MAX_LARGE_VIDEO_THRESHOLD_MB
             )
 
-        configured_cache_dir = str(
-            download_raw.get("cache_dir", "") or ""
-        ).strip()
-        if (
-            not configured_cache_dir
-            or configured_cache_dir == Config.DEFAULT_CACHE_DIR
-        ):
-            if os.path.exists('/.dockerenv'):
-                cache_dir = Config.DEFAULT_CACHE_DIR
-            else:
-                cache_dir = os.path.join(
-                    tempfile.gettempdir(), "astrbot_media_parser_cache"
-                )
+        configured_cache_dir = str(download_raw.get("cache_dir", "") or "").strip()
+        if _is_docker_environment():
+            cache_dir = configured_cache_dir or Config.DEFAULT_CACHE_DIR
         else:
-            cache_dir = configured_cache_dir
+            cache_dir = _get_astrbot_plugin_cache_dir()
 
-        pre_download = download_raw.get("pre_download", False)
         max_concurrent = min(
             self._parse_positive_int(
                 download_raw.get(
@@ -277,7 +384,7 @@ class ConfigManager:
         )
 
         # --- media_relay ---
-        relay_raw = self._config.get("media_relay", {})
+        relay_raw = config.get("media_relay", {})
         self.relay = MediaRelayConfig(
             enabled=relay_raw.get("enable", False),
             callback_api_base=str(
@@ -289,35 +396,23 @@ class ConfigManager:
             ),
         )
 
-        if self.relay.enabled:
-            cache_dir = os.path.join(
-                tempfile.gettempdir(),
-                "astrbot_media_parser_relay_cache"
+        cache_dir_available = check_cache_dir_available(cache_dir)
+        if not cache_dir_available:
+            logger.warning(
+                f"媒体文件缓存目录不可用: {cache_dir}，"
+                "视频将尽量使用直链发送，图片和必须写入缓存的媒体会被跳过。"
             )
-            pre_download = True
-            logger.info(
-                f"媒体中转模式已启用，缓存目录: {cache_dir}，"
-                f"预下载已强制开启"
-            )
-
-        if pre_download:
-            if not check_cache_dir_available(cache_dir):
-                logger.warning(
-                    f"预下载模式已启用，但缓存目录不可用: {cache_dir}，"
-                    f"将自动降级为禁用预下载模式"
-                )
-                pre_download = False
 
         self.download = DownloadConfig(
             max_video_size_mb=max_video_size_mb,
             large_video_threshold_mb=large_video_threshold_mb,
             cache_dir=cache_dir,
-            pre_download_all_media=pre_download,
+            cache_dir_available=cache_dir_available,
             max_concurrent_downloads=max_concurrent,
         )
 
         # --- bilibili_enhanced ---
-        bili = self._config.get("bilibili_enhanced", {})
+        bili = config.get("bilibili_enhanced", {})
         if not isinstance(bili, dict):
             bili = {}
 
@@ -348,31 +443,24 @@ class ConfigManager:
             admin_request_cooldown = 1440
 
         cookie_feature_requested = use_cookie
-        cookie_runtime_enabled = bool(use_cookie and pre_download)
+        cookie_runtime_enabled = bool(use_cookie and cache_dir_available)
 
         runtime_file_name = "cookie.json"
-        core_dir = os.path.dirname(os.path.abspath(__file__))
-        cookie_dir = os.path.join(
-            core_dir, "parser", "runtime_manager", "bilibili"
-        )
+        cookie_dir = Config.build_runtime_dir(cache_dir, "bilibili")
         cookie_runtime_file = os.path.join(cookie_dir, runtime_file_name)
         if use_cookie:
             try:
                 os.makedirs(cookie_dir, exist_ok=True)
             except Exception as e:
                 logger.warning(
-                    f"B站Cookie运行时目录不可用，将回退到缓存目录保存: {e}"
+                    f"B站Cookie运行时目录不可用，将旁路Cookie能力: {e}"
                 )
-                fallback = os.path.join(
-                    cache_dir, "runtime_manager", "bilibili"
-                )
-                cookie_runtime_file = os.path.join(
-                    fallback, runtime_file_name
-                )
+                cookie_runtime_file = ""
+                cookie_runtime_enabled = False
 
         if cookie_feature_requested and not cookie_runtime_enabled:
             logger.warning(
-                '检测到已开启"是否携带Cookie解析视频"，但预下载未启用或不可用，'
+                '检测到已开启"是否携带Cookie解析视频"，但媒体文件缓存目录不可用，'
                 "将旁路B站Cookie与协助登录流程，直接使用无Cookie直链模式。"
             )
 
@@ -388,18 +476,8 @@ class ConfigManager:
             admin_request_cooldown_minutes=admin_request_cooldown,
         )
 
-        # --- parsers ---
-        parsers_raw = self._config.get("parsers", {})
-        self._enable_bilibili = parsers_raw.get("bilibili", True)
-        self._enable_douyin = parsers_raw.get("douyin", True)
-        self._enable_kuaishou = parsers_raw.get("kuaishou", True)
-        self._enable_weibo = parsers_raw.get("weibo", True)
-        self._enable_xiaohongshu = parsers_raw.get("xiaohongshu", True)
-        self._enable_xiaoheihe = parsers_raw.get("xiaoheihe", True)
-        self._enable_twitter = parsers_raw.get("twitter", True)
-
         # --- proxy ---
-        proxy_raw = self._config.get("proxy", {})
+        proxy_raw = config.get("proxy", {})
         twitter_proxy = proxy_raw.get("twitter", {})
         self.proxy = ProxyConfig(
             address=proxy_raw.get("address", ""),
@@ -407,10 +485,11 @@ class ConfigManager:
             twitter_use_parse_proxy=twitter_proxy.get("parse", False),
             twitter_use_image_proxy=twitter_proxy.get("image", True),
             twitter_use_video_proxy=twitter_proxy.get("video", True),
+            tiktok_use_proxy=proxy_raw.get("tiktok", False),
         )
 
         # --- admin ---
-        admin_raw = self._config.get("admin", {})
+        admin_raw = config.get("admin", {})
         self.admin = AdminConfig(
             clean_cache_keyword=str(
                 admin_raw.get("clean_cache_keyword", "清理媒体") or "清理媒体"
@@ -424,8 +503,21 @@ class ConfigManager:
 
     # ── 工厂方法 ────────────────────────────────────────
 
-    def _effective_hot_comment_count(self, enabled: bool) -> int:
-        if not self.message.text_metadata:
+    def _parser_enabled(self, parser_name: str) -> bool:
+        return any(
+            OUTPUT_MODE_FLAGS.get(
+                self.parser_outputs.get(parser_name, OUTPUT_MODE_ALL),
+                OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL],
+            )
+        )
+
+    def _effective_hot_comment_count(
+        self,
+        enabled: bool,
+        controller: str
+    ) -> int:
+        text_enabled, _ = self.message.output_for_controller(controller)
+        if not text_enabled:
             return 0
         if not enabled:
             return 0
@@ -439,13 +531,16 @@ class ConfigManager:
         """
         parsers = []
         bili_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_bilibili
+            self.message.hot_comment_bilibili,
+            "bilibili",
         )
         weibo_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_weibo
+            self.message.hot_comment_weibo,
+            "weibo",
         )
         xhs_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_xiaohongshu
+            self.message.hot_comment_xiaohongshu,
+            "xiaohongshu",
         )
         proxy_addr = self.proxy.address or None
 
@@ -463,6 +558,11 @@ class ConfigManager:
             parsers.append(self.bilibili_parser)
         if self._enable_douyin:
             parsers.append(DouyinParser())
+        if self._enable_tiktok:
+            parsers.append(TikTokParser(
+                use_proxy=self.proxy.tiktok_use_proxy,
+                proxy_url=proxy_addr,
+            ))
         if self._enable_kuaishou:
             parsers.append(KuaishouParser())
         if self._enable_weibo:
@@ -491,6 +591,21 @@ class ConfigManager:
         return parsers
 
     # ── 静态辅助 ────────────────────────────────────────
+
+    @staticmethod
+    def _parse_parser_outputs(values) -> Dict[str, str]:
+        if not isinstance(values, dict):
+            values = {}
+
+        normalized: Dict[str, str] = {}
+        valid_modes = set(OUTPUT_MODE_FLAGS)
+        for key in PARSER_OUTPUT_KEYS:
+            raw_mode = values.get(key, OUTPUT_MODE_ALL)
+            mode = str(raw_mode or OUTPUT_MODE_ALL).strip()
+            if mode not in valid_modes:
+                mode = OUTPUT_MODE_ALL
+            normalized[key] = mode
+        return normalized
 
     @staticmethod
     def _parse_positive_int(value, default: int) -> int:

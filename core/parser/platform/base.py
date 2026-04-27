@@ -67,7 +67,9 @@ class BaseVideoParser(ABC):
             - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
             - image_headers: dict，图片下载的完整请求头字典（必需）
             - video_headers: dict，视频下载的完整请求头字典（必需）
-            - video_force_download: bool，是否强制下载视频（可选，默认False）。True=必须强制下载，如果未启用预下载或预下载失败则跳过该视频；False=根据配置选择
+            - video_force_download: bool，是否强制下载到缓存目录（可选，默认False）。True=缓存目录不可用或下载失败时跳过该视频；False=由下载决策引擎按目录能力选择 local/direct
+            - video_force_downloads: List[bool]，逐视频强制写入缓存标记（可选）
+            - platform: 平台名
             - 其他平台特定字段
 
         Raises:

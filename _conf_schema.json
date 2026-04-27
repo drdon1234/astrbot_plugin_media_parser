@@ -1,42 +1,96 @@
 {
     "parsers": {
-        "description": "解析器开关",
+        "description": "解析器与输出模式",
         "type": "object",
+        "hint": "关闭=不解析该平台；仅文本=只发送标题/作者/简介等文本；仅富媒体=只发送图片/视频",
         "items": {
             "bilibili": {
                 "description": "B站",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "douyin": {
                 "description": "抖音",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "tiktok": {
+                "description": "TikTok",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "kuaishou": {
                 "description": "快手",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "weibo": {
                 "description": "微博",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "xiaohongshu": {
                 "description": "小红书",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "xiaoheihe": {
                 "description": "小黑盒",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             },
             "twitter": {
                 "description": "Twitter/X",
-                "type": "bool",
-                "default": true
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },
@@ -92,16 +146,10 @@
                     }
                 }
             },
-            "text_metadata": {
-                "description": "发送文本元数据",
-                "type": "bool",
-                "hint": "以文本发送标题、作者、简介等信息",
-                "default": true
-            },
             "hot_comments": {
                 "description": "热评设置",
                 "type": "object",
-                "hint": "需启用文本元数据",
+                "hint": "仅对输出模式包含文本的支持平台生效",
                 "items": {
                     "count": {
                         "description": "热评条数",
@@ -129,15 +177,9 @@
         }
     },
     "download": {
-        "description": "下载与缓存",
+        "description": "媒体文件缓存目录",
         "type": "object",
         "items": {
-            "pre_download": {
-                "description": "预下载所有媒体",
-                "type": "bool",
-                "hint": "并发下载到本地后发送，提高成功率",
-                "default": false
-            },
             "max_concurrent": {
                 "description": "最大并发下载数",
                 "type": "int",
@@ -145,15 +187,15 @@
                 "default": 5
             },
             "cache_dir": {
-                "description": "缓存目录",
+                "description": "媒体文件缓存目录",
                 "type": "string",
-                "hint": "非Docker环境自动使用系统临时目录，Docker需挂载 /app/sharedFolder",
+                "hint": "非 Docker 环境自动使用 AstrBot 插件数据目录；Docker 环境可配置共享挂载目录",
                 "default": "/app/sharedFolder/video_parser/cache"
             },
             "max_video_size_mb": {
                 "description": "视频大小上限(MB)",
                 "type": "float",
-                "hint": "超限视频不下载不发送，0 = 不限制",
+                "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；0 = 不限制",
                 "default": 1000.0
             },
             "large_video_threshold_mb": {
@@ -227,7 +269,7 @@
             "use_cookie": {
                 "description": "携带Cookie解析",
                 "type": "bool",
-                "hint": "获取更高画质，需同时开启预下载",
+                "hint": "缓存目录可用时，将 DASH 视频下载到缓存目录后发送",
                 "default": false
             },
             "cookie": {
@@ -254,7 +296,7 @@
             "admin_assist": {
                 "description": "管理员协助登录",
                 "type": "object",
-                "hint": "Cookie失效时私聊管理员协助重新登录",
+                "hint": "Cookie失效时私聊管理员协助重新登录；媒体文件缓存目录不可用时自动旁路",
                 "items": {
                     "enable": {
                         "description": "启用",
@@ -284,6 +326,11 @@
                 "type": "string",
                 "hint": "格式：http://host:port 或 socks5://host:port",
                 "default": ""
+            },
+            "tiktok": {
+                "description": "TikTok解析与下载使用代理",
+                "type": "bool",
+                "default": false
             },
             "xiaoheihe_video": {
                 "description": "小黑盒视频下载使用代理",
@@ -316,12 +363,12 @@
     "media_relay": {
         "description": "媒体中转",
         "type": "object",
-        "hint": "AstrBot与消息平台无共享目录或分属不同服务器时启用",
+        "hint": "仅增强已缓存到本地文件的媒体，不会强制下载所有媒体",
         "items": {
             "enable": {
                 "description": "启用",
                 "type": "bool",
-                "hint": "由AstrBot HTTP服务中转媒体文件，无需挂载共享目录",
+                "hint": "由AstrBot HTTP服务中转缓存中的本地媒体文件",
                 "default": false
             },
             "callback_url": {
@@ -333,7 +380,7 @@
             "ttl": {
                 "description": "中转缓存有效期(秒)",
                 "type": "int",
-                "hint": "到期后链接失效并清理缓存，建议 ≥ 60",
+                "hint": "到期后链接失效并清理缓存，建议 >= 60",
                 "default": 300
             }
         }

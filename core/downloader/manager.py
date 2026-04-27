@@ -1,837 +1,571 @@
-"""下载管理器，按媒体类型分发下载任务并回填元数据。"""
+"""下载管理器，按单个媒体决策 local/direct/skip 并回填元数据。"""
 import asyncio
 import hashlib
 import os
+import re
 import time
-from typing import Dict, Any, List, Optional, Tuple
+import uuid
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from ..logger import logger
-
-from .utils import check_cache_dir_available, process_gather_results, strip_media_prefixes
-from .validator import get_video_size
-from .router import download_media
-from ..storage import cleanup_files, cleanup_directory
 from ..constants import Config
+from ..logger import logger
+from ..storage import cleanup_directory, cleanup_file
+from .router import download_media
+from .utils import check_cache_dir_available, strip_media_prefixes
+from .validator import get_video_size, validate_media_url
 
 
 class DownloadManager:
 
-    """下载调度器，协调不同处理器完成媒体下载。"""
+    """下载调度器，为每个媒体独立决定本地、直链或跳过。"""
+
     def __init__(
         self,
         max_video_size_mb: float = 0.0,
         large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB,
-        cache_dir: str = "/app/sharedFolder/video_parser/cache",
-        pre_download_all_media: bool = False,
+        cache_dir: str = Config.DEFAULT_CACHE_DIR,
+        cache_dir_available: Optional[bool] = None,
         max_concurrent_downloads: int = None
     ):
-        """初始化下载管理器
-
-        Args:
-            max_video_size_mb: 最大允许的视频大小(MB)，0表示不限制
-            large_video_threshold_mb: 大视频阈值(MB)，超过此大小将单独发送。
-                当设置为0时，所有视频都使用直链，不进行本地下载（与max_video_size_mb=0时的行为类似）
-            cache_dir: 视频缓存目录
-            pre_download_all_media: 是否预先下载所有媒体到本地
-            max_concurrent_downloads: 最大并发下载数
-        """
         self.max_video_size_mb = max_video_size_mb
         self.large_video_threshold_mb = large_video_threshold_mb
         self.cache_dir = cache_dir
-        self.max_concurrent_downloads = (
-            max_concurrent_downloads 
-            if max_concurrent_downloads is not None 
-            else Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+        self.cache_dir_available = (
+            bool(cache_dir_available)
+            if cache_dir_available is not None else
+            check_cache_dir_available(cache_dir)
         )
-        self.effective_pre_download = pre_download_all_media and check_cache_dir_available(cache_dir)
-        
+        concurrency = (
+            max_concurrent_downloads
+            if max_concurrent_downloads is not None else
+            Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+        )
+        try:
+            concurrency = max(1, int(concurrency))
+        except (TypeError, ValueError):
+            concurrency = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+        self.max_concurrent_downloads = concurrency
+        self._download_semaphore = asyncio.Semaphore(concurrency)
+
         self._active_tasks: set[asyncio.Task] = set()
         self._shutting_down = False
 
-    async def _download_one_image(
+    # ── 决策辅助 ────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_url_groups(value: Any) -> List[List[str]]:
+        """将解析器输出标准化为 List[List[str]]。"""
+        if not isinstance(value, list):
+            return []
+        groups: List[List[str]] = []
+        for item in value:
+            if isinstance(item, list):
+                groups.append([u for u in item if isinstance(u, str) and u])
+            elif isinstance(item, str) and item:
+                groups.append([item])
+        return groups
+
+    @staticmethod
+    def _is_dash_url(url: str) -> bool:
+        return bool(url and url.startswith("dash:"))
+
+    @staticmethod
+    def _is_m3u8_url(url: str) -> bool:
+        if not url:
+            return False
+        stripped = strip_media_prefixes(url)
+        return url.startswith("m3u8:") or ".m3u8" in stripped.lower()
+
+    def _video_requires_local(
         self,
-        session: aiohttp.ClientSession,
         url_list: List[str],
-        img_idx: int,
+        force_download: bool
+    ) -> bool:
+        if force_download:
+            return True
+        for url in url_list:
+            if self._is_dash_url(url) or self._is_m3u8_url(url):
+                return True
+        return False
+
+    @staticmethod
+    def _effective_force_flags(
         metadata: Dict[str, Any],
+        video_count: int
+    ) -> List[bool]:
+        global_force = bool(metadata.get("video_force_download", False))
+        raw_flags = metadata.get("video_force_downloads")
+        flags: List[bool] = []
+        if isinstance(raw_flags, list):
+            for idx in range(video_count):
+                if idx < len(raw_flags):
+                    flags.append(bool(raw_flags[idx]))
+                else:
+                    flags.append(global_force)
+        else:
+            flags = [global_force] * video_count
+        return flags
+
+    @staticmethod
+    def _proxy_for(
+        metadata: Dict[str, Any],
+        kind: str,
         proxy_addr: str = None
     ) -> Optional[str]:
-        """下载单个图片，遍历URL列表，每个URL只尝试一次
-
-        Args:
-            session: aiohttp会话
-            url_list: 图片URL列表
-            img_idx: 图片索引
-            metadata: 元数据字典（用于获取 header 参数）
-            proxy_addr: 代理地址（可选）
-
-        Returns:
-            临时文件路径，失败时为None
-        """
-        if not url_list or not isinstance(url_list, list):
+        proxy_url = metadata.get("proxy_url") or proxy_addr
+        if not proxy_url:
             return None
-        
-        headers = metadata.get('image_headers', {})
-        use_image_proxy = metadata.get('use_image_proxy', False)
-        proxy_url = metadata.get('proxy_url') or proxy_addr
-        proxy = proxy_url if (use_image_proxy and proxy_url) else None
-        
-        for url in url_list:
-            result = await download_media(
-                session,
-                url,
-                media_type=None,
-                cache_dir=None,
-                media_id='image',
-                index=img_idx,
-                headers=headers,
-                proxy=proxy
-            )
-            if result and result.get('file_path'):
-                return result.get('file_path')
-        
+        if kind == "video" and metadata.get("use_video_proxy", False):
+            return proxy_url
+        if kind == "image" and metadata.get("use_image_proxy", False):
+            return proxy_url
         return None
 
-    async def _download_images(
-        self,
-        session: aiohttp.ClientSession,
-        image_urls: List[List[str]],
-        has_valid_images: bool,
-        metadata: Dict[str, Any],
-        proxy_addr: str = None
-    ) -> Tuple[List[Optional[str]], int]:
-        """下载所有图片到临时文件
+    @staticmethod
+    def _extract_status_code_from_error(error: Any) -> Optional[int]:
+        """从下载错误文本中提取 HTTP 状态码。"""
+        if not error:
+            return None
+        match = re.search(r"\b([1-5]\d{2})\b", str(error))
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
 
-        Args:
-            session: aiohttp会话
-            image_urls: 图片URL列表（二维列表）
-            has_valid_images: 是否有有效的图片
-            metadata: 元数据字典（用于获取 header 参数）
-            proxy_addr: 代理地址（可选）
-
-        Returns:
-            (image_file_paths, failed_image_count) 元组
-        """
-        image_file_paths = []
-        failed_image_count = 0
-
-        if image_urls and has_valid_images:
-            if self._shutting_down:
-                return image_file_paths, len(image_urls)
-            
-            coros = [
-                self._download_one_image(
-                    session, url_list, idx, metadata, proxy_addr
-                )
-                for idx, url_list in enumerate(image_urls)
-            ]
-            tasks = [asyncio.create_task(coro) for coro in coros]
-            self._active_tasks.update(tasks)
-            
-            try:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-            finally:
-                for task in tasks:
-                    self._active_tasks.discard(task)
-
-            for result in results:
-                if isinstance(result, Exception):
-                    image_file_paths.append(None)
-                    failed_image_count += 1
-                elif isinstance(result, str) and result:
-                    image_file_paths.append(result)
-                else:
-                    image_file_paths.append(None)
-                    failed_image_count += 1
-        else:
-            if image_urls:
-                failed_image_count = len(image_urls)
-
-        return image_file_paths, failed_image_count
-
-
-    async def _get_video_size_task(
+    async def _precheck_video(
         self,
         session: aiohttp.ClientSession,
         url_list: List[str],
         metadata: Dict[str, Any],
-        proxy_addr: str = None
-    ) -> Tuple[Optional[float], Optional[int]]:
-        """获取视频大小任务（异步函数）
-        
-        Args:
-            session: aiohttp会话
-            url_list: 视频URL列表
-            metadata: 元数据字典（用于获取 header 参数）
-            proxy_addr: 代理地址（可选）
-            
+        proxy_addr: str = None,
+        require_accessible_for_direct: bool = False
+    ) -> Tuple[Optional[float], Optional[int], Optional[str], bool]:
+        """预检普通视频大小与可访问性。
+
         Returns:
-            (size_mb, status_code) 元组
+            (size_mb, status_code, skip_reason, access_denied)
         """
         if not url_list:
-            return None, None
-        try:
-            headers = metadata.get('video_headers', {})
-            use_video_proxy = metadata.get('use_video_proxy', False)
-            proxy_url = metadata.get('proxy_url') or proxy_addr
-            proxy = proxy_url if (use_video_proxy and proxy_url) else None
-            video_url = url_list[0]
-            video_url = strip_media_prefixes(video_url)
-            return await get_video_size(session, video_url, headers, proxy)
-        except Exception:
-            return None, None
+            return None, None, "未找到视频URL", False
 
-    async def _check_video_sizes(
-        self,
-        session: aiohttp.ClientSession,
-        video_urls: List[List[str]],
-        metadata: Dict[str, Any],
-        proxy_addr: str = None
-    ) -> Tuple[List[Optional[float]], bool]:
-        """检查所有视频的大小
-        
-        Args:
-            session: aiohttp会话
-            video_urls: 视频URL列表（二维列表）
-            metadata: 元数据字典
-            proxy_addr: 代理地址（可选）
-            
-        Returns:
-            (video_sizes, has_access_denied) 元组
-            video_sizes: 视频大小列表(MB)，None表示获取失败
-            has_access_denied: 是否有403访问被拒绝
-        """
-        video_sizes = []
-        has_access_denied = False
-        
-        if self._shutting_down:
-            return [None] * len(video_urls), False
-        
-        coros = [
-            self._get_video_size_task(session, url_list, metadata, proxy_addr)
-            for url_list in video_urls
-        ]
-        tasks = [asyncio.create_task(coro) for coro in coros]
-        self._active_tasks.update(tasks)
-        
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
-            for task in tasks:
-                self._active_tasks.discard(task)
-        
-        for result in results:
-            if isinstance(result, Exception):
-                video_sizes.append(None)
-                if '403' in str(result) or 'Forbidden' in str(result):
-                    has_access_denied = True
-            elif isinstance(result, tuple) and len(result) == 2:
-                size, status_code = result
-                video_sizes.append(size)
-                if status_code == 403:
-                    has_access_denied = True
-            elif isinstance(result, (int, float)) or result is None:
-                video_sizes.append(result)
-            else:
-                video_sizes.append(None)
-        
-        return video_sizes, has_access_denied
+        headers = metadata.get("video_headers", {})
+        proxy = self._proxy_for(metadata, "video", proxy_addr)
 
-    def _check_size_limit(
-        self,
-        video_sizes: List[Optional[float]],
-        url: str
-    ) -> Tuple[bool, Optional[float], float]:
-        """检查视频大小是否超过限制
-        
-        Args:
-            video_sizes: 视频大小列表(MB)
-            url: 原始URL（用于日志）
-            
-        Returns:
-            (exceeds_limit, max_video_size, total_video_size) 元组
-            exceeds_limit: 是否超过限制
-            max_video_size: 最大视频大小(MB)
-            total_video_size: 总视频大小(MB)
-        """
-        if self.max_video_size_mb <= 0:
-            return False, None, 0.0
-        
-        valid_sizes = [s for s in video_sizes if s is not None]
-        if not valid_sizes:
-            return False, None, 0.0
-        
-        max_video_size = max(valid_sizes)
-        total_video_size = sum(valid_sizes)
-        
-        if max_video_size > self.max_video_size_mb:
-            logger.warning(
-                f"视频大小超过限制: {max_video_size:.2f}MB > {self.max_video_size_mb}MB, "
-                f"URL: {url}"
+        last_status_code = None
+        denied_seen = False
+        size_limit_reason = None
+        size_limit_value = None
+        invalid_reason = "直链不可访问或不是有效视频"
+
+        for candidate_index, candidate in enumerate(list(url_list)):
+            url = strip_media_prefixes(candidate)
+            if not url:
+                continue
+
+            size_mb, status_code = await get_video_size(
+                session, url, headers=headers, proxy=proxy
             )
-            return True, max_video_size, total_video_size
-        
-        return False, max_video_size, total_video_size
+            if status_code is not None:
+                last_status_code = status_code
+            if status_code == 403:
+                denied_seen = True
+                continue
+            if (
+                size_mb is not None and
+                self.max_video_size_mb > 0 and
+                size_mb > self.max_video_size_mb
+            ):
+                size_limit_value = size_mb
+                size_limit_reason = (
+                    f"视频大小超过限制（{size_mb:.1f}MB > "
+                    f"{self.max_video_size_mb:.1f}MB）"
+                )
+                continue
 
-    def _create_exceeded_size_metadata(
-        self,
-        metadata: Dict[str, Any],
-        video_sizes: List[Optional[float]],
-        max_video_size: float,
-        total_video_size: float,
-        video_count: int,
-        image_count: int
-    ) -> Dict[str, Any]:
-        """创建超过大小限制的元数据
-        
-        Args:
-            metadata: 原始元数据
-            video_sizes: 视频大小列表
-            max_video_size: 最大视频大小(MB)
-            total_video_size: 总视频大小(MB)
-            video_count: 视频数量
-            image_count: 图片数量
-            
-        Returns:
-            更新后的元数据
-        """
-        metadata['exceeds_max_size'] = True
-        metadata['has_valid_media'] = False
-        metadata['video_sizes'] = video_sizes
-        metadata['max_video_size_mb'] = max_video_size
-        metadata['total_video_size_mb'] = total_video_size
-        metadata['video_count'] = video_count
-        metadata['image_count'] = image_count
-        metadata['failed_video_count'] = video_count
-        metadata['failed_image_count'] = image_count
-        metadata['file_paths'] = []
-        metadata['use_local_files'] = False
-        return metadata
+            if require_accessible_for_direct and size_mb is None:
+                is_valid, validate_status = await validate_media_url(
+                    session,
+                    url,
+                    headers=headers,
+                    proxy=proxy,
+                    is_video=True
+                )
+                if validate_status is not None:
+                    last_status_code = validate_status
+                if validate_status == 403:
+                    denied_seen = True
+                    continue
+                if not is_valid:
+                    continue
+                status_code = validate_status
 
-    def _build_media_items(
-        self,
-        metadata: Dict[str, Any],
-        media_id: str,
-        proxy_addr: str = None
-    ) -> List[Dict[str, Any]]:
-        """构建媒体项列表
+            if candidate_index != 0:
+                url_list.insert(0, url_list.pop(candidate_index))
+            return size_mb, status_code, None, False
 
-        Args:
-            metadata: 元数据字典（应包含 image_headers, video_headers 字段）
-            media_id: 媒体ID
-            proxy_addr: 代理地址（可选，优先级低于元数据中的 proxy_url）
+        if denied_seen:
+            return None, last_status_code, "媒体访问被拒绝(403 Forbidden)", True
+        if size_limit_reason:
+            return (
+                size_limit_value,
+                last_status_code,
+                size_limit_reason,
+                False
+            )
+        return None, last_status_code, invalid_reason, False
 
-        Returns:
-            媒体项列表，每个项包含url_list（URL列表）、media_id、index、is_video、headers等字段
-        """
-        media_items = []
-        video_urls = metadata.get('video_urls', [])
-        image_urls = metadata.get('image_urls', [])
-        
-        use_image_proxy = metadata.get('use_image_proxy', False)
-        use_video_proxy = metadata.get('use_video_proxy', False)
-        proxy_url = metadata.get('proxy_url') or proxy_addr
-        
-        image_headers = metadata.get('image_headers', {})
-        video_headers = metadata.get('video_headers', {})
-        
-        idx = 0
-        for url_list in video_urls:
-            if url_list and isinstance(url_list, list):
-                item_proxy = proxy_url if (use_video_proxy and proxy_url) else None
-                media_items.append({
-                    'url_list': url_list,
-                    'media_id': media_id,
-                    'index': idx,
-                    'is_video': True,
-                    'headers': video_headers,
-                    'proxy': item_proxy
-                })
-                idx += 1
-        
-        for url_list in image_urls:
-            if url_list and isinstance(url_list, list):
-                item_proxy = proxy_url if (use_image_proxy and proxy_url) else None
-                media_items.append({
-                    'url_list': url_list,
-                    'media_id': media_id,
-                    'index': idx,
-                    'is_video': False,
-                    'headers': image_headers,
-                    'proxy': item_proxy
-                })
-                idx += 1
-        
-        return media_items
+    # ── 下载执行 ────────────────────────────────────────
 
-    def _process_single_type_results(
-        self,
-        download_results: List[Dict[str, Any]],
-        expected_count: int,
-        start_idx: int = 0
-    ) -> Tuple[List[Optional[str]], int]:
-        """处理单一类型的下载结果（视频或图片）
-
-        Args:
-            download_results: 下载结果列表
-            expected_count: 期望的结果数量
-            start_idx: 开始索引（用于处理部分结果）
-
-        Returns:
-            (file_paths, failed_count) 元组
-        """
-        file_paths = []
-        failed_count = 0
-        
-        for idx in range(expected_count):
-            result_idx = start_idx + idx
-            if result_idx < len(download_results):
-                result = download_results[result_idx]
-                if result.get('success') and result.get('file_path'):
-                    file_paths.append(result['file_path'])
-                else:
-                    file_paths.append(None)
-                    failed_count += 1
-            else:
-                file_paths.append(None)
-                failed_count += 1
-        
-        return file_paths, failed_count
-
-
-    async def _batch_download_media(
+    async def _download_local_items(
         self,
         session: aiohttp.ClientSession,
         media_items: List[Dict[str, Any]],
-        cache_dir: str,
-        max_concurrent: int = None
+        cache_dir: str
     ) -> List[Dict[str, Any]]:
-        """批量下载媒体到缓存目录（支持视频和图片混合）
-        
-        此方法会根据媒体类型使用相应的下载器（通过 router.download_media）
-
-        Args:
-            session: aiohttp会话
-            media_items: 媒体项列表，每个项包含url_list（URL列表）、media_id、index、
-                headers、proxy等字段
-            cache_dir: 缓存目录路径
-            max_concurrent: 最大并发下载数
-
-        Returns:
-            下载结果列表，每个项包含url（第一个URL）、file_path、success、index等字段
-        """
-        if not cache_dir or not media_items:
+        """并发下载需要写入缓存的媒体项。"""
+        if not media_items or not cache_dir or self._shutting_down:
             return []
-
-        if self._shutting_down:
-            return []
-
-        if max_concurrent is None:
-            max_concurrent = self.max_concurrent_downloads
-        semaphore = asyncio.Semaphore(max_concurrent)
 
         async def download_one(item: Dict[str, Any]) -> Dict[str, Any]:
-            """下载单条媒体并返回包含本地路径的处理结果。"""
-            async with semaphore:
-                try:
-                    url_list = item.get('url_list', [])
-                    media_id = item.get('media_id', 'media')
-                    index = item.get('index', 0)
-                    item_headers = item.get('headers', {})
-                    item_proxy = item.get('proxy')
+            async with self._download_semaphore:
+                url_list = item.get("url_list") or []
+                index = int(item.get("index", 0))
+                kind = item.get("kind", "video")
+                media_id = item.get("media_id") or "media"
+                headers = item.get("headers") or {}
+                proxy = item.get("proxy")
 
-                    if not url_list or not isinstance(url_list, list):
-                        return {
-                            'url': url_list[0] if url_list else None,
-                            'file_path': None,
-                            'success': False,
-                            'index': index
-                        }
+                if not url_list:
+                    return {
+                        **item,
+                        "success": False,
+                        "file_path": None,
+                        "size_mb": None,
+                        "error": "未找到媒体URL",
+                    }
 
-                    for url in url_list:
+                last_error = "下载失败"
+                last_status_code = None
+                for candidate in url_list:
+                    try:
                         result = await download_media(
-                            session,
-                            url,
-                            media_type=None,
+                            session=session,
+                            media_url=candidate,
+                            media_type="image" if kind == "image" else None,
                             cache_dir=cache_dir,
                             media_id=media_id,
                             index=index,
-                            headers=item_headers,
-                            proxy=item_proxy
+                            headers=headers,
+                            proxy=proxy,
                         )
-                        if result and result.get('file_path'):
+                        if result and result.get("file_path"):
                             return {
-                                'url': url_list[0],
-                                'file_path': result.get('file_path'),
-                                'size_mb': result.get('size_mb'),
-                                'success': True,
-                                'index': index
+                                **item,
+                                "url": candidate,
+                                "file_path": result.get("file_path"),
+                                "size_mb": result.get("size_mb"),
+                                "status_code": (
+                                    result.get("status_code")
+                                    or last_status_code
+                                ),
+                                "success": True,
                             }
-                    
-                    return {
-                        'url': url_list[0] if url_list else None,
-                        'file_path': None,
-                        'size_mb': None,
-                        'success': False,
-                        'index': index
-                    }
-                except Exception as e:
-                    url_list = item.get('url_list', [])
-                    index = item.get('index', 0)
-                    logger.warning(f"批量下载媒体失败: {url_list[0] if url_list else 'unknown'}, 错误: {e}")
-                    return {
-                        'url': url_list[0] if url_list else None,
-                        'file_path': None,
-                        'success': False,
-                        'index': index,
-                        'error': str(e)
-                    }
+                        if result and result.get("error"):
+                            last_error = str(result.get("error"))
+                            last_status_code = (
+                                result.get("status_code")
+                                or self._extract_status_code_from_error(
+                                    last_error
+                                )
+                                or last_status_code
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        last_error = str(e)
+                        last_status_code = (
+                            self._extract_status_code_from_error(last_error)
+                            or last_status_code
+                        )
+                        logger.warning(
+                            f"下载媒体失败: {candidate}, 错误: {e}"
+                        )
+
+                return {
+                    **item,
+                    "url": url_list[0],
+                    "file_path": None,
+                    "size_mb": None,
+                    "status_code": last_status_code,
+                    "success": False,
+                    "error": last_error,
+                }
 
         tasks = [asyncio.create_task(download_one(item)) for item in media_items]
         self._active_tasks.update(tasks)
         try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             for task in tasks:
                 self._active_tasks.discard(task)
-        return process_gather_results(results, media_items)
 
-    def _process_download_results(
-        self,
-        download_results: List[Dict[str, Any]],
-        video_urls: List[List[str]],
-        image_urls: List[List[str]]
-    ) -> Tuple[List[Optional[str]], int, int]:
-        """处理下载结果，构建文件路径列表并统计失败数量
+        results: List[Dict[str, Any]] = []
+        for idx, result in enumerate(raw_results):
+            item = media_items[idx] if idx < len(media_items) else {}
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                results.append({
+                    **item,
+                    "success": False,
+                    "file_path": None,
+                    "size_mb": None,
+                    "status_code": self._extract_status_code_from_error(
+                        str(result)
+                    ),
+                    "error": str(result),
+                })
+            elif isinstance(result, dict):
+                results.append(result)
+        return results
 
-        Args:
-            download_results: 下载结果列表
-            video_urls: 视频URL列表（二维列表）
-            image_urls: 图片URL列表（二维列表）
-
-        Returns:
-            (file_paths, failed_video_count, failed_image_count) 元组
-        """
-        video_file_paths, failed_video_count = self._process_single_type_results(
-            download_results, len(video_urls), start_idx=0
-        )
-        image_file_paths, failed_image_count = self._process_single_type_results(
-            download_results, len(image_urls), start_idx=len(video_urls)
-        )
-        
-        return video_file_paths + image_file_paths, failed_video_count, failed_image_count
+    # ── 主入口 ──────────────────────────────────────────
 
     async def process_metadata(
         self,
         session: aiohttp.ClientSession,
         metadata: Dict[str, Any],
-        proxy_addr: str = None
+        proxy_addr: str = None,
+        on_sendable_media: Optional[Callable[[], Awaitable[None]]] = None
     ) -> Dict[str, Any]:
-        """处理元数据，根据下载模式决定媒体处理方式
-
-        Args:
-            session: aiohttp会话
-            metadata: 解析后的元数据（应包含 image_headers, video_headers 字段）
-            proxy_addr: 代理地址（可选，用于 Twitter 等需要代理的平台）
-
-        Returns:
-            处理后的元数据，包含视频大小信息和文件路径信息
-        """
-        if self._shutting_down:
-            return metadata
-        
-        if not metadata:
+        """处理元数据，回填媒体模式、本地文件、大小和跳过原因。"""
+        if self._shutting_down or not metadata:
             return metadata
 
-        url = metadata.get('url', '')
-        video_urls = metadata.get('video_urls', [])
-        image_urls = metadata.get('image_urls', [])
-        
-        if 'image_headers' not in metadata:
-            metadata['image_headers'] = {}
-        if 'video_headers' not in metadata:
-            metadata['video_headers'] = {}
-        
-        video_force_download = metadata.get('video_force_download', False)
-        
-        logger.debug(
-            f"处理元数据: {url}, "
-            f"video_force_download={video_force_download}, "
-            f"effective_pre_download={self.effective_pre_download}"
-        )
-        
-        video_count = len(video_urls)
-        image_count = len(image_urls)
-        video_sizes = []
-        video_has_access_denied = False
-        
-        if video_urls and self.max_video_size_mb > 0:
-            logger.debug(f"开始检查视频大小: {url}, 视频数量: {len(video_urls)}")
-            video_sizes, video_has_access_denied = await self._check_video_sizes(
-                session, video_urls, metadata, proxy_addr
-            )
-            
-            exceeds_limit, max_video_size, total_video_size = self._check_size_limit(
-                video_sizes, url
-            )
-            
-            if exceeds_limit:
-                return self._create_exceeded_size_metadata(
-                    metadata, video_sizes, max_video_size, total_video_size,
-                    video_count, image_count
-                )
-        
-        if self.effective_pre_download:
-            return await self._process_with_pre_download(
-                session, metadata, video_urls, image_urls, video_sizes, proxy_addr
-            )
-        else:
-            return await self._process_with_direct_link(
-                session,
-                metadata,
-                video_urls,
-                image_urls,
-                video_sizes,
-                proxy_addr,
-                initial_video_has_access_denied=video_has_access_denied
-            )
+        url = metadata.get("url", "")
+        video_urls = self._normalize_url_groups(metadata.get("video_urls", []))
+        image_urls = self._normalize_url_groups(metadata.get("image_urls", []))
+        metadata["video_urls"] = video_urls
+        metadata["image_urls"] = image_urls
+        metadata.setdefault("video_headers", {})
+        metadata.setdefault("image_headers", {})
 
-    async def _process_with_pre_download(
-        self,
-        session: aiohttp.ClientSession,
-        metadata: Dict[str, Any],
-        video_urls: List[List[str]],
-        image_urls: List[List[str]],
-        video_sizes: List[Optional[float]],
-        proxy_addr: str = None
-    ) -> Dict[str, Any]:
-        """使用预下载策略处理媒体并补齐回传字段。"""
-        url = metadata.get('url', '')
-        video_force_download = metadata.get('video_force_download', False)
         video_count = len(video_urls)
         image_count = len(image_urls)
-        
-        logger.debug(f"开始批量下载所有媒体: {url}, 视频: {len(video_urls)}, 图片: {len(image_urls)}")
+        file_paths: List[Optional[str]] = [None] * (video_count + image_count)
+        video_sizes: List[Optional[float]] = [None] * video_count
+        video_status_codes: List[Optional[int]] = [None] * video_count
+        image_status_codes: List[Optional[int]] = [None] * image_count
+        video_modes: List[str] = ["skip"] * video_count
+        image_modes: List[str] = ["skip"] * image_count
+        video_skip_reasons: List[Optional[str]] = [None] * video_count
+        image_skip_reasons: List[Optional[str]] = [None] * image_count
+        has_access_denied = False
+        size_exceeded = False
+
+        force_flags = self._effective_force_flags(metadata, video_count)
         media_id = self._generate_media_id(url, metadata)
-        media_items = self._build_media_items(
-            metadata,
-            media_id,
-            proxy_addr
-        )
-        logger.debug(f"构建了 {len(media_items)} 个媒体项")
+        local_items: List[Dict[str, Any]] = []
 
-        download_results = await self._batch_download_media(
-            session,
-            media_items,
-            self.cache_dir,
-            self.max_concurrent_downloads
+        logger.debug(
+            f"处理元数据: {url}, 视频={video_count}, 图片={image_count}, "
+            f"缓存目录可用={self.cache_dir_available}"
         )
-        logger.debug(f"批量下载完成: {url}, 成功: {sum(1 for r in download_results if r.get('success'))}/{len(download_results)}")
-        
-        file_paths, failed_video_count, failed_image_count = self._process_download_results(
-            download_results, video_urls, image_urls
-        )
-        
-        if video_force_download:
-            original_video_count = len(video_urls)
-            video_results = download_results[:original_video_count] if original_video_count > 0 else []
-            all_video_failed = all(not result.get('success') for result in video_results) if video_results else False
-            if all_video_failed and original_video_count > 0:
-                logger.debug(f"视频要求强制下载但全部失败，跳过所有视频: {url}")
-                video_urls = []
-                metadata['video_urls'] = []
-                for idx in range(original_video_count):
-                    if idx < len(file_paths):
-                        file_paths[idx] = None
-                failed_video_count = original_video_count
-        
-        metadata['file_paths'] = file_paths
-        metadata['failed_video_count'] = failed_video_count
-        metadata['failed_image_count'] = failed_image_count
-        
-        if video_urls:
-            final_video_sizes = []
-            for idx, result in enumerate(download_results[:len(video_urls)]):
-                if result.get('success') and result.get('size_mb') is not None:
-                    final_video_sizes.append(result.get('size_mb'))
-                elif idx < len(video_sizes):
-                    final_video_sizes.append(video_sizes[idx])
-                else:
-                    final_video_sizes.append(None)
-            
-            valid_sizes = [s for s in final_video_sizes if s is not None]
-            max_video_size = max(valid_sizes) if valid_sizes else None
-            total_video_size = sum(valid_sizes) if valid_sizes else 0.0
-            
-            metadata['video_sizes'] = final_video_sizes
-            metadata['max_video_size_mb'] = max_video_size
-            metadata['total_video_size_mb'] = total_video_size
-            
-            exceeds_limit, max_video_size_check, _ = self._check_size_limit(
-                final_video_sizes, url
+
+        for idx, url_list in enumerate(video_urls):
+            force_download = force_flags[idx] if idx < len(force_flags) else False
+            requires_local = self._video_requires_local(url_list, force_download)
+            contains_stream = any(
+                self._is_dash_url(u) or self._is_m3u8_url(u)
+                for u in url_list
             )
-            if exceeds_limit:
-                cleanup_files(file_paths)
-                metadata['exceeds_max_size'] = True
-                metadata['has_valid_media'] = False
-                metadata['use_local_files'] = False
-                metadata['file_paths'] = []
-                return metadata
-        else:
-            metadata['video_sizes'] = []
-            metadata['max_video_size_mb'] = None
-            metadata['total_video_size_mb'] = 0.0
-        
-        has_valid_media = any(
-            result.get('success') and result.get('file_path')
-            for result in download_results
+
+            if not url_list:
+                video_skip_reasons[idx] = "未找到视频URL"
+                continue
+
+            if requires_local and not self.cache_dir_available:
+                video_skip_reasons[idx] = (
+                    "媒体文件缓存目录不可用，无法处理必须下载到缓存的视频"
+                )
+                continue
+
+            mode = "local" if self.cache_dir_available else "direct"
+            if requires_local:
+                mode = "local"
+
+            if not contains_stream:
+                size_mb, status_code, reason, denied = await self._precheck_video(
+                    session=session,
+                    url_list=url_list,
+                    metadata=metadata,
+                    proxy_addr=proxy_addr,
+                    require_accessible_for_direct=(mode == "direct")
+                )
+                video_sizes[idx] = size_mb
+                video_status_codes[idx] = status_code
+                has_access_denied = has_access_denied or denied
+                if reason:
+                    if "超过限制" in reason:
+                        size_exceeded = True
+                    video_skip_reasons[idx] = reason
+                    continue
+
+            video_modes[idx] = mode
+            if on_sendable_media:
+                await on_sendable_media()
+            if mode == "local":
+                local_items.append({
+                    "kind": "video",
+                    "position": idx,
+                    "index": idx,
+                    "url_list": url_list,
+                    "media_id": media_id,
+                    "headers": metadata.get("video_headers", {}),
+                    "proxy": self._proxy_for(metadata, "video", proxy_addr),
+                })
+
+        for idx, url_list in enumerate(image_urls):
+            if not url_list:
+                image_skip_reasons[idx] = "未找到图片URL"
+                continue
+            if not self.cache_dir_available:
+                image_skip_reasons[idx] = (
+                    "媒体文件缓存目录不可用，图片无法直链发送"
+                )
+                continue
+            image_modes[idx] = "local"
+            if on_sendable_media:
+                await on_sendable_media()
+            local_items.append({
+                "kind": "image",
+                "position": video_count + idx,
+                "index": idx,
+                "url_list": url_list,
+                "media_id": media_id,
+                "headers": metadata.get("image_headers", {}),
+                "proxy": self._proxy_for(metadata, "image", proxy_addr),
+            })
+
+        download_results = await self._download_local_items(
+            session=session,
+            media_items=local_items,
+            cache_dir=self.cache_dir
         )
+
+        for result in download_results:
+            kind = result.get("kind")
+            position = int(result.get("position", 0))
+            status_code = result.get("status_code")
+            success = bool(result.get("success") and result.get("file_path"))
+            if not success:
+                reason = result.get("error") or "缓存下载失败"
+                if kind == "video":
+                    idx = position
+                    if status_code is not None:
+                        video_status_codes[idx] = status_code
+                    video_modes[idx] = "skip"
+                    video_skip_reasons[idx] = f"缓存下载失败: {reason}"
+                else:
+                    idx = position - video_count
+                    if status_code is not None:
+                        image_status_codes[idx] = status_code
+                    image_modes[idx] = "skip"
+                    image_skip_reasons[idx] = f"缓存下载失败: {reason}"
+                continue
+
+            file_path = result.get("file_path")
+            size_mb = result.get("size_mb")
+            if kind == "video":
+                idx = position
+                if status_code is not None:
+                    video_status_codes[idx] = status_code
+                if size_mb is not None:
+                    video_sizes[idx] = size_mb
+                if (
+                    size_mb is not None and
+                    self.max_video_size_mb > 0 and
+                    size_mb > self.max_video_size_mb
+                ):
+                    cleanup_file(file_path)
+                    file_paths[position] = None
+                    video_modes[idx] = "skip"
+                    video_skip_reasons[idx] = (
+                        f"下载后视频大小超过限制（{size_mb:.1f}MB > "
+                        f"{self.max_video_size_mb:.1f}MB）"
+                    )
+                    size_exceeded = True
+                    continue
+            else:
+                idx = position - video_count
+                if status_code is not None:
+                    image_status_codes[idx] = status_code
+            file_paths[position] = file_path
+
+        valid_video_count = sum(1 for mode in video_modes if mode in ("local", "direct"))
+        valid_image_count = sum(1 for mode in image_modes if mode in ("local", "direct"))
+        has_valid_media = bool(valid_video_count or valid_image_count)
 
         if not has_valid_media and self.cache_dir:
-            cache_subdir = os.path.join(self.cache_dir, media_id)
-            cleanup_directory(cache_subdir)
-        
-        metadata['has_valid_media'] = has_valid_media
-        metadata['use_local_files'] = has_valid_media
-        metadata['video_count'] = len(video_urls)
-        metadata['image_count'] = image_count
-        metadata['exceeds_max_size'] = False
-        
-        return metadata
+            cleanup_directory(os.path.join(self.cache_dir, media_id))
 
-    async def _process_with_direct_link(
-        self,
-        session: aiohttp.ClientSession,
-        metadata: Dict[str, Any],
-        video_urls: List[List[str]],
-        image_urls: List[List[str]],
-        video_sizes: List[Optional[float]],
-        proxy_addr: str = None,
-        initial_video_has_access_denied: bool = False
-    ) -> Dict[str, Any]:
-        """使用直链策略处理媒体并补齐回传字段。"""
-        url = metadata.get('url', '')
-        video_force_download = metadata.get('video_force_download', False)
-        video_count = len(video_urls)
-        image_count = len(image_urls)
-
-        logger.debug(f"使用直链模式处理媒体: {url}, 视频: {len(video_urls)}, 图片: {len(image_urls)}")
-        
-        if video_force_download:
-            logger.debug(f"视频要求强制下载但未启用批量下载，跳过所有视频: {url}")
-            video_urls = []
-            metadata['video_urls'] = []
-        
-        video_has_access_denied = initial_video_has_access_denied
-        if video_urls:
-            if not video_sizes:
-                video_sizes, checked_has_access_denied = await self._check_video_sizes(
-                    session, video_urls, metadata, proxy_addr
-                )
-                video_has_access_denied = (
-                    video_has_access_denied or checked_has_access_denied
-                )
-        
         valid_sizes = [s for s in video_sizes if s is not None]
-        max_video_size = max(valid_sizes) if valid_sizes else None
-        total_video_size = sum(valid_sizes) if valid_sizes else 0.0
-        has_valid_videos = len(valid_sizes) > 0
-        
-        has_valid_images = False
-        has_access_denied = False
-        image_file_paths = []
-        failed_image_count = 0
-        
-        if image_urls:
-            image_file_paths, failed_image_count = await self._download_images(
-                session, image_urls, True,
-                metadata, proxy_addr
-            )
-            has_valid_images = any(fp for fp in image_file_paths if fp)
-
-        file_paths_aligned = [None] * len(video_urls) + image_file_paths
-
-        metadata['video_sizes'] = video_sizes
-        metadata['max_video_size_mb'] = max_video_size
-        metadata['total_video_size_mb'] = total_video_size
-        metadata['video_count'] = len(video_urls)
-        metadata['image_count'] = image_count
-        
-        has_valid_media = has_valid_videos or has_valid_images
-        metadata['has_valid_media'] = has_valid_media
-        metadata['has_access_denied'] = has_access_denied or video_has_access_denied
-        
-        if not has_valid_media:
-            metadata['exceeds_max_size'] = False
-            metadata['file_paths'] = file_paths_aligned
-            metadata['use_local_files'] = has_valid_images
-            metadata['failed_video_count'] = len(video_urls) if video_urls else 0
-            metadata['failed_image_count'] = failed_image_count
-            return metadata
-        
-        exceeds_limit, max_video_size_check, _ = self._check_size_limit(
-            video_sizes, url
+        metadata["file_paths"] = file_paths
+        metadata["video_sizes"] = video_sizes
+        metadata["video_status_codes"] = video_status_codes
+        metadata["image_status_codes"] = image_status_codes
+        metadata["video_modes"] = video_modes
+        metadata["image_modes"] = image_modes
+        metadata["video_skip_reasons"] = video_skip_reasons
+        metadata["image_skip_reasons"] = image_skip_reasons
+        metadata["media_cache_dir_available"] = self.cache_dir_available
+        metadata["max_video_size_mb"] = max(valid_sizes) if valid_sizes else None
+        metadata["total_video_size_mb"] = sum(valid_sizes) if valid_sizes else 0.0
+        metadata["video_count"] = video_count
+        metadata["image_count"] = image_count
+        metadata["has_valid_media"] = has_valid_media
+        metadata["use_local_files"] = any(
+            mode == "local" and idx < len(file_paths) and file_paths[idx]
+            for idx, mode in enumerate(video_modes)
+        ) or any(
+            mode == "local" and (video_count + idx) < len(file_paths)
+            and file_paths[video_count + idx]
+            for idx, mode in enumerate(image_modes)
         )
-        if exceeds_limit:
-            cleanup_files(image_file_paths)
-            metadata['exceeds_max_size'] = True
-            metadata['has_valid_media'] = False
-            metadata['max_video_size_mb'] = max_video_size_check
-            metadata['failed_video_count'] = len(video_urls) if video_urls else 0
-            metadata['failed_image_count'] = failed_image_count
-            metadata['file_paths'] = []
-            metadata['use_local_files'] = False
-            return metadata
-        
-        metadata['exceeds_max_size'] = False
-        metadata['file_paths'] = file_paths_aligned
-        metadata['use_local_files'] = has_valid_images
-        failed_video_count = (
-            sum(1 for size in video_sizes if size is None)
-            if video_sizes else 0
+        metadata["exceeds_max_size"] = bool(size_exceeded and not has_valid_media)
+        metadata["has_access_denied"] = bool(
+            has_access_denied or
+            any(code == 403 for code in video_status_codes) or
+            any(code == 403 for code in image_status_codes)
         )
-        metadata['failed_video_count'] = failed_video_count
-        metadata['failed_image_count'] = failed_image_count
-
+        metadata["failed_video_count"] = sum(1 for mode in video_modes if mode == "skip")
+        metadata["failed_image_count"] = sum(1 for mode in image_modes if mode == "skip")
         return metadata
 
-    def _generate_media_id(self, url: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """根据URL生成媒体目录名，格式：{platform}_{url_hash}_{timestamp}
-
-        Args:
-            url: 原始URL
-            metadata: 元数据字典（可选），应包含platform字段
-
-        Returns:
-            媒体目录名
-        """
-        platform = 'unknown'
-        if metadata and 'platform' in metadata:
-            platform = metadata.get('platform')
-        else:
-            logger.warning(
-                f"metadata中缺少platform字段，URL: {url}，"
-                f"将使用'unknown'作为平台标识"
-            )
-        
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+    def _generate_media_id(
+        self,
+        url: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        platform = "unknown"
+        if metadata and metadata.get("platform"):
+            platform = str(metadata.get("platform"))
+        url_hash = hashlib.md5((url or "").encode()).hexdigest()[:8]
         timestamp = int(time.time())
-        return f"{platform}_{url_hash}_{timestamp}"
+        nonce = uuid.uuid4().hex[:8]
+        return f"{platform}_{url_hash}_{timestamp}_{nonce}"
 
     async def shutdown(self):
-        """关闭所有活动的下载任务
-        
-        终止所有正在进行的下载任务
-        """
+        """取消所有活动下载任务。"""
         self._shutting_down = True
-        
-        for task in self._active_tasks:
+        tasks = list(self._active_tasks)
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        
-        if self._active_tasks:
-            await asyncio.gather(*self._active_tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._active_tasks.clear()
-
