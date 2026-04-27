@@ -14,6 +14,8 @@ from .parser.platform import (
     KuaishouParser,
     WeiboParser,
     XiaohongshuParser,
+    XianyuParser,
+    ToutiaoParser,
     XiaoheiheParser,
     TwitterParser
 )
@@ -37,6 +39,8 @@ PARSER_OUTPUT_KEYS = (
     "kuaishou",
     "weibo",
     "xiaohongshu",
+    "xianyu",
+    "toutiao",
     "xiaoheihe",
     "twitter",
 )
@@ -280,6 +284,8 @@ class ConfigManager:
         self._enable_kuaishou = self._parser_enabled("kuaishou")
         self._enable_weibo = self._parser_enabled("weibo")
         self._enable_xiaohongshu = self._parser_enabled("xiaohongshu")
+        self._enable_xianyu = self._parser_enabled("xianyu")
+        self._enable_toutiao = self._parser_enabled("toutiao")
         self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
         self._enable_twitter = self._parser_enabled("twitter")
 
@@ -569,6 +575,16 @@ class ConfigManager:
             parsers.append(WeiboParser(hot_comment_count=weibo_hc))
         if self._enable_xiaohongshu:
             parsers.append(XiaohongshuParser(hot_comment_count=xhs_hc))
+        if self._enable_xianyu:
+            parsers.append(XianyuParser())
+        if self._enable_toutiao:
+            _, toutiao_rich_enabled = self.message.output_for_controller(
+                "toutiao"
+            )
+            if toutiao_rich_enabled and self.download.cache_dir_available:
+                parsers.append(ToutiaoParser())
+            else:
+                parsers.append(ToutiaoParser(article_image_refreshes=1))
         if self._enable_xiaoheihe:
             parsers.append(XiaoheiheParser(
                 use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,

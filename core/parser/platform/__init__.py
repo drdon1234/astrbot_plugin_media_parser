@@ -5,6 +5,8 @@ from .tiktok import TikTokParser
 from .kuaishou import KuaishouParser
 from .weibo import WeiboParser
 from .xiaohongshu import XiaohongshuParser
+from .xianyu import XianyuParser
+from .toutiao import ToutiaoParser
 from .xiaoheihe import XiaoheiheParser
 from .twitter import TwitterParser
 from .base import BaseVideoParser
@@ -16,6 +18,8 @@ __all__ = [
     'KuaishouParser',
     'WeiboParser',
     'XiaohongshuParser',
+    'XianyuParser',
+    'ToutiaoParser',
     'XiaoheiheParser',
     'TwitterParser',
     'BaseVideoParser'

@@ -27,6 +27,8 @@ try:
         KuaishouParser,
         WeiboParser,
         XiaohongshuParser,
+        XianyuParser,
+        ToutiaoParser,
         XiaoheiheParser,
         TwitterParser
     )
@@ -466,7 +468,7 @@ async def main(
     """
     print("=" * 80)
     print("媒体链接解析测试工具（简化版）")
-    print("支持的平台: B站、抖音、TikTok、快手、小红书、Twitter/X、微博、小黑盒")
+    print("支持的平台: B站、抖音、TikTok、快手、小红书、微博、闲鱼、今日头条、Twitter/X、小黑盒")
     print("输入 'q' 退出程序")
     print("=" * 80)
     
@@ -505,6 +507,8 @@ async def main(
         KuaishouParser(),
         WeiboParser(),
         XiaohongshuParser(),
+        XianyuParser(),
+        ToutiaoParser(),
         XiaoheiheParser(
             use_video_proxy=use_proxy,
             proxy_url=proxy_url

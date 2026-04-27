@@ -10,14 +10,16 @@
 
 当前支持的平台解析器包括：
 
-- B站：普通视频、番剧、动态/opus，支持 Cookie 增强、扫码登录运行时、热评。
-- 抖音：短链、视频和图集分享页。
-- TikTok：短链、视频和图集作品页，使用独立解析器和代理开关。
-- 快手。
-- 微博，支持热评。
-- 小红书，支持热评。
-- 小黑盒。
-- Twitter/X，优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
+- B站：支持 视频 / 图片 / 文本 / 热评；覆盖普通视频、番剧、动态 / opus，支持 Cookie 增强和扫码登录运行时。
+- 抖音：支持 视频 / 图片 / 文本；覆盖短链、视频和图集分享页。
+- TikTok：支持 视频 / 图片 / 文本；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
+- 快手：支持 视频 / 图片 / 文本；覆盖短链和作品分享页。
+- 微博：支持 视频 / 图片 / 文本 / 热评；覆盖桌面详情、移动详情和视频组件页。
+- 小红书：支持 视频 / 图片 / 文本 / 热评；覆盖短链、移动端和 PC 端笔记页。
+- 闲鱼：支持 视频 / 图片 / 文本；覆盖短链、H5 商品页和 PC 商品页。
+- 今日头条：支持 视频 / 图片 / 文本；覆盖文章、微头条、视频、短链跳转页和 `message.meta.news.jumpUrl` 小程序卡片。
+- 小黑盒：支持 视频 / 图片 / 文本；覆盖游戏详情页和 BBS/link 帖子。
+- Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 
 ### 1.2 核心模块结构
 
@@ -42,6 +44,8 @@ astrbot_plugin_media_parser/
     │   ├── runtime_manager/
     │   │   └── bilibili/auth.py     # BilibiliAuthRuntime，Cookie 校验与扫码登录
     │   └── platform/                # 各平台解析器
+    │       ├── xianyu.py            # 闲鱼商品页解析器
+    │       └── toutiao.py           # 今日头条文章/微头条/视频解析器
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range
@@ -129,7 +133,7 @@ cache/runtime_manager/bilibili/cookie.json
 - `MessageConfig`：打包、开场语、各平台输出模式、热评开关。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
-- `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter 代理开关。
+- `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter/X 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
 - `AdminConfig`：清理关键词和 debug 模式。
@@ -506,7 +510,7 @@ proxy.twitter.video
 
 - `TikTokParser`：TikTok 解析和媒体代理。
 - `XiaoheiheParser`：视频代理。
-- `TwitterParser`：解析、图片、视频代理。
+- `TwitterParser`：Twitter/X 解析、图片、视频代理。
 
 解析结果写入：
 

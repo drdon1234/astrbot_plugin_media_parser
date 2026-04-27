@@ -70,6 +70,28 @@
                 ],
                 "default": "全部发送"
             },
+            "xianyu": {
+                "description": "闲鱼",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "toutiao": {
+                "description": "今日头条",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "xiaoheihe": {
                 "description": "小黑盒",
                 "type": "string",
