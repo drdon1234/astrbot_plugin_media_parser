@@ -777,22 +777,480 @@ class BilibiliParser(BaseVideoParser):
         Raises:
             RuntimeError: API返回错误时
         """
-        api = "https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/get_dynamic_detail"
-        params = {"dynamic_id": opus_id}
         headers = self._build_api_headers(
             referer=referer or f"https://www.bilibili.com/opus/{opus_id}",
             cookie_header=cookie_header
         )
+        headers["Accept"] = "application/json, text/plain, */*"
 
+        api = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
         async with session.get(
             api,
-            params=params,
+            params={"id": opus_id},
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10)
         ) as resp:
             j = await self._check_json_response(resp)
-        await self._handle_api_response(j, "opus detail")
-        return j.get("data", {})
+        await self._handle_api_response(j, "opus detail(polymer)")
+        data = j.get("data", {})
+        if isinstance(data, dict) and data.get("item"):
+            return data
+        raise RuntimeError(
+            f"opus detail(polymer) error: missing item for dynamic {opus_id}"
+        )
+
+    @staticmethod
+    def _normalize_bilibili_url(url: Any) -> str:
+        """补齐 B 站接口中常见的协议相对 URL。"""
+        text = str(url or "").strip()
+        if text.startswith("//"):
+            return f"https:{text}"
+        return text
+
+    @staticmethod
+    def _format_timestamp(ts: Any) -> str:
+        """将 B 站秒级时间戳格式化为日期文本。"""
+        if ts is None or ts == "":
+            return ""
+        try:
+            ts_int = int(ts)
+            return datetime.fromtimestamp(ts_int).strftime("%Y-%m-%d")
+        except (ValueError, TypeError, OSError):
+            return str(ts)
+
+    @staticmethod
+    def _extract_polymer_modules(item: Dict[str, Any]) -> Dict[str, Any]:
+        """兼容 polymer detail 与 opus/detail 两种 modules 形态。"""
+        modules = item.get("modules") if isinstance(item, dict) else {}
+        if isinstance(modules, dict):
+            return modules
+        if not isinstance(modules, list):
+            return {}
+
+        merged: Dict[str, Any] = {}
+        for module in modules:
+            if not isinstance(module, dict):
+                continue
+            for key, value in module.items():
+                if key.startswith("module_"):
+                    merged[key] = value
+        return merged
+
+    @staticmethod
+    def _extract_polymer_desc_text(desc_obj: Any) -> str:
+        """从 polymer 动态富文本描述中提取纯文本。"""
+        if not isinstance(desc_obj, dict):
+            return ""
+        text = desc_obj.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+        nodes = desc_obj.get("rich_text_nodes") or []
+        parts: List[str] = []
+        if isinstance(nodes, list):
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                node_text = node.get("text") or node.get("orig_text") or ""
+                if node_text:
+                    parts.append(str(node_text))
+        return "".join(parts).strip()
+
+    def _extract_polymer_author(
+        self,
+        item: Dict[str, Any],
+        modules: Dict[str, Any]
+    ) -> str:
+        """从 polymer 动态结构中提取作者显示文本。"""
+        author_obj = modules.get("module_author") or {}
+        if not isinstance(author_obj, dict):
+            author_obj = {}
+        basic = item.get("basic") or {}
+        if not isinstance(basic, dict):
+            basic = {}
+
+        name = str(author_obj.get("name", "") or "").strip()
+        mid = author_obj.get("mid") or basic.get("uid")
+        if name and mid:
+            return f"{name}(uid:{mid})"
+        if name:
+            return name
+        if mid:
+            return f"(uid:{mid})"
+        return ""
+
+    def _extract_polymer_timestamp(
+        self,
+        modules: Dict[str, Any]
+    ) -> str:
+        """从 polymer 动态结构中提取发布时间。"""
+        author_obj = modules.get("module_author") or {}
+        if not isinstance(author_obj, dict):
+            return ""
+        ts = author_obj.get("pub_ts")
+        if ts:
+            return self._format_timestamp(ts)
+        pub_time = str(author_obj.get("pub_time", "") or "").strip()
+        return pub_time
+
+    @staticmethod
+    def _extract_polymer_comment_subject(
+        data: Dict[str, Any]
+    ) -> Optional[Tuple[int, int]]:
+        """从 polymer 详情中提取评论 oid/type。"""
+        item = data.get("item") if isinstance(data, dict) else {}
+        if not isinstance(item, dict):
+            return None
+        basic = item.get("basic") or {}
+        if not isinstance(basic, dict):
+            return None
+        oid_text = str(
+            basic.get("comment_id_str") or basic.get("rid_str") or ""
+        ).strip()
+        comment_type = basic.get("comment_type")
+        if not oid_text.isdigit() or not isinstance(comment_type, int):
+            return None
+        return int(oid_text), int(comment_type)
+
+    def _extract_polymer_video_url(
+        self,
+        major: Dict[str, Any]
+    ) -> Optional[str]:
+        """从 polymer major 中提取内嵌视频链接。"""
+        if not isinstance(major, dict):
+            return None
+        for key in ("archive", "ugc", "video"):
+            video_obj = major.get(key)
+            if not isinstance(video_obj, dict):
+                continue
+            video_url = self._extract_video_url_from_data(video_obj)
+            if video_url:
+                return video_url
+
+            jump_url = self._normalize_bilibili_url(
+                video_obj.get("jump_url") or video_obj.get("url")
+            )
+            if jump_url and self.detect_target(jump_url)[0]:
+                return jump_url
+        return None
+
+    def _extract_polymer_images(
+        self,
+        major: Dict[str, Any]
+    ) -> List[List[str]]:
+        """从 polymer major 中提取图片列表。"""
+        image_urls: List[List[str]] = []
+
+        def add_image(raw_url: Any) -> None:
+            pic_url = self._normalize_bilibili_url(raw_url)
+            if pic_url:
+                image_urls.append([pic_url])
+
+        if not isinstance(major, dict):
+            return image_urls
+
+        draw = major.get("draw")
+        if isinstance(draw, dict):
+            for item in draw.get("items") or []:
+                if isinstance(item, dict):
+                    add_image(item.get("src") or item.get("url"))
+                elif isinstance(item, str):
+                    add_image(item)
+
+        opus = major.get("opus")
+        if isinstance(opus, dict):
+            for pic in (
+                opus.get("pics") or
+                opus.get("pictures") or
+                opus.get("items") or
+                []
+            ):
+                if isinstance(pic, dict):
+                    add_image(
+                        pic.get("url") or
+                        pic.get("src") or
+                        pic.get("img_src")
+                    )
+                elif isinstance(pic, str):
+                    add_image(pic)
+
+        article = major.get("article")
+        if isinstance(article, dict):
+            covers = article.get("covers") or []
+            if isinstance(covers, list):
+                for cover in covers:
+                    add_image(cover)
+            else:
+                add_image(covers)
+
+        common = major.get("common")
+        if isinstance(common, dict):
+            add_image(common.get("cover"))
+
+        return image_urls
+
+    def _extract_polymer_title_desc(
+        self,
+        item: Dict[str, Any],
+        modules: Dict[str, Any],
+        opus_id: str
+    ) -> Tuple[str, str]:
+        """从 polymer 动态中提取标题和正文。"""
+        dynamic = modules.get("module_dynamic") or {}
+        if not isinstance(dynamic, dict):
+            dynamic = {}
+        major = dynamic.get("major") or {}
+        if not isinstance(major, dict):
+            major = {}
+
+        desc = self._extract_polymer_desc_text(dynamic.get("desc"))
+        title = desc[:100] if desc else ""
+
+        title_module = modules.get("module_title") or {}
+        if not title and isinstance(title_module, dict):
+            title = str(title_module.get("text", "") or "").strip()
+
+        for key in ("article", "archive", "common", "opus"):
+            major_obj = major.get(key)
+            if not isinstance(major_obj, dict):
+                continue
+            major_title = str(major_obj.get("title", "") or "").strip()
+            major_desc = str(
+                major_obj.get("desc") or
+                major_obj.get("summary") or
+                major_obj.get("intro") or
+                ""
+            ).strip()
+            if not title and major_title:
+                title = major_title
+            if not desc and major_desc:
+                desc = major_desc
+
+        basic = item.get("basic") or {}
+        if not title and isinstance(basic, dict):
+            basic_title = str(basic.get("title", "") or "").strip()
+            if basic_title:
+                title = basic_title.replace(" - 哔哩哔哩", "")
+
+        if not title:
+            title = f"动态 #{opus_id}"
+        return title, desc
+
+    def _extract_polymer_origin_item(
+        self,
+        item: Dict[str, Any],
+        modules: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """提取 polymer 转发动态中的原始动态。"""
+        for key in ("orig", "origin", "origin_item"):
+            origin = item.get(key) if isinstance(item, dict) else None
+            if isinstance(origin, dict):
+                return origin
+
+        dynamic = modules.get("module_dynamic") or {}
+        if isinstance(dynamic, dict):
+            for key in ("orig", "origin", "origin_item"):
+                origin = dynamic.get(key)
+                if isinstance(origin, dict):
+                    return origin
+        return None
+
+    async def _parse_polymer_opus(
+        self,
+        data: Dict[str, Any],
+        opus_id: str,
+        url: str,
+        original_url: str,
+        session: aiohttp.ClientSession,
+        cookie_header: str = "",
+        enable_hot_comments: bool = True,
+        comment_oid: Optional[int] = None,
+        comment_type: int = 17
+    ) -> Dict[str, Any]:
+        """解析新版 polymer 动态详情结构。"""
+        item = data.get("item") if isinstance(data, dict) else {}
+        if not isinstance(item, dict) or not item:
+            raise RuntimeError(f"API返回数据为空: {url}")
+
+        modules = self._extract_polymer_modules(item)
+        dynamic = modules.get("module_dynamic") or {}
+        if not isinstance(dynamic, dict):
+            dynamic = {}
+        major = dynamic.get("major") or {}
+        if not isinstance(major, dict):
+            major = {}
+
+        title, desc = self._extract_polymer_title_desc(item, modules, opus_id)
+        author = self._extract_polymer_author(item, modules)
+        timestamp = self._extract_polymer_timestamp(modules)
+
+        origin_item = self._extract_polymer_origin_item(item, modules)
+        origin_modules: Dict[str, Any] = {}
+        origin_major: Dict[str, Any] = {}
+        origin_title = ""
+        origin_desc = ""
+        origin_author = ""
+        origin_timestamp = ""
+        if isinstance(origin_item, dict):
+            origin_modules = self._extract_polymer_modules(origin_item)
+            origin_dynamic = origin_modules.get("module_dynamic") or {}
+            if isinstance(origin_dynamic, dict):
+                origin_major = origin_dynamic.get("major") or {}
+                if not isinstance(origin_major, dict):
+                    origin_major = {}
+            origin_title, origin_desc = self._extract_polymer_title_desc(
+                origin_item,
+                origin_modules,
+                str(origin_item.get("id_str") or opus_id)
+            )
+            origin_author = self._extract_polymer_author(
+                origin_item,
+                origin_modules
+            )
+            origin_timestamp = self._extract_polymer_timestamp(origin_modules)
+
+        video_url = self._extract_polymer_video_url(major)
+        if not video_url and origin_major:
+            video_url = self._extract_polymer_video_url(origin_major)
+
+        display_url = (
+            original_url
+            if B23_HOST in urlparse(original_url).netloc.lower()
+            else url
+        )
+        referer = url
+        origin = "https://www.bilibili.com"
+        image_headers, video_headers = self._build_media_headers(
+            referer=referer,
+            origin=origin,
+            cookie_header=cookie_header
+        )
+
+        if video_url:
+            video_result = await self.parse_bilibili_minimal(
+                video_url,
+                session=session,
+                cookie_header_override=cookie_header,
+                enable_hot_comments=False
+            )
+            if not video_result:
+                raise RuntimeError(f"视频解析器返回空结果: {video_url}")
+
+            final_title = title
+            if (
+                not final_title or
+                final_title == f"动态 #{opus_id}" or
+                final_title.endswith("的动态")
+            ):
+                final_title = video_result.get("title", "") or origin_title
+            elif origin_item:
+                video_title = video_result.get("title", "") or origin_title
+                if video_title.startswith("动态 #"):
+                    video_title = ""
+                if video_title:
+                    final_title = f"{final_title} ({video_title})"
+
+            final_author = author
+            video_author = video_result.get("author", "") or origin_author
+            if origin_item and author and video_author:
+                final_author = f"{author} ({video_author})"
+            elif not final_author and video_author:
+                final_author = video_author
+
+            final_desc = desc
+            video_desc = video_result.get("desc", "") or origin_desc
+            if origin_item and final_desc and video_desc:
+                final_desc = f"{final_desc} ({video_desc})"
+            elif not final_desc and video_desc:
+                final_desc = video_desc
+
+            final_timestamp = timestamp
+            if origin_item and timestamp and origin_timestamp:
+                final_timestamp = f"{timestamp} ({origin_timestamp})"
+            elif not final_timestamp and origin_timestamp:
+                final_timestamp = origin_timestamp
+
+            result = {
+                "url": display_url,
+                "title": final_title or f"动态 #{opus_id}",
+                "author": final_author,
+                "desc": final_desc,
+                "timestamp": final_timestamp,
+                "video_urls": self._add_range_prefix_to_video_urls(
+                    video_result.get("video_urls", [])
+                ),
+                "image_urls": video_result.get("image_urls", []),
+                "image_headers": image_headers,
+                "video_headers": video_headers,
+                "access_status": video_result.get("access_status", ""),
+                "restriction_type": video_result.get("restriction_type", ""),
+                "restriction_label": video_result.get("restriction_label", ""),
+                "can_access_full_video": video_result.get("can_access_full_video"),
+                "is_preview_only": video_result.get("is_preview_only", False),
+                "access_message": video_result.get("access_message", ""),
+                "timelength_ms": video_result.get("timelength_ms"),
+                "available_length_ms": video_result.get("available_length_ms"),
+            }
+            if enable_hot_comments:
+                await self._attach_hot_comments_to_result(
+                    session=session,
+                    result=result,
+                    oid=comment_oid,
+                    comment_type=comment_type,
+                    referer=url,
+                    cookie_header=cookie_header
+                )
+            return result
+
+        image_urls = self._extract_polymer_images(major)
+        if not image_urls and origin_major:
+            image_urls = self._extract_polymer_images(origin_major)
+            if origin_item:
+                clean_origin_title = (
+                    ""
+                    if origin_title.startswith("动态 #")
+                    else origin_title
+                )
+                if (
+                    not title or
+                    title == f"动态 #{opus_id}" or
+                    title.endswith("的动态")
+                ):
+                    title = clean_origin_title or title
+                elif clean_origin_title and clean_origin_title != title:
+                    title = f"{title} ({clean_origin_title})"
+                if not desc and origin_desc:
+                    desc = origin_desc
+                if author and origin_author:
+                    author = f"{author} ({origin_author})"
+                elif origin_author:
+                    author = origin_author
+                if timestamp and origin_timestamp:
+                    timestamp = f"{timestamp} ({origin_timestamp})"
+                elif origin_timestamp:
+                    timestamp = origin_timestamp
+
+        result = {
+            "url": display_url,
+            "title": title,
+            "author": author,
+            "desc": desc,
+            "timestamp": timestamp,
+            "video_urls": [],
+            "image_urls": image_urls,
+            "image_headers": image_headers,
+            "video_headers": video_headers,
+        }
+        if enable_hot_comments:
+            await self._attach_hot_comments_to_result(
+                session=session,
+                result=result,
+                oid=comment_oid,
+                comment_type=comment_type,
+                referer=url,
+                cookie_header=cookie_header
+            )
+        return result
 
     def _extract_video_url_from_data(self, data: dict) -> Optional[str]:
         """从数据中提取视频链接
@@ -1724,6 +2182,22 @@ class BilibiliParser(BaseVideoParser):
             referer=url,
             cookie_header=cookie_header
         )
+
+        if isinstance(data, dict) and data.get("item"):
+            polymer_subject = self._extract_polymer_comment_subject(data)
+            if polymer_subject:
+                comment_oid, comment_type = polymer_subject
+            return await self._parse_polymer_opus(
+                data=data,
+                opus_id=opus_id,
+                url=url,
+                original_url=original_url,
+                session=session,
+                cookie_header=cookie_header,
+                enable_hot_comments=enable_hot_comments,
+                comment_oid=comment_oid,
+                comment_type=comment_type
+            )
 
         card_data = data.get("card", {})
         if not card_data:
