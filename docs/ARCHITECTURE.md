@@ -61,6 +61,10 @@ astrbot_plugin_media_parser/
     ├── message_adapter/
     │   ├── node_builder.py          # Plain/Image/Video 节点构建
     │   └── sender.py                # 打包/非打包发送
+    ├── translation/
+    │   ├── manager.py               # 元数据翻译与严格 JSON 结果回填
+    │   ├── llm_client.py            # 自定义 OpenAI 兼容 / Ollama 调用
+    │   └── provider_defs.py         # 翻译相关厂商标签与默认值
     ├── storage/
     │   ├── __init__.py              # 导出清理、标记、文件 Token 注册能力
     │   ├── file_cleaner.py          # 文件与空父目录清理
@@ -84,6 +88,16 @@ astrbot_plugin_media_parser/
 - `仅富媒体`：解析并发送图片/视频，不构建文本节点；热评条数会对该平台归零。
 - 所有平台均为 `关闭` 时：`main.py::auto_parse()` 直接跳过，不进入解析。
 - 开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。
+
+#### 消息集合打包
+
+`message.auto_pack` 使用字符串模式控制最终发送策略：
+
+- `不打包`：始终逐链接独立发送。
+- `全部打包`：普通媒体使用 `Nodes` 消息集合发送，大媒体仍按 `download.large_video_threshold_mb` 单独发送。
+- `按条件打包`：节点构建完成后统计最终可发送的图片节点、视频节点和总节点数，任一数量达到 `message.pack_thresholds` 对应阈值时才使用消息集合。
+
+`message.pack_thresholds.image_count`、`video_count`、`node_count` 均为非负整数。阈值为 `0` 时表示不按该项触发打包。
 
 #### 缓存目录
 
@@ -130,15 +144,16 @@ cache/runtime_manager/bilibili/cookie.json
 配置被归一为 dataclass 分组：
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
-- `MessageConfig`：打包、开场语、各平台输出模式、热评开关。
+- `MessageConfig`：打包模式、条件打包阈值、开场语、各平台输出模式、热评开关。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter/X 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
+- `TranslationConfig`：翻译开关、翻译范围、目标语言、是否保留原文、AstrBot 内置或自定义大模型配置。
 - `AdminConfig`：清理关键词和 debug 模式。
 
-`ConfigManager` 会将 `parsers` 的输出模式归一到 `MessageConfig.parser_outputs`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。
+`ConfigManager` 会将 `parsers` 的输出模式归一到 `MessageConfig.parser_outputs`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。`message.auto_pack` 会被归一为 `不打包`、`全部打包`、`按条件打包` 三种模式；条件阈值会按非负整数兜底。
 
 权限优先级为：管理员直接放行，其次个人白名单、个人黑名单、群组白名单、群组黑名单；均未命中时，白名单开启则拒绝，白名单关闭则放行。管理员 ID 会自动加入用户白名单。
 
@@ -243,14 +258,17 @@ video_count .. video_count + image_count   图片
 `node_builder.py` 负责将 metadata 转成节点：
 
 - 文本节点展示标题、作者、简介、发布时间、访问状态、热评、视频大小、跳过原因、解析错误、原始链接。
+- 若启用文本翻译且保留原文，文本节点会按翻译范围额外展示标题和/或简介译文；若不保留原文，则消费已替换后的文本字段。热评不进入翻译流程。
 - 富媒体节点只消费 `video_modes/image_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的 URL，`skip` 不构建节点。
 - 内部先尝试构建富媒体节点，再构建文本节点，这样节点构建失败时可把原因回填到 metadata，文本节点可展示。
 - `build_all_nodes()` 返回 `BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)`。
+- `summarize_node_counts()` 统计最终可发送的图片、视频和总节点数量，供按条件打包判断使用。
 
-`sender.py` 负责发送：
+`sender.py` 负责发送，是否进入消息集合由 `main.py` 在节点构建后决定：
 
-- `auto_pack=true`：使用 `Nodes` 打包发送普通媒体；大媒体单独发送。
-- `auto_pack=false`：逐链接独立发送。
+- `message.auto_pack=不打包`：逐链接独立发送。
+- `message.auto_pack=全部打包`：使用 `Nodes` 打包发送普通媒体；大媒体单独发送。
+- `message.auto_pack=按条件打包`：节点构建完成后统计图片、视频和总节点数量，任一数量达到 `message.pack_thresholds` 中配置的阈值时打包发送。
 - 纯图片图集会把文本和图片分组发送；混合内容按节点逐个发送。
 - 大媒体判定来自 `download.large_video_threshold_mb` 和当前 metadata 的最大视频大小。
 
@@ -307,7 +325,9 @@ media_relay.enable 且该 metadata 启用富媒体 -> register_files_with_token_
   ↓
 build_all_nodes()
   ↓
-按 auto_pack 调用 MessageSender
+summarize_node_counts()
+  ↓
+按 message.auto_pack 与条件阈值调用 MessageSender
   ↓
 finally 清理本次 temp_files + video_files
   ├─ relay 开启 -> 延迟 media_relay.ttl 秒
@@ -384,9 +404,13 @@ build_all_nodes()
   ├─ 判定大媒体
   └─ 分类 temp_files/video_files
   ↓
+summarize_node_counts()
+  ↓
+MessageConfig.should_pack()
+  ↓
 MessageSender
-  ├─ auto_pack=true  -> send_packed_results()
-  └─ auto_pack=false -> send_unpacked_results()
+  ├─ 需要打包 -> send_packed_results()
+  └─ 不打包   -> send_unpacked_results()
 ```
 
 ### 3.5 清理与终止链

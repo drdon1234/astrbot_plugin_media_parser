@@ -148,9 +148,39 @@
         "items": {
             "auto_pack": {
                 "description": "打包为消息集合",
-                "type": "bool",
-                "hint": "Napcat 存在兼容问题，不建议启用",
-                "default": false
+                "type": "string",
+                "options": [
+                    "不打包",
+                    "全部打包",
+                    "按条件打包"
+                ],
+                "hint": "Napcat 存在兼容问题，请按需启用",
+                "default": "不打包"
+            },
+            "pack_thresholds": {
+                "description": "按条件打包阈值",
+                "type": "object",
+                "hint": "仅在选择“按条件打包”时生效；0 = 不按该项触发",
+                "items": {
+                    "image_count": {
+                        "description": "图片总数达到多少时打包",
+                        "type": "int",
+                        "hint": "0 = 不按图片数触发",
+                        "default": 3
+                    },
+                    "video_count": {
+                        "description": "视频总数达到多少时打包",
+                        "type": "int",
+                        "hint": "0 = 不按视频数触发",
+                        "default": 2
+                    },
+                    "node_count": {
+                        "description": "节点总数达到多少时打包",
+                        "type": "int",
+                        "hint": "包含文本、图片和视频节点；0 = 不按节点数触发",
+                        "default": 5
+                    }
+                }
             },
             "opening": {
                 "description": "开场语",
@@ -195,6 +225,150 @@
                         "default": true
                     }
                 }
+            }
+        }
+    },
+    "translation": {
+        "description": "文本翻译",
+        "type": "object",
+        "hint": "对正文和标题进行大模型翻译；默认关闭，翻译失败不会影响媒体解析",
+        "items": {
+            "enable": {
+                "description": "启用翻译",
+                "type": "bool",
+                "default": false
+            },
+            "content_scope": {
+                "description": "翻译范围",
+                "type": "string",
+                "options": [
+                    "仅正文",
+                    "正文和标题"
+                ],
+                "hint": "仅正文只翻译简介；正文和标题会同时翻译标题和简介；热评不翻译",
+                "default": "正文和标题"
+            },
+            "target_language": {
+                "description": "目标语言",
+                "type": "string",
+                "options": [
+                    "简体中文",
+                    "繁体中文",
+                    "English",
+                    "日本語",
+                    "한국어",
+                    "Español",
+                    "Français",
+                    "Deutsch",
+                    "Русский",
+                    "Português"
+                ],
+                "default": "简体中文"
+            },
+            "keep_original": {
+                "description": "保留原文",
+                "type": "bool",
+                "hint": "开启时输出原文+译文；关闭时用译文替换正文/标题文本",
+                "default": true
+            },
+            "llm": {
+                "description": "大模型接口",
+                "type": "object",
+                "items": {
+                    "provider_source": {
+                        "description": "大模型提供商",
+                        "type": "string",
+                        "options": [
+                            "AstrBot 内置提供商",
+                            "插件自定义提供商"
+                        ],
+                        "hint": "选择使用 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口",
+                        "default": "AstrBot 内置提供商"
+                    },
+                    "astrbot_provider": {
+                        "description": "AstrBot 内置提供商",
+                        "type": "object",
+                        "hint": "当“大模型提供商”选择 AstrBot 内置提供商时生效",
+                        "items": {
+                            "provider_id": {
+                                "description": "选择 AstrBot AI",
+                                "type": "string",
+                                "hint": "点击按钮选择 AstrBot 中已配置的 LLM；留空时尝试使用当前会话正在使用的 LLM",
+                                "_special": "select_provider",
+                                "default": ""
+                            }
+                        }
+                    },
+                    "custom_provider": {
+                        "description": "自定义提供商",
+                        "type": "object",
+                        "hint": "当“大模型提供商”选择插件自定义提供商时生效",
+                        "items": {
+                            "provider": {
+                                "description": "厂商/接口类型",
+                                "type": "string",
+                                "options": [
+                                    "自定义 OpenAI 兼容",
+                                    "OpenAI",
+                                    "DeepSeek",
+                                    "Moonshot / Kimi",
+                                    "阿里云百炼 / 通义千问",
+                                    "智谱 AI / GLM",
+                                    "火山引擎方舟 / 豆包",
+                                    "OpenRouter",
+                                    "SiliconFlow",
+                                    "Ollama"
+                                ],
+                                "default": "自定义 OpenAI 兼容"
+                            },
+                            "base_url": {
+                                "description": "Base URL",
+                                "type": "string",
+                                "hint": "预设厂商可留空；自定义 OpenAI 兼容、中转或私有部署请填写对应接口地址",
+                                "default": ""
+                            },
+                            "api_key": {
+                                "description": "API Key",
+                                "type": "string",
+                                "default": ""
+                            },
+                            "model": {
+                                "description": "模型",
+                                "type": "string",
+                                "default": "gpt-5.5"
+                            }
+                        }
+                    }
+                }
+            },
+            "temperature": {
+                "description": "翻译随机性",
+                "type": "float",
+                "hint": "建议 0；越低越稳定、越不容易发散",
+                "default": 0.0
+            },
+            "max_completion_tokens": {
+                "description": "最大输出长度",
+                "type": "int",
+                "hint": "译文 JSON 的最大输出 token，文本较多时可调高",
+                "default": 1200
+            },
+            "request_timeout_seconds": {
+                "description": "请求超时(秒)",
+                "type": "int",
+                "default": 60
+            },
+            "max_text_chars_per_item": {
+                "description": "单段文本上限",
+                "type": "int",
+                "hint": "超过上限的标题/简介会跳过翻译，避免生成不完整译文",
+                "default": 2000
+            },
+            "max_items_per_request": {
+                "description": "单次请求条数",
+                "type": "int",
+                "hint": "同一次 LLM 请求中最多翻译几条文本",
+                "default": 8
             }
         }
     },

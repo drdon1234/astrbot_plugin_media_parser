@@ -19,7 +19,11 @@ from .core.storage import (
 )
 from .core.constants import Config
 from .core.message_adapter.sender import MessageSender
-from .core.message_adapter.node_builder import build_all_nodes
+from .core.message_adapter.node_builder import (
+    build_all_nodes,
+    summarize_node_counts,
+)
+from .core.translation import MetadataTranslator
 from .core.config_manager import ConfigManager
 from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
 
@@ -28,7 +32,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "6.1.2"
+    "6.2.0"
 )
 class VideoParserPlugin(Star):
 
@@ -42,6 +46,10 @@ class VideoParserPlugin(Star):
         parsers = cfg.create_parsers()
         self.parser_manager = ParserManager(parsers)
         self.bilibili_parser = cfg.bilibili_parser
+        self.metadata_translator = MetadataTranslator(
+            cfg.translation,
+            self.context,
+        )
         self.bilibili_auth_runtime = (
             self.bilibili_parser.get_auth_runtime()
             if self.bilibili_parser else
@@ -202,6 +210,12 @@ class VideoParserPlugin(Star):
             )
             metadata["_enable_text_metadata"] = text_enabled
             metadata["_enable_rich_media"] = rich_enabled
+
+    @staticmethod
+    def _event_context(event: AstrMessageEvent) -> Dict[str, Any]:
+        """提取 AstrBot 会话上下文，供内置大模型路由使用。"""
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        return {"_astrbot_unified_msg_origin": umo} if umo else {}
 
     def _metadata_has_output_candidate(
         self,
@@ -364,6 +378,11 @@ class VideoParserPlugin(Star):
                     )
                 return
 
+            await self.metadata_translator.translate_metadata_list(
+                metadata_list,
+                event_context=self._event_context(event),
+            )
+
             if cfg.admin.debug_mode:
                 self.logger.debug(
                     f"解析获得 {len(metadata_list)} 条元数据"
@@ -497,7 +516,7 @@ class VideoParserPlugin(Star):
 
             build_result = build_all_nodes(
                 processed_metadata_list,
-                cfg.message.auto_pack,
+                cfg.message.pack_mode,
                 cfg.download.large_video_threshold_mb,
                 cfg.download.max_video_size_mb,
                 True,
@@ -528,13 +547,20 @@ class VideoParserPlugin(Star):
                 cleanup_files(build_result.temp_files + build_result.video_files)
                 return
 
+            node_counts = summarize_node_counts(build_result.all_link_nodes)
+            should_pack = cfg.message.should_pack(**node_counts)
+
             if cfg.admin.debug_mode:
                 self.logger.debug(
-                    f"开始发送结果，打包模式: {cfg.message.auto_pack}"
+                    f"开始发送结果，打包模式: {cfg.message.pack_mode}, "
+                    f"实际打包: {should_pack}, "
+                    f"图片节点: {node_counts['image_count']}, "
+                    f"视频节点: {node_counts['video_count']}, "
+                    f"总节点: {node_counts['node_count']}"
                 )
 
             try:
-                if cfg.message.auto_pack:
+                if should_pack:
                     await self.message_sender.send_packed_results(
                         event,
                         build_result.link_metadata,

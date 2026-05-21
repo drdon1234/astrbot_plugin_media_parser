@@ -19,6 +19,10 @@ from .parser.platform import (
     XiaoheiheParser,
     TwitterParser
 )
+from .translation.provider_defs import (
+    LLM_PROVIDER_DEFAULTS,
+    LLM_PROVIDER_OPTIONS,
+)
 
 
 BILIBILI_QUALITY_MAP = {
@@ -55,6 +59,31 @@ OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_ALL: (True, True),
     OUTPUT_MODE_TEXT_ONLY: (True, False),
     OUTPUT_MODE_RICH_ONLY: (False, True),
+}
+
+PACK_MODE_NONE = "不打包"
+PACK_MODE_ALL = "全部打包"
+PACK_MODE_CONDITIONAL = "按条件打包"
+PACK_MODES = {
+    PACK_MODE_NONE,
+    PACK_MODE_ALL,
+    PACK_MODE_CONDITIONAL,
+}
+TRANSLATION_TARGET_LANGUAGES = {
+    "简体中文",
+    "繁体中文",
+    "English",
+    "日本語",
+    "한국어",
+    "Español",
+    "Français",
+    "Deutsch",
+    "Русский",
+    "Português",
+}
+TRANSLATION_CONTENT_SCOPES = {
+    "仅正文",
+    "正文和标题",
 }
 
 
@@ -116,7 +145,10 @@ class TriggerConfig:
 
 @dataclass
 class MessageConfig:
-    auto_pack: bool = False
+    pack_mode: str = PACK_MODE_NONE
+    pack_image_threshold: int = 3
+    pack_video_threshold: int = 2
+    pack_node_threshold: int = 5
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
     hot_comment_count: int = 0
@@ -130,6 +162,28 @@ class MessageConfig:
         return any(
             any(OUTPUT_MODE_FLAGS.get(mode, (False, False)))
             for mode in self.parser_outputs.values()
+        )
+
+    def should_pack(
+        self,
+        image_count: int,
+        video_count: int,
+        node_count: int
+    ) -> bool:
+        """根据打包模式和实际节点数量判断是否发送消息集合。"""
+        if self.pack_mode == PACK_MODE_ALL:
+            return True
+        if self.pack_mode != PACK_MODE_CONDITIONAL:
+            return False
+
+        thresholds = (
+            (self.pack_image_threshold, image_count),
+            (self.pack_video_threshold, video_count),
+            (self.pack_node_threshold, node_count),
+        )
+        return any(
+            threshold > 0 and count >= threshold
+            for threshold, count in thresholds
         )
 
     def _flags_for_mode(self, mode: str) -> Tuple[bool, bool]:
@@ -238,6 +292,25 @@ class MediaRelayConfig:
 
 
 @dataclass
+class TranslationConfig:
+    enabled: bool = False
+    content_scope: str = "正文和标题"
+    target_language: str = "简体中文"
+    keep_original: bool = True
+    llm_provider_source: str = "astrbot"
+    astrbot_provider_id: str = ""
+    llm_provider: str = "openai_compatible"
+    base_url: str = ""
+    api_key: str = ""
+    model: str = "gpt-5.5"
+    temperature: float = 0.0
+    max_completion_tokens: int = 1200
+    request_timeout_seconds: int = 60
+    max_text_chars_per_item: int = 2000
+    max_items_per_request: int = 8
+
+
+@dataclass
 class AdminConfig:
     clean_cache_keyword: str = "清理媒体"
     debug_mode: bool = False
@@ -291,8 +364,15 @@ class ConfigManager:
 
         # --- message ---
         message_raw = config.get("message", {})
+        if not isinstance(message_raw, dict):
+            message_raw = {}
         opening = message_raw.get("opening", {})
         hot_comments = message_raw.get("hot_comments", {})
+        pack_thresholds = message_raw.get("pack_thresholds", {})
+        if not isinstance(opening, dict):
+            opening = {}
+        if not isinstance(pack_thresholds, dict):
+            pack_thresholds = {}
         if not isinstance(hot_comments, dict):
             hot_comments = {}
 
@@ -310,7 +390,18 @@ class ConfigManager:
             hot_count = 0
 
         self.message = MessageConfig(
-            auto_pack=message_raw.get("auto_pack", False),
+            pack_mode=self._parse_pack_mode(
+                message_raw.get("auto_pack", PACK_MODE_NONE)
+            ),
+            pack_image_threshold=self._parse_non_negative_int(
+                pack_thresholds.get("image_count", 3), 3
+            ),
+            pack_video_threshold=self._parse_non_negative_int(
+                pack_thresholds.get("video_count", 2), 2
+            ),
+            pack_node_threshold=self._parse_non_negative_int(
+                pack_thresholds.get("node_count", 5), 5
+            ),
             opening_enabled=opening.get("enable", True),
             opening_content=opening.get(
                 "content", "流媒体解析bot为您服务 ٩( 'ω' )و"
@@ -399,6 +490,90 @@ class ConfigManager:
             file_token_ttl=max(
                 30,
                 self._parse_positive_int(relay_raw.get("ttl", 300), 300)
+            ),
+        )
+
+        # --- translation ---
+        translation_raw = config.get("translation", {})
+        if not isinstance(translation_raw, dict):
+            translation_raw = {}
+        translation_llm_raw = translation_raw.get("llm", {})
+        if not isinstance(translation_llm_raw, dict):
+            translation_llm_raw = {}
+        astrbot_provider_raw = translation_llm_raw.get("astrbot_provider", {})
+        if not isinstance(astrbot_provider_raw, dict):
+            astrbot_provider_raw = {}
+        custom_provider_raw = translation_llm_raw.get("custom_provider", {})
+        if not isinstance(custom_provider_raw, dict):
+            custom_provider_raw = {}
+
+        llm_provider_source = self._normalize_llm_provider_source(
+            translation_llm_raw.get(
+                "provider_source",
+                "AstrBot 内置提供商",
+            )
+        )
+        llm_provider = self._normalize_llm_provider(
+            custom_provider_raw.get("provider", "自定义 OpenAI 兼容")
+        )
+        provider_defaults = LLM_PROVIDER_DEFAULTS.get(
+            llm_provider,
+            LLM_PROVIDER_DEFAULTS["openai_compatible"],
+        )
+        base_url = str(
+            custom_provider_raw.get("base_url", "") or ""
+        ).strip().rstrip("/")
+        if not base_url:
+            base_url = str(provider_defaults.get("base_url", "") or "").strip().rstrip("/")
+
+        self.translation = TranslationConfig(
+            enabled=bool(translation_raw.get("enable", False)),
+            content_scope=self._parse_translation_content_scope(
+                translation_raw.get("content_scope", "正文和标题")
+            ),
+            target_language=self._parse_translation_target_language(
+                translation_raw.get("target_language", "简体中文")
+            ),
+            keep_original=bool(translation_raw.get("keep_original", True)),
+            llm_provider_source=llm_provider_source,
+            astrbot_provider_id=str(
+                astrbot_provider_raw.get("provider_id", "") or ""
+            ).strip(),
+            llm_provider=llm_provider,
+            base_url=base_url,
+            api_key=str(custom_provider_raw.get("api_key", "") or "").strip(),
+            model=str(
+                custom_provider_raw.get("model", "gpt-5.5") or "gpt-5.5"
+            ).strip(),
+            temperature=self._parse_bounded_float(
+                translation_raw.get("temperature", 0.0),
+                0.0,
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            max_completion_tokens=self._parse_bounded_int(
+                translation_raw.get("max_completion_tokens", 1200),
+                1200,
+                minimum=256,
+                maximum=8000,
+            ),
+            request_timeout_seconds=self._parse_bounded_int(
+                translation_raw.get("request_timeout_seconds", 60),
+                60,
+                minimum=10,
+                maximum=600,
+            ),
+            max_text_chars_per_item=self._parse_bounded_int(
+                translation_raw.get("max_text_chars_per_item", 2000),
+                2000,
+                minimum=50,
+                maximum=10000,
+            ),
+            max_items_per_request=self._parse_bounded_int(
+                translation_raw.get("max_items_per_request", 8),
+                8,
+                minimum=1,
+                maximum=32,
             ),
         )
 
@@ -624,6 +799,27 @@ class ConfigManager:
         return normalized
 
     @staticmethod
+    def _parse_pack_mode(value) -> str:
+        mode = str(value or "").strip()
+        if mode in PACK_MODES:
+            return mode
+        return PACK_MODE_NONE
+
+    @staticmethod
+    def _parse_translation_target_language(value) -> str:
+        language = str(value or "").strip()
+        if language in TRANSLATION_TARGET_LANGUAGES:
+            return language
+        return "简体中文"
+
+    @staticmethod
+    def _parse_translation_content_scope(value) -> str:
+        scope = str(value or "").strip()
+        if scope in TRANSLATION_CONTENT_SCOPES:
+            return scope
+        return "正文和标题"
+
+    @staticmethod
     def _parse_positive_int(value, default: int) -> int:
         try:
             return max(1, int(value))
@@ -636,6 +832,34 @@ class ConfigManager:
             return max(0.0, float(value))
         except (TypeError, ValueError):
             return max(0.0, float(default))
+
+    @staticmethod
+    def _parse_bounded_float(
+        value,
+        default: float,
+        *,
+        minimum: float,
+        maximum: float,
+    ) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = float(default)
+        return max(float(minimum), min(float(maximum), parsed))
+
+    @staticmethod
+    def _parse_bounded_int(
+        value,
+        default: int,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(default)
+        return max(int(minimum), min(int(maximum), parsed))
 
     @staticmethod
     def _parse_non_negative_int(value, default: int) -> int:
@@ -659,3 +883,31 @@ class ConfigManager:
             seen.add(value_str)
             normalized.append(value_str)
         return normalized
+
+    @staticmethod
+    def _normalize_llm_provider_source(value: Any) -> str:
+        text = str(value or "").strip() or "AstrBot 内置提供商"
+        mapping = {
+            "AstrBot 内置提供商": "astrbot",
+            "AstrBot": "astrbot",
+            "astrbot": "astrbot",
+            "插件自定义提供商": "custom",
+            "自定义提供商": "custom",
+            "custom": "custom",
+        }
+        return mapping.get(text, "astrbot")
+
+    @staticmethod
+    def _normalize_llm_provider(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "openai_compatible"
+        if text in LLM_PROVIDER_DEFAULTS:
+            return text
+        if text in LLM_PROVIDER_OPTIONS:
+            return LLM_PROVIDER_OPTIONS[text]
+        lowered = text.lower()
+        for label, key in LLM_PROVIDER_OPTIONS.items():
+            if lowered == label.lower() or lowered == key.lower():
+                return key
+        return "openai_compatible"

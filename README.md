@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v6.1.2-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v6.2.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -94,6 +94,8 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - ✅ 开箱即用，无需配置即可解析大部分平台
 - ✅ 自动识别并解析链接
 - ✅ 每个平台可独立选择输出模式：全部发送、仅文本、仅富媒体或关闭
+- ✅ 可选大模型翻译正文和标题，支持 AstrBot 内置 AI 或插件自定义 OpenAI 兼容接口
+- ✅ 支持消息集合打包策略：不打包、全部打包或按条件打包
 - ✅ 可选 B站 Cookie 解锁高画质 + 管理员协助自动续期
 - ✅ 媒体中转模式，跨服务器部署无需共享目录
 
@@ -111,6 +113,25 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 默认所有平台均为 `全部发送`。
 
 如只想保留某个平台的链接摘要，可以把该平台设为 `仅文本`；如只想要媒体内容，可以设为 `仅富媒体`
+
+## 🌐 文本翻译
+
+在插件配置的 `文本翻译` 中可开启正文翻译，也可选择同时翻译标题。翻译默认关闭；开启后支持两种大模型来源：
+
+- `AstrBot 内置提供商`：复用 AstrBot 已配置的 AI，`选择 AstrBot AI` 留空时会尝试使用当前会话正在使用的 LLM
+- `插件自定义提供商`：由本插件单独配置 OpenAI 兼容接口，内置 OpenAI、DeepSeek、通义千问、GLM、豆包、OpenRouter、SiliconFlow、Ollama 等常见 Base URL 预设
+
+`翻译范围` 可选择 `仅正文` 或 `正文和标题`，热评不会翻译。`保留原文` 开启时会输出原文和译文；关闭时用译文替换原文本字段。翻译提示词要求模型只返回严格 JSON 译文，不解释、不总结、不补充事实；翻译失败或响应格式异常时会自动使用原文，不影响媒体解析和发送。
+
+## 📦 消息集合打包
+
+在插件配置的 `消息与展示 → 打包为消息集合` 中可以选择：
+
+- `不打包`：逐条发送文本、图片和视频
+- `全部打包`：尽量使用消息集合发送，超过大视频阈值的媒体仍会单独发送
+- `按条件打包`：当图片总数、视频总数或最终节点总数达到配置阈值时才打包
+
+`按条件打包阈值` 仅在选择 `按条件打包` 时生效；阈值填 `0` 表示不按该项触发。节点总数包含文本、图片和视频节点。
 
 ---
 

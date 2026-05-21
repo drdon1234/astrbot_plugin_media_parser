@@ -1,9 +1,14 @@
 """消息适配子系统入口。"""
 from .sender import MessageSender
-from .node_builder import build_all_nodes, is_pure_image_gallery
+from .node_builder import (
+    build_all_nodes,
+    is_pure_image_gallery,
+    summarize_node_counts,
+)
 
 __all__ = [
     "MessageSender",
     "build_all_nodes",
-    "is_pure_image_gallery"
+    "is_pure_image_gallery",
+    "summarize_node_counts",
 ]

@@ -13,11 +13,14 @@ class MediaMetadata(TypedDict, total=False):
     url: str
     source_url: str
     title: str
+    title_translated: str
     author: str
     desc: str
+    desc_translated: str
     timestamp: str
     platform: str
     parser_name: str
+    translation_target_language: str
 
     video_urls: List[List[str]]
     image_urls: List[List[str]]

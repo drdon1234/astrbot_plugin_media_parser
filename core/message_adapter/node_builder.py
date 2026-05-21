@@ -97,10 +97,20 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
     
     if metadata.get('title'):
         text_parts.append(f"标题：{metadata['title']}")
+    if (
+        metadata.get('title_translated')
+        and metadata.get('title_translated') != metadata.get('title')
+    ):
+        text_parts.append(f"标题翻译：{metadata['title_translated']}")
     if metadata.get('author'):
         text_parts.append(f"作者：{metadata['author']}")
     if metadata.get('desc'):
         text_parts.append(f"简介：{metadata['desc']}")
+    if (
+        metadata.get('desc_translated')
+        and metadata.get('desc_translated') != metadata.get('desc')
+    ):
+        text_parts.append(f"简介翻译：{metadata['desc_translated']}")
     if metadata.get('timestamp'):
         text_parts.append(f"发布时间：{metadata['timestamp']}")
     
@@ -431,9 +441,34 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
     return has_image and not has_video
 
 
+def summarize_node_counts(
+    all_link_nodes: List[List[Union[Plain, Image, Video]]]
+) -> Dict[str, int]:
+    """统计最终可发送节点数量，用于条件打包判定。"""
+    image_count = 0
+    video_count = 0
+    node_count = 0
+
+    for link_nodes in all_link_nodes:
+        for node in link_nodes:
+            if node is None:
+                continue
+            node_count += 1
+            if isinstance(node, Image):
+                image_count += 1
+            elif isinstance(node, Video):
+                video_count += 1
+
+    return {
+        "image_count": image_count,
+        "video_count": video_count,
+        "node_count": node_count,
+    }
+
+
 def build_all_nodes(
     metadata_list: List[Dict[str, Any]],
-    is_auto_pack: bool,
+    pack_mode: Any,
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
@@ -443,7 +478,7 @@ def build_all_nodes(
 
     Args:
         metadata_list: 元数据列表
-        is_auto_pack: 是否打包为Node
+        pack_mode: 打包模式，仅用于日志
         large_video_threshold_mb: 大视频阈值(MB)
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
         enable_text_metadata: 是否发送图文文本消息
@@ -457,7 +492,7 @@ def build_all_nodes(
     temp_files = []
     video_files = []
     
-    logger.debug(f"开始构建所有节点，元数据数量: {len(metadata_list)}, 打包模式: {is_auto_pack}")
+    logger.debug(f"开始构建所有节点，元数据数量: {len(metadata_list)}, 打包模式: {pack_mode}")
     
     for idx, metadata in enumerate(metadata_list):
         url = metadata.get('url', '')
