@@ -104,11 +104,11 @@ def check_cache_dir_available(cache_dir: str) -> bool:
         return False
     try:
         os.makedirs(cache_dir, exist_ok=True)
-        test_file = os.path.join(cache_dir, ".test_write")
+        probe_file = os.path.join(cache_dir, ".write_probe")
         try:
-            with open(test_file, 'w') as f:
-                f.write("test")
-            os.unlink(test_file)
+            with open(probe_file, 'w') as f:
+                f.write("probe")
+            os.unlink(probe_file)
             return True
         except Exception as e:
             logger.warning(f"检查缓存目录写入权限失败: {e}")

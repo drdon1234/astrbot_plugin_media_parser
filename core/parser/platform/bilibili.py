@@ -80,10 +80,7 @@ class BilibiliParser(BaseVideoParser):
         cookie_runtime_enabled: bool = False,
         configured_cookie: str = "",
         admin_assist_enabled: bool = False,
-        admin_reply_timeout_minutes: int = 1440,
-        admin_request_cooldown_minutes: int = 1440,
         credential_path: str = "",
-        local_debug_mode: bool = False,
         max_quality: int = 0,
         hot_comment_count: int = 0
     ):
@@ -100,16 +97,10 @@ class BilibiliParser(BaseVideoParser):
         except (TypeError, ValueError):
             self.hot_comment_count = 0
         self.admin_assist_enabled = bool(admin_assist_enabled)
-        self.admin_reply_timeout_minutes = max(1, int(admin_reply_timeout_minutes))
-        self.admin_request_cooldown_minutes = max(
-            1,
-            int(admin_request_cooldown_minutes)
-        )
         self.auth_runtime = BilibiliAuthRuntime(
             enabled=self.cookie_runtime_enabled,
             configured_cookie=configured_cookie,
             credential_path=credential_path,
-            local_debug_mode=local_debug_mode
         )
         self._assist_request_reason: Optional[str] = None
         self._assist_request_pending = False
@@ -146,16 +137,9 @@ class BilibiliParser(BaseVideoParser):
         if not self.cookie_runtime_enabled:
             return ""
 
-        timeout_seconds = self.admin_reply_timeout_minutes * 60
-        if self.auth_runtime.local_debug_mode:
-            cookie_header = await self.auth_runtime.try_local_blocking_assist_once(
-                session,
-                timeout_seconds=timeout_seconds
-            )
-        else:
-            cookie_header = await self.auth_runtime.get_cookie_header_for_request(
-                session
-            )
+        cookie_header = await self.auth_runtime.get_cookie_header_for_request(
+            session
+        )
         if cookie_header:
             return cookie_header
 

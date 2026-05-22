@@ -2,7 +2,6 @@
 import asyncio
 import json
 import os
-import sys
 import time
 from http.cookies import SimpleCookie
 from typing import Any, Dict, Optional, Tuple
@@ -16,89 +15,6 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-
-
-async def _read_console_line(prompt: str, timeout_seconds: int) -> str:
-    """可取消地读取一行控制台输入，避免占用不可终止的 executor 线程。"""
-    timeout = max(1, int(timeout_seconds or 1))
-    if os.name == "nt":
-        return await _read_console_line_windows(prompt, timeout)
-    return await _read_console_line_posix(prompt, timeout)
-
-
-async def _read_console_line_windows(prompt: str, timeout_seconds: int) -> str:
-    """Windows 控制台输入轮询；协程取消时不会留下阻塞线程。"""
-    try:
-        import msvcrt
-    except ImportError:
-        logger.warning("[bilibili] 当前环境不支持可取消控制台输入")
-        return ""
-
-    print(prompt, end="", flush=True)
-    chars = []
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        try:
-            has_key = msvcrt.kbhit()
-        except OSError:
-            logger.warning("[bilibili] 当前stdin不是可轮询的Windows控制台")
-            print()
-            return ""
-        while has_key:
-            ch = msvcrt.getwch()
-            if ch in ("\r", "\n"):
-                print()
-                return "".join(chars)
-            if ch == "\003":
-                raise KeyboardInterrupt
-            if ch == "\b":
-                if chars:
-                    chars.pop()
-                    print("\b \b", end="", flush=True)
-                continue
-            if ch in ("\x00", "\xe0"):
-                if msvcrt.kbhit():
-                    msvcrt.getwch()
-            else:
-                chars.append(ch)
-                print(ch, end="", flush=True)
-            try:
-                has_key = msvcrt.kbhit()
-            except OSError:
-                logger.warning("[bilibili] 当前stdin不是可轮询的Windows控制台")
-                print()
-                return ""
-        await asyncio.sleep(0.05)
-    print()
-    return ""
-
-
-async def _read_console_line_posix(prompt: str, timeout_seconds: int) -> str:
-    """POSIX 控制台输入；使用 add_reader 支持取消。"""
-    print(prompt, end="", flush=True)
-    loop = asyncio.get_running_loop()
-    future = loop.create_future()
-    try:
-        fd = sys.stdin.fileno()
-        loop.add_reader(fd, lambda: (
-            None if future.done() else future.set_result(sys.stdin.readline())
-        ))
-    except (NotImplementedError, OSError, ValueError):
-        logger.warning("[bilibili] 当前环境不支持可取消控制台输入")
-        print()
-        return ""
-
-    try:
-        line = await asyncio.wait_for(future, timeout=timeout_seconds)
-        return (line or "").strip()
-    except asyncio.TimeoutError:
-        print()
-        return ""
-    finally:
-        try:
-            loop.remove_reader(fd)
-        except Exception:
-            pass
 
 
 class BilibiliAuthRuntime:
@@ -118,13 +34,11 @@ class BilibiliAuthRuntime:
         enabled: bool,
         configured_cookie: str = "",
         credential_path: str = "",
-        local_debug_mode: bool = False
     ):
         """初始化鉴权运行时并准备凭据缓存状态。"""
         self.enabled = enabled
         self._configured_cookie = (configured_cookie or "").strip()
         self.credential_path = credential_path
-        self.local_debug_mode = local_debug_mode
 
         self._runtime_credentials: Dict[str, Any] = {}
         self._runtime_cookie_header: str = ""
@@ -137,7 +51,6 @@ class BilibiliAuthRuntime:
 
         self._cookie_unavailable_reason: str = ""
         self._cookie_unavailable_warned: bool = False
-        self._local_prompt_asked: bool = False
 
         self._load_credentials()
 
@@ -154,8 +67,6 @@ class BilibiliAuthRuntime:
     def mark_cookie_unavailable(self, reason: str) -> None:
         """标记 Cookie 不可用并记录原因。"""
         reason = reason or "cookie_unavailable"
-        if self._cookie_unavailable_reason != reason:
-            self._local_prompt_asked = False
         self._cookie_unavailable_reason = reason
         if self.enabled and not self._cookie_unavailable_warned:
             reason_text = {
@@ -425,7 +336,6 @@ class BilibiliAuthRuntime:
         }
         self._runtime_cookie_header = self._build_cookie_header(self._runtime_credentials)
         self._clear_cookie_unavailable_state()
-        self._local_prompt_asked = False
         self._reset_validation_cache()
         self._save_credentials()
 
@@ -464,57 +374,3 @@ class BilibiliAuthRuntime:
                     continue
 
         return {"status": "timeout"}
-
-    async def try_local_blocking_assist_once(
-        self,
-        session: aiohttp.ClientSession,
-        timeout_seconds: int
-    ) -> str:
-        """本地调试模式：先生成登录链接，再阻塞确认一次是否协助登录。"""
-        if not self.local_debug_mode or not self.enabled:
-            return await self.get_cookie_header_for_request(session)
-
-        cookie_header = await self.get_cookie_header_for_request(session)
-        if cookie_header:
-            return cookie_header
-
-        if self._local_prompt_asked:
-            return ""
-        self._local_prompt_asked = True
-
-        try:
-            payload = await self.generate_login_payload(session)
-        except Exception as e:
-            logger.warning(f"[bilibili] 本地调试生成登录链接失败: {e}")
-            return ""
-
-        print("\n" + "=" * 60)
-        print("B站Cookie不可用，检测到本地调试模式。")
-        print(f"登录链接: {payload['login_url']}")
-        print(f"二维码链接: {payload['qr_code_url']}")
-        print("=" * 60)
-
-        answer = await _read_console_line(
-            "是否协助登录? (y/n): ",
-            timeout_seconds=max(1, timeout_seconds)
-        )
-        answer = (answer or "").strip().lower()
-        if answer not in ("y", "yes", "是", "确定"):
-            print("已跳过本轮协助登录。")
-            return ""
-
-        print("已进入扫码等待...")
-        result = await self.poll_login_until_complete(
-            session,
-            payload["qrcode_key"],
-            timeout_seconds=max(1, timeout_seconds)
-        )
-
-        if result.get("status") == "success":
-            print("B站登录成功，Cookie已更新。")
-            cookie_header = await self.get_cookie_header_for_request(session)
-            return cookie_header
-
-        print(f"B站扫码未完成，状态: {result.get('status')}")
-        return ""
-

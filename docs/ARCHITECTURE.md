@@ -1,6 +1,6 @@
 # 架构文档
 
-本文件按当前项目真实实现描述插件边界、模块职责和主流程。字段逐阶段如何变化可结合 `docs/WORKFLOW_TRACE.md` 阅读；平台解析细节见 `docs/PARSER_METHOD_MEMO.md`。
+本文件按当前项目真实实现描述插件边界、模块职责和主流程。平台解析细节见 `docs/PARSER_METHOD_MEMO.md`。
 
 ## 一、整体框架
 
@@ -26,11 +26,9 @@
 ```text
 astrbot_plugin_media_parser/
 ├── main.py                          # AstrBot 插件入口与生命周期
-├── run_local.py                     # 本地交互式调试脚本
 ├── _conf_schema.json                # AstrBot 配置 schema
 ├── docs/
 │   ├── ARCHITECTURE.md              # 当前架构文档
-│   ├── WORKFLOW_TRACE.md            # 元数据流转追踪
 │   └── PARSER_METHOD_MEMO.md        # 平台解析方法说明
 └── core/
     ├── config_manager.py            # 配置解析、默认值、解析器工厂
@@ -91,13 +89,15 @@ astrbot_plugin_media_parser/
 
 #### 消息集合打包
 
-`message.auto_pack` 使用字符串模式控制最终发送策略：
+`message.packing.mode` 使用字符串模式控制最终发送策略：
 
 - `不打包`：始终逐链接独立发送。
 - `全部打包`：普通媒体使用 `Nodes` 消息集合发送，大媒体仍按 `download.large_video_threshold_mb` 单独发送。
-- `按条件打包`：节点构建完成后统计最终可发送的图片节点、视频节点和总节点数，任一数量达到 `message.pack_thresholds` 对应阈值时才使用消息集合。
+- `按条件打包`：节点构建完成后统计最终可发送的图片节点、视频节点和总节点数，任一数量达到 `message.packing.thresholds` 对应阈值时才使用消息集合。
 
-`message.pack_thresholds.image_count`、`video_count`、`node_count` 均为非负整数。阈值为 `0` 时表示不按该项触发打包。
+`message.packing.thresholds.image_count`、`video_count`、`node_count` 均为非负整数。阈值为 `0` 时表示不按该项触发打包。
+
+`message.text_metadata.quote_user_message` 控制非打包发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
 
 #### 缓存目录
 
@@ -105,8 +105,6 @@ astrbot_plugin_media_parser/
 
 - Docker 环境：使用配置值；为空时使用 `Config.DEFAULT_CACHE_DIR`。
 - 非 Docker 环境：优先使用 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_media_parser/cache`，取不到时回退当前工作目录的 `cache/`。
-- `run_local.py`：固定使用项目根目录下的 `cache/`，并关闭缓存子目录标记写入。
-
 B站运行时 Cookie 文件位于当前缓存根目录下：
 
 ```text
@@ -144,16 +142,16 @@ cache/runtime_manager/bilibili/cookie.json
 配置被归一为 dataclass 分组：
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
-- `MessageConfig`：打包模式、条件打包阈值、开场语、各平台输出模式、热评开关。
+- `MessageConfig`：打包模式、条件打包阈值、文本元数据引用开关、开场语、各平台输出模式、热评开关。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter/X 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
-- `TranslationConfig`：翻译开关、翻译范围、目标语言、是否保留原文、AstrBot 内置或自定义大模型配置。
+- `TranslationConfig`：翻译开关、翻译范围、目标语言、AstrBot 内置或自定义大模型配置。输入/输出上限固定为 4000，超时固定为 60 秒，随机性固定为 0。
 - `AdminConfig`：清理关键词和 debug 模式。
 
-`ConfigManager` 会将 `parsers` 的输出模式归一到 `MessageConfig.parser_outputs`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。`message.auto_pack` 会被归一为 `不打包`、`全部打包`、`按条件打包` 三种模式；条件阈值会按非负整数兜底。
+`ConfigManager` 会将 `parsers` 的输出模式归一到 `MessageConfig.parser_outputs`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。`message.packing.mode` 会被归一为 `不打包`、`全部打包`、`按条件打包` 三种模式；条件阈值会按非负整数兜底。
 
 权限优先级为：管理员直接放行，其次个人白名单、个人黑名单、群组白名单、群组黑名单；均未命中时，白名单开启则拒绝，白名单关闭则放行。管理员 ID 会自动加入用户白名单。
 
@@ -183,8 +181,6 @@ cache/runtime_manager/bilibili/cookie.json
 - 通过 B站 nav 接口校验登录态，并对有效/无效结果做短 TTL 缓存。
 - 运行时 Cookie 失效时会清空本地凭据，再尝试配置 Cookie。
 - 可生成登录链接和二维码链接，轮询扫码结果，并保存新凭据。
-- `run_local.py` 可在解析前用阻塞式交互完成本地扫码。
-
 `BilibiliAdminCookieAssistManager` 是插件运行时的非阻塞协助流程：
 
 - 只有管理员私聊过机器人后，才有可主动发送的私聊会话标识。
@@ -257,8 +253,9 @@ video_count .. video_count + image_count   图片
 
 `node_builder.py` 负责将 metadata 转成节点：
 
-- 文本节点展示标题、作者、简介、发布时间、访问状态、热评、视频大小、跳过原因、解析错误、原始链接。
-- 若启用文本翻译且保留原文，文本节点会按翻译范围额外展示标题和/或简介译文；若不保留原文，则消费已替换后的文本字段。热评不进入翻译流程。
+- 文本元数据节点展示标题、作者、发布时间、访问状态、视频大小、跳过原因、解析错误、原始链接；简介/正文放在最后，并用分隔符与前面的元数据分开。
+- 热评节点和翻译节点是独立文本节点，不混入文本元数据节点。热评不进入翻译流程。
+- 翻译结果来自后台大模型任务，按链接独立请求，每条请求最多包含标题和简介/正文；无需翻译时不会生成翻译节点。
 - 富媒体节点只消费 `video_modes/image_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的 URL，`skip` 不构建节点。
 - 内部先尝试构建富媒体节点，再构建文本节点，这样节点构建失败时可把原因回填到 metadata，文本节点可展示。
 - `build_all_nodes()` 返回 `BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)`。
@@ -266,9 +263,10 @@ video_count .. video_count + image_count   图片
 
 `sender.py` 负责发送，是否进入消息集合由 `main.py` 在节点构建后决定：
 
-- `message.auto_pack=不打包`：逐链接独立发送。
-- `message.auto_pack=全部打包`：使用 `Nodes` 打包发送普通媒体；大媒体单独发送。
-- `message.auto_pack=按条件打包`：节点构建完成后统计图片、视频和总节点数量，任一数量达到 `message.pack_thresholds` 中配置的阈值时打包发送。
+- `message.packing.mode=不打包`：逐链接独立发送。
+- `message.packing.mode=全部打包`：使用 `Nodes` 打包发送普通媒体；大媒体单独发送。
+- `message.packing.mode=按条件打包`：节点构建完成后统计图片、视频和总节点数量，任一数量达到 `message.packing.thresholds` 中配置的阈值时打包发送。
+- 非打包时，如果 `message.text_metadata.quote_user_message=true`，只让文本元数据节点引用对应的用户消息；媒体、热评、翻译和分隔符不引用。
 - 纯图片图集会把文本和图片分组发送；混合内容按节点逐个发送。
 - 大媒体判定来自 `download.large_video_threshold_mb` 和当前 metadata 的最大视频大小。
 
@@ -317,6 +315,10 @@ ParserManager.parse_text(parse_text, session, links_with_parser)
   ├─ 无有效 metadata -> 返回
   └─ 有效 -> 继续
   ↓
+translation.enable=true?
+  ├─ 是 -> 复制 metadata_list 并后台启动 MetadataTranslator.translate_metadata_list()
+  └─ 否 -> translation_task = None
+  ↓
 存在启用富媒体输出的 metadata?
   ├─ 是 -> 仅对这些 metadata 并发 DownloadManager.process_metadata()
   └─ 否 -> processed_metadata_list = metadata_list
@@ -327,7 +329,14 @@ build_all_nodes()
   ↓
 summarize_node_counts()
   ↓
-按 message.auto_pack 与条件阈值调用 MessageSender
+按 message.packing.mode 与条件阈值发送文本元数据、热评和媒体节点
+  ├─ 打包 -> send_packed_results()
+  └─ 不打包 -> send_unpacked_results()
+       └─ 可按 message.text_metadata.quote_user_message 引用用户消息
+  ↓
+等待 translation_task
+  ├─ 有翻译节点 -> send_translation_results()
+  └─ 无翻译节点 -> 跳过
   ↓
 finally 清理本次 temp_files + video_files
   ├─ relay 开启 -> 延迟 media_relay.ttl 秒
@@ -401,6 +410,7 @@ build_all_nodes()
   │   ├─ direct URL
   │   └─ skip
   ├─ build_text_node()
+  ├─ build_hot_comments_node()
   ├─ 判定大媒体
   └─ 分类 temp_files/video_files
   ↓
@@ -411,6 +421,9 @@ MessageConfig.should_pack()
 MessageSender
   ├─ 需要打包 -> send_packed_results()
   └─ 不打包   -> send_unpacked_results()
+  ↓
+translation_task 完成后
+  └─ build_translation_nodes_for_all() -> send_translation_results()
 ```
 
 ### 3.5 清理与终止链
@@ -455,6 +468,7 @@ access_status/restriction_type/restriction_label
 can_access_full_video/is_preview_only/access_message
 timelength_ms/available_length_ms
 hot_comments
+translation_target_language/_translated_fields
 use_image_proxy/use_video_proxy/proxy_url
 error
 ```
@@ -485,7 +499,7 @@ file_token_urls
 节点层消费：
 
 ```text
-_enable_text_metadata -> Plain
+_enable_text_metadata -> 文本元数据 Plain / 热评 Plain / 翻译 Plain
 _enable_rich_media + video_modes/image_modes + file_paths/file_token_urls/video_urls/image_urls -> Video/Image
 ```
 
@@ -571,32 +585,3 @@ metadata.proxy_url > ConfigManager.proxy.address
 - 大小限制：普通视频下载前预检，DASH/M3U8/强制缓存视频下载后再兜底检查，超限会删除文件并置为 `skip`。
 - 发送阶段：单个大媒体节点发送失败记录 warning 后继续；主发送异常会继续进入 finally 清理。
 - 外部子进程：DASH/M3U8/图片转换涉及 ffmpeg，TikTok 涉及系统 curl；超时或取消路径会终止并回收子进程。
-
-## 六、本地调试脚本
-
-`run_local.py` 复用解析器、下载器和节点相关数据结构，但不走 AstrBot 消息发送链：
-
-```text
-输入链接
-  ↓
-extract_all_links()
-  ↓
-prepare_bilibili_cookie_interaction()
-  ↓
-parse_text()
-  ↓
-打印 metadata
-  ↓
-用户确认是否下载
-  ↓
-DownloadManager.process_metadata()
-  ↓
-打印下载结果
-```
-
-本地调试的差异：
-
-- B站 Cookie 交互在并发解析前阻塞处理。
-- 缓存根目录固定为项目根 `cache/`。
-- 调用 `set_stamp_subdir_enabled(False)`，本地调试不写 `.astrbot_media_parser` 标记。
-- 输出以终端展示为主，不构建 AstrBot 发送链。

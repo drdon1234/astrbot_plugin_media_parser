@@ -6,7 +6,7 @@ import inspect
 import json
 import re
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..logger import logger
 from .llm_client import LLMClient
@@ -15,11 +15,14 @@ from .llm_client import LLMClient
 TRANSLATION_SYSTEM_PROMPT = """你是严格的翻译引擎，只执行翻译任务。
 
 规则：
-1. 只把输入 items 中的 text 翻译为目标语言，不解释、不总结、不扩写、不补充事实。
-2. 不知道或不确定的专有名词、用户名、ID、URL、话题标签、表情、代码、数字、单位和平台术语保持原样。
-3. 如果原文已经是目标语言，或无需翻译，返回原文。
-4. 必须保持每个 item 的 id 不变，不能新增、删除或重排 item。
-5. 只能输出严格 JSON：{"translations":[{"id":"...","text":"..."}]}。
+1. 先判断每个 item 是否真正需要翻译为目标语言。
+2. 如果原文已经是目标语言，或非目标语言内容只是品牌名、项目名、用户名、ID、URL、话题标签、表情、代码、数字、单位、API/LLM/URL/Docker 等技术词或平台术语，则 needs_translation=false。
+3. needs_translation=false 时不要返回 text 字段，也不要复述原文。
+4. needs_translation=true 时，只把输入 text 翻译为目标语言，不解释、不总结、不扩写、不补充事实。
+5. 不知道或不确定的专有名词、用户名、ID、URL、话题标签、表情、代码、数字、单位和平台术语保持原样。
+6. 必须保持每个 item 的 id 不变，不能新增、删除或重排 item。
+7. 只能输出严格 JSON：{"translations":[{"id":"...","needs_translation":false},{"id":"...","needs_translation":true,"text":"..."}]}。
+8. 如果整个请求没有任何 item 需要翻译，可以只输出严格 JSON：{"needs_translation":false}。
 """
 
 LANGUAGE_CHECK_NOISE_RE = re.compile(
@@ -60,8 +63,8 @@ class MetadataTranslator:
             logger.warning("翻译已启用，但未配置目标语言，跳过翻译")
             return
 
-        items = self._collect_items(metadata_list, target_language)
-        if not items:
+        item_groups = self._collect_item_groups(metadata_list, target_language)
+        if not item_groups:
             return
 
         missing = self._missing_llm_fields(event_context)
@@ -72,10 +75,7 @@ class MetadataTranslator:
         started_at = time.perf_counter()
         translated: Dict[str, str] = {}
         try:
-            for batch in self._batches(
-                items,
-                max(1, int(getattr(self.config, "max_items_per_request", 8) or 8)),
-            ):
+            for batch in item_groups:
                 batch_result = await self._translate_batch(
                     batch,
                     target_language=target_language,
@@ -92,26 +92,31 @@ class MetadataTranslator:
             return
         self._apply_translations(metadata_list, translated, target_language)
         logger.debug(
-            f"元数据翻译完成: items={len(items)} "
+            f"元数据翻译完成: requests={len(item_groups)} "
+            f"items={sum(len(group) for group in item_groups)} "
             f"translated={len(translated)} "
             f"elapsed={time.perf_counter() - started_at:.2f}s"
         )
 
-    def _collect_items(
+    def _collect_item_groups(
         self,
         metadata_list: List[Dict[str, Any]],
         target_language: str,
-    ) -> List[Dict[str, str]]:
-        items: List[Dict[str, str]] = []
+    ) -> List[List[Dict[str, str]]]:
+        item_groups: List[List[Dict[str, str]]] = []
         max_chars = max(
             1,
-            int(getattr(self.config, "max_text_chars_per_item", 2000) or 2000),
+            int(
+                getattr(self.config, "max_text_chars_per_request", 4000)
+                or 4000
+            ),
         )
         for meta_idx, metadata in enumerate(metadata_list):
             if metadata.get("error"):
                 continue
             if not metadata.get("_enable_text_metadata", True):
                 continue
+            items: List[Dict[str, str]] = []
             content_scope = str(
                 getattr(
                     self.config,
@@ -126,7 +131,6 @@ class MetadataTranslator:
                     meta_idx,
                     "title",
                     metadata.get("title"),
-                    max_chars,
                     target_language,
                 )
             self._append_text_item(
@@ -134,10 +138,19 @@ class MetadataTranslator:
                 meta_idx,
                 "desc",
                 metadata.get("desc"),
-                max_chars,
                 target_language,
             )
-        return items
+            if not items:
+                continue
+            total_chars = sum(len(item["text"]) for item in items)
+            if total_chars > max_chars:
+                logger.debug(
+                    f"跳过过长链接文本翻译: metadata={meta_idx} "
+                    f"chars={total_chars} limit={max_chars}"
+                )
+                continue
+            item_groups.append(items)
+        return item_groups
 
     @classmethod
     def _append_text_item(
@@ -146,7 +159,6 @@ class MetadataTranslator:
         meta_idx: int,
         field: str,
         value: Any,
-        max_chars: int,
         target_language: str,
     ) -> None:
         text = str(value or "").strip()
@@ -156,12 +168,6 @@ class MetadataTranslator:
             logger.debug(
                 f"跳过已是目标语言的文本翻译: metadata={meta_idx} "
                 f"field={field} target={target_language}"
-            )
-            return
-        if len(text) > max_chars:
-            logger.debug(
-                f"跳过过长文本翻译: metadata={meta_idx} "
-                f"field={field} chars={len(text)} limit={max_chars}"
             )
             return
         items.append({
@@ -265,29 +271,39 @@ class MetadataTranslator:
             "temperature": float(getattr(self.config, "temperature", 0.0) or 0.0),
             "max_tokens": max(
                 256,
-                int(getattr(self.config, "max_completion_tokens", 1200) or 1200),
+                int(getattr(self.config, "max_completion_tokens", 4000) or 4000),
             ),
         }
 
     def _parse_translation_response(
         self,
         text: str,
-        expected_ids: Iterable[str],
+        expected_ids: set[str],
     ) -> Dict[str, str]:
         expected = set(expected_ids)
         data = self._loads_json_object(text)
+        if data.get("needs_translation") is False:
+            return {}
         translations = data.get("translations")
         if not isinstance(translations, list):
             raise RuntimeError("LLM 翻译响应缺少 translations 数组")
 
         result: Dict[str, str] = {}
+        skipped_ids = set()
         for item in translations:
             if not isinstance(item, dict):
                 continue
             item_id = str(item.get("id", "") or "").strip()
+            if item_id not in expected:
+                continue
+            if item.get("needs_translation") is False:
+                skipped_ids.add(item_id)
+                continue
             value = str(item.get("text", "") or "").strip()
-            if item_id in expected and value:
+            if value:
                 result[item_id] = value
+        if not result and skipped_ids >= expected:
+            return {}
         if not result:
             raise RuntimeError("LLM 翻译响应没有可用译文")
         return result
@@ -316,7 +332,6 @@ class MetadataTranslator:
         translations: Dict[str, str],
         target_language: Optional[str] = None,
     ) -> None:
-        keep_original = bool(getattr(self.config, "keep_original", True))
         language = str(
             target_language
             or getattr(self.config, "target_language", "")
@@ -328,10 +343,9 @@ class MetadataTranslator:
                 continue
             metadata = metadata_list[meta_idx]
             if field in {"title", "desc"}:
-                if keep_original:
-                    metadata[f"{field}_translated"] = translated
-                else:
-                    metadata[field] = translated
+                translated_fields = metadata.setdefault("_translated_fields", {})
+                if isinstance(translated_fields, dict):
+                    translated_fields[field] = translated
                 metadata["translation_target_language"] = language
                 continue
 
@@ -506,11 +520,3 @@ class MetadataTranslator:
         if isinstance(response, str):
             return response.strip()
         return str(response or "").strip()
-
-    @staticmethod
-    def _batches(
-        items: List[Dict[str, str]],
-        size: int,
-    ) -> Iterable[List[Dict[str, str]]]:
-        for index in range(0, len(items), size):
-            yield items[index:index + size]

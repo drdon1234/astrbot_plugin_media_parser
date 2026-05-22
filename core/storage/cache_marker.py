@@ -6,18 +6,11 @@ from typing import Tuple
 from ..logger import logger
 
 MARKER_FILE_NAME = ".astrbot_media_parser"
-_STAMP_SUBDIR_ENABLED = True
-
-
-def set_stamp_subdir_enabled(enabled: bool) -> None:
-    """控制是否写入缓存归属标记文件。"""
-    global _STAMP_SUBDIR_ENABLED
-    _STAMP_SUBDIR_ENABLED = bool(enabled)
 
 
 def stamp_subdir(directory: str) -> None:
     """在媒体缓存子目录中放置归属标记文件。"""
-    if not _STAMP_SUBDIR_ENABLED or not directory:
+    if not directory:
         return
     try:
         os.makedirs(directory, exist_ok=True)

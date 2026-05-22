@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v6.2.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v6.2.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -121,17 +121,19 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - `AstrBot 内置提供商`：复用 AstrBot 已配置的 AI，`选择 AstrBot AI` 留空时会尝试使用当前会话正在使用的 LLM
 - `插件自定义提供商`：由本插件单独配置 OpenAI 兼容接口，内置 OpenAI、DeepSeek、通义千问、GLM、豆包、OpenRouter、SiliconFlow、Ollama 等常见 Base URL 预设
 
-`翻译范围` 可选择 `仅正文` 或 `正文和标题`，热评不会翻译。`保留原文` 开启时会输出原文和译文；关闭时用译文替换原文本字段。翻译提示词要求模型只返回严格 JSON 译文，不解释、不总结、不补充事实；翻译失败或响应格式异常时会自动使用原文，不影响媒体解析和发送。
+`翻译范围` 可选择 `仅正文` 或 `正文和标题`，热评不会翻译。每条链接会独立请求一次翻译，标题和简介/正文合计默认不超过 4000 字；翻译结果会作为独立节点发送。不打包时会先发送开场语、文本元数据、热评和媒体节点，再等待大模型返回后补发翻译。翻译提示词要求模型先返回是否需要翻译的标记；无需翻译时不返回译文，确需翻译时只返回严格 JSON 译文，不解释、不总结、不补充事实。翻译失败或响应格式异常时会自动跳过翻译节点，不影响媒体解析和发送。
 
 ## 📦 消息集合打包
 
-在插件配置的 `消息与展示 → 打包为消息集合` 中可以选择：
+在插件配置的 `消息与展示 → 消息打包 → 打包模式` 中可以选择：
 
 - `不打包`：逐条发送文本、图片和视频
 - `全部打包`：尽量使用消息集合发送，超过大视频阈值的媒体仍会单独发送
 - `按条件打包`：当图片总数、视频总数或最终节点总数达到配置阈值时才打包
 
-`按条件打包阈值` 仅在选择 `按条件打包` 时生效；阈值填 `0` 表示不按该项触发。节点总数包含文本、图片和视频节点。
+`按条件打包阈值` 位于 `消息与展示 → 消息打包 → 按条件打包阈值`，仅在选择 `按条件打包` 时生效；阈值填 `0` 表示不按该项触发。节点总数包含文本、图片和视频节点。
+
+`消息与展示 → 文本元数据 → 引用用户消息` 可在不打包时让文本元数据节点引用对应的用户消息；媒体节点和打包消息不引用。
 
 ---
 

@@ -93,7 +93,7 @@ def _is_docker_environment() -> bool:
 
 
 def _get_astrbot_plugin_cache_dir() -> str:
-    """获取默认媒体缓存目录；本地调试时回退到项目 cache 目录。"""
+    """获取默认媒体缓存目录；非 AstrBot 运行时回退到项目 cache 目录。"""
     try:
         from astrbot.core import astrbot_config
         data_dir = str(astrbot_config.get("data_dir") or "").strip()
@@ -149,6 +149,7 @@ class MessageConfig:
     pack_image_threshold: int = 3
     pack_video_threshold: int = 2
     pack_node_threshold: int = 5
+    quote_user_message: bool = False
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
     hot_comment_count: int = 0
@@ -296,7 +297,6 @@ class TranslationConfig:
     enabled: bool = False
     content_scope: str = "正文和标题"
     target_language: str = "简体中文"
-    keep_original: bool = True
     llm_provider_source: str = "astrbot"
     astrbot_provider_id: str = ""
     llm_provider: str = "openai_compatible"
@@ -304,10 +304,9 @@ class TranslationConfig:
     api_key: str = ""
     model: str = "gpt-5.5"
     temperature: float = 0.0
-    max_completion_tokens: int = 1200
+    max_completion_tokens: int = 4000
     request_timeout_seconds: int = 60
-    max_text_chars_per_item: int = 2000
-    max_items_per_request: int = 8
+    max_text_chars_per_request: int = 4000
 
 
 @dataclass
@@ -367,10 +366,16 @@ class ConfigManager:
         if not isinstance(message_raw, dict):
             message_raw = {}
         opening = message_raw.get("opening", {})
+        packing = message_raw.get("packing", {})
+        text_metadata = message_raw.get("text_metadata", {})
         hot_comments = message_raw.get("hot_comments", {})
-        pack_thresholds = message_raw.get("pack_thresholds", {})
         if not isinstance(opening, dict):
             opening = {}
+        if not isinstance(packing, dict):
+            packing = {}
+        if not isinstance(text_metadata, dict):
+            text_metadata = {}
+        pack_thresholds = packing.get("thresholds", {})
         if not isinstance(pack_thresholds, dict):
             pack_thresholds = {}
         if not isinstance(hot_comments, dict):
@@ -391,7 +396,7 @@ class ConfigManager:
 
         self.message = MessageConfig(
             pack_mode=self._parse_pack_mode(
-                message_raw.get("auto_pack", PACK_MODE_NONE)
+                packing.get("mode", PACK_MODE_NONE)
             ),
             pack_image_threshold=self._parse_non_negative_int(
                 pack_thresholds.get("image_count", 3), 3
@@ -401,6 +406,9 @@ class ConfigManager:
             ),
             pack_node_threshold=self._parse_non_negative_int(
                 pack_thresholds.get("node_count", 5), 5
+            ),
+            quote_user_message=bool(
+                text_metadata.get("quote_user_message", False)
             ),
             opening_enabled=opening.get("enable", True),
             opening_content=opening.get(
@@ -534,7 +542,6 @@ class ConfigManager:
             target_language=self._parse_translation_target_language(
                 translation_raw.get("target_language", "简体中文")
             ),
-            keep_original=bool(translation_raw.get("keep_original", True)),
             llm_provider_source=llm_provider_source,
             astrbot_provider_id=str(
                 astrbot_provider_raw.get("provider_id", "") or ""
@@ -545,36 +552,6 @@ class ConfigManager:
             model=str(
                 custom_provider_raw.get("model", "gpt-5.5") or "gpt-5.5"
             ).strip(),
-            temperature=self._parse_bounded_float(
-                translation_raw.get("temperature", 0.0),
-                0.0,
-                minimum=0.0,
-                maximum=1.0,
-            ),
-            max_completion_tokens=self._parse_bounded_int(
-                translation_raw.get("max_completion_tokens", 1200),
-                1200,
-                minimum=256,
-                maximum=8000,
-            ),
-            request_timeout_seconds=self._parse_bounded_int(
-                translation_raw.get("request_timeout_seconds", 60),
-                60,
-                minimum=10,
-                maximum=600,
-            ),
-            max_text_chars_per_item=self._parse_bounded_int(
-                translation_raw.get("max_text_chars_per_item", 2000),
-                2000,
-                minimum=50,
-                maximum=10000,
-            ),
-            max_items_per_request=self._parse_bounded_int(
-                translation_raw.get("max_items_per_request", 8),
-                8,
-                minimum=1,
-                maximum=32,
-            ),
         )
 
         cache_dir_available = check_cache_dir_available(cache_dir)
@@ -731,8 +708,6 @@ class ConfigManager:
                 configured_cookie=self.bilibili.cookie,
                 max_quality=self.bilibili.max_quality,
                 admin_assist_enabled=self.bilibili.enable_admin_assist,
-                admin_reply_timeout_minutes=self.bilibili.admin_reply_timeout_minutes,
-                admin_request_cooldown_minutes=self.bilibili.admin_request_cooldown_minutes,
                 credential_path=self.bilibili.cookie_runtime_file,
                 hot_comment_count=bili_hc,
             )
@@ -832,34 +807,6 @@ class ConfigManager:
             return max(0.0, float(value))
         except (TypeError, ValueError):
             return max(0.0, float(default))
-
-    @staticmethod
-    def _parse_bounded_float(
-        value,
-        default: float,
-        *,
-        minimum: float,
-        maximum: float,
-    ) -> float:
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            parsed = float(default)
-        return max(float(minimum), min(float(maximum), parsed))
-
-    @staticmethod
-    def _parse_bounded_int(
-        value,
-        default: int,
-        *,
-        minimum: int,
-        maximum: int,
-    ) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            parsed = int(default)
-        return max(int(minimum), min(int(maximum), parsed))
 
     @staticmethod
     def _parse_non_negative_int(value, default: int) -> int:

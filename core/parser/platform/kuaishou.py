@@ -202,8 +202,8 @@ class KuaishouParser(BaseVideoParser):
                 if caption_match:
                     raw_caption = caption_match.group(1)
                     try:
-                        test_json = f'{{"text":"{raw_caption}"}}'
-                        parsed = json.loads(test_json)
+                        probe_json = f'{{"text":"{raw_caption}"}}'
+                        parsed = json.loads(probe_json)
                         metadata['caption'] = parsed['text']
                     except Exception:
                         metadata['caption'] = raw_caption

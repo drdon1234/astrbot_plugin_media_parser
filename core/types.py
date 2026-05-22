@@ -13,10 +13,9 @@ class MediaMetadata(TypedDict, total=False):
     url: str
     source_url: str
     title: str
-    title_translated: str
     author: str
     desc: str
-    desc_translated: str
+    _translated_fields: Dict[str, str]
     timestamp: str
     platform: str
     parser_name: str
@@ -77,11 +76,13 @@ class MediaMetadata(TypedDict, total=False):
 
 class LinkBuildMeta(TypedDict):
     """node_builder 为每条链接构建的辅助元数据，用于发送阶段。"""
+    metadata_index: int
     link_nodes: List[Any]
     is_large_media: bool
     is_normal: bool
     video_files: List[str]
     temp_files: List[str]
+    metadata_text_node: Optional[Any]
 
 
 class BuildAllNodesResult(NamedTuple):
