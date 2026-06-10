@@ -125,12 +125,6 @@
                 "type": "bool",
                 "default": true
             },
-            "reply_trigger": {
-                "description": "回复触发解析",
-                "type": "bool",
-                "hint": "引用含链接的消息并附关键词即可触发解析",
-                "default": false
-            },
             "keywords": {
                 "description": "手动触发关键词",
                 "type": "list",
@@ -139,6 +133,12 @@
                     "视频解析",
                     "解析视频"
                 ]
+            },
+            "reply_trigger": {
+                "description": "回复触发解析",
+                "type": "bool",
+                "hint": "引用含链接的消息并附关键词即可触发解析",
+                "default": false
             }
         }
     },
@@ -146,6 +146,12 @@
         "description": "消息与展示",
         "type": "object",
         "items": {
+            "auto_pack": {
+                "description": "打包为消息集合",
+                "type": "bool",
+                "hint": "Napcat 存在兼容问题，不建议启用",
+                "default": false
+            },
             "opening": {
                 "description": "开场语",
                 "type": "object",
@@ -159,60 +165,6 @@
                         "description": "开场语内容",
                         "type": "string",
                         "default": "流媒体解析bot为您服务 ٩( 'ω' )و"
-                    }
-                }
-            },
-            "packing": {
-                "description": "消息打包",
-                "type": "object",
-                "hint": "Napcat 存在兼容问题，请按需启用",
-                "items": {
-                    "mode": {
-                        "description": "打包模式",
-                        "type": "string",
-                        "options": [
-                            "不打包",
-                            "全部打包",
-                            "按条件打包"
-                        ],
-                        "default": "不打包"
-                    },
-                    "thresholds": {
-                        "description": "按条件打包阈值",
-                        "type": "object",
-                        "hint": "仅在选择“按条件打包”时生效；0 = 不按该项触发",
-                        "items": {
-                            "image_count": {
-                                "description": "图片数量",
-                                "type": "int",
-                                "hint": "图片总数达到该值时打包；0 = 不按图片数触发",
-                                "default": 3
-                            },
-                            "video_count": {
-                                "description": "视频数量",
-                                "type": "int",
-                                "hint": "视频总数达到该值时打包；0 = 不按视频数触发",
-                                "default": 2
-                            },
-                            "node_count": {
-                                "description": "节点数量",
-                                "type": "int",
-                                "hint": "文本、图片和视频节点总数达到该值时打包；0 = 不按节点数触发",
-                                "default": 5
-                            }
-                        }
-                    }
-                }
-            },
-            "text_metadata": {
-                "description": "文本元数据",
-                "type": "object",
-                "items": {
-                    "quote_user_message": {
-                        "description": "引用用户消息",
-                        "type": "bool",
-                        "hint": "仅不打包时生效；文本元数据节点会引用对应的用户消息，媒体节点不引用",
-                        "default": false
                     }
                 }
             },
@@ -241,115 +193,6 @@
                         "description": "小红书",
                         "type": "bool",
                         "default": true
-                    }
-                }
-            }
-        }
-    },
-    "translation": {
-        "description": "文本翻译",
-        "type": "object",
-        "hint": "对正文和标题进行大模型翻译；默认关闭，翻译失败不会影响媒体解析",
-        "items": {
-            "enable": {
-                "description": "启用翻译",
-                "type": "bool",
-                "default": false
-            },
-            "content_scope": {
-                "description": "翻译范围",
-                "type": "string",
-                "options": [
-                    "仅正文",
-                    "正文和标题"
-                ],
-                "hint": "仅正文只翻译简介/正文；正文和标题会同时翻译标题和简介/正文；热评不翻译",
-                "default": "正文和标题"
-            },
-            "target_language": {
-                "description": "目标语言",
-                "type": "string",
-                "options": [
-                    "简体中文",
-                    "繁体中文",
-                    "English",
-                    "日本語",
-                    "한국어",
-                    "Español",
-                    "Français",
-                    "Deutsch",
-                    "Русский",
-                    "Português"
-                ],
-                "default": "简体中文"
-            },
-            "llm": {
-                "description": "大模型接口",
-                "type": "object",
-                "items": {
-                    "provider_source": {
-                        "description": "大模型提供商",
-                        "type": "string",
-                        "options": [
-                            "AstrBot 内置提供商",
-                            "插件自定义提供商"
-                        ],
-                        "hint": "选择使用 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口",
-                        "default": "AstrBot 内置提供商"
-                    },
-                    "astrbot_provider": {
-                        "description": "AstrBot 内置提供商",
-                        "type": "object",
-                        "hint": "当“大模型提供商”选择 AstrBot 内置提供商时生效",
-                        "items": {
-                            "provider_id": {
-                                "description": "选择 AstrBot AI",
-                                "type": "string",
-                                "hint": "点击按钮选择 AstrBot 中已配置的 LLM；留空时尝试使用当前会话正在使用的 LLM",
-                                "_special": "select_provider",
-                                "default": ""
-                            }
-                        }
-                    },
-                    "custom_provider": {
-                        "description": "自定义提供商",
-                        "type": "object",
-                        "hint": "当“大模型提供商”选择插件自定义提供商时生效",
-                        "items": {
-                            "provider": {
-                                "description": "厂商/接口类型",
-                                "type": "string",
-                                "options": [
-                                    "自定义 OpenAI 兼容",
-                                    "OpenAI",
-                                    "DeepSeek",
-                                    "Moonshot / Kimi",
-                                    "阿里云百炼 / 通义千问",
-                                    "智谱 AI / GLM",
-                                    "火山引擎方舟 / 豆包",
-                                    "OpenRouter",
-                                    "SiliconFlow",
-                                    "Ollama"
-                                ],
-                                "default": "自定义 OpenAI 兼容"
-                            },
-                            "base_url": {
-                                "description": "Base URL",
-                                "type": "string",
-                                "hint": "预设厂商可留空；自定义 OpenAI 兼容、中转或私有部署请填写对应接口地址",
-                                "default": ""
-                            },
-                            "api_key": {
-                                "description": "API Key",
-                                "type": "string",
-                                "default": ""
-                            },
-                            "model": {
-                                "description": "模型",
-                                "type": "string",
-                                "default": "gpt-5.5"
-                            }
-                        }
                     }
                 }
             }
@@ -493,6 +336,12 @@
                         "default": 1440
                     }
                 }
+            },
+            "comment_screenshot": {
+                "description": "评论区截图",
+                "type": "bool",
+                "hint": "使用Playwright截取评论区并发送图片",
+                "default": false
             }
         }
     },

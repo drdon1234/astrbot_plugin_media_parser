@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 import aiohttp
 
 from ...logger import logger
+from playwright.async_api import async_playwright
 
 from .base import BaseVideoParser
 from ..runtime_manager.bilibili.auth import BilibiliAuthRuntime
@@ -80,9 +81,13 @@ class BilibiliParser(BaseVideoParser):
         cookie_runtime_enabled: bool = False,
         configured_cookie: str = "",
         admin_assist_enabled: bool = False,
+        admin_reply_timeout_minutes: int = 1440,
+        admin_request_cooldown_minutes: int = 1440,
         credential_path: str = "",
+        local_debug_mode: bool = False,
         max_quality: int = 0,
-        hot_comment_count: int = 0
+        hot_comment_count: int = 0,
+        comment_screenshot: bool = False
     ):
         """初始化B站解析器"""
         super().__init__("bilibili")
@@ -97,11 +102,19 @@ class BilibiliParser(BaseVideoParser):
         except (TypeError, ValueError):
             self.hot_comment_count = 0
         self.admin_assist_enabled = bool(admin_assist_enabled)
+        self.admin_reply_timeout_minutes = max(1, int(admin_reply_timeout_minutes))
+        self.admin_request_cooldown_minutes = max(
+            1,
+            int(admin_request_cooldown_minutes)
+        )
         self.auth_runtime = BilibiliAuthRuntime(
             enabled=self.cookie_runtime_enabled,
             configured_cookie=configured_cookie,
             credential_path=credential_path,
+            local_debug_mode=local_debug_mode
         )
+        self.comment_screenshot_enabled = bool(comment_screenshot)
+        self._browser = None
         self._assist_request_reason: Optional[str] = None
         self._assist_request_pending = False
         self._default_headers = {
@@ -137,9 +150,16 @@ class BilibiliParser(BaseVideoParser):
         if not self.cookie_runtime_enabled:
             return ""
 
-        cookie_header = await self.auth_runtime.get_cookie_header_for_request(
-            session
-        )
+        timeout_seconds = self.admin_reply_timeout_minutes * 60
+        if self.auth_runtime.local_debug_mode:
+            cookie_header = await self.auth_runtime.try_local_blocking_assist_once(
+                session,
+                timeout_seconds=timeout_seconds
+            )
+        else:
+            cookie_header = await self.auth_runtime.get_cookie_header_for_request(
+                session
+            )
         if cookie_header:
             return cookie_header
 
@@ -2779,6 +2799,19 @@ class BilibiliParser(BaseVideoParser):
                 referer=page_url,
                 cookie_header=cookie_header
             )
+        if self.comment_screenshot_enabled and enable_hot_comments:
+            try:
+                from ...constants import Config
+                cache_dir = Path(Config.CACHE_DIR) if hasattr(Config, 'CACHE_DIR') else Path.cwd() / 'cache'
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                screenshot_path = cache_dir / f'comment_{hash(page_url)}.png'
+                if await self._capture_comment_screenshot(page_url, str(screenshot_path), cookie_header):
+                    if 'image_urls' not in result:
+                        result['image_urls'] = []
+                    result['image_urls'].append(str(screenshot_path))
+                    logger.info(f"[{self.name}] 已截取评论区: {screenshot_path}")
+            except Exception as e:
+                logger.warning(f"[{self.name}] 评论区截图失败: {e}")
         logger.debug(f"[{self.name}] parse_bilibili_minimal: 解析完成 {url}, title={result.get('title', '')[:50]}")
         return result
 
