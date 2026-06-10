@@ -228,6 +228,7 @@ class BilibiliEnhancedConfig:
     enable_admin_assist: bool = False
     admin_reply_timeout_minutes: int = 1440
     admin_request_cooldown_minutes: int = 1440
+    comment_screenshot: bool = False
 
 
 @dataclass
