@@ -17,6 +17,7 @@ from .core.downloader import DownloadManager
 from .core.storage import (
     cleanup_files,
     cleanup_marked_in,
+    ParseRecordManager,
     register_files_with_token_service,
 )
 from .core.constants import Config
@@ -35,7 +36,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "6.2.1"
+    "6.3.0"
 )
 class VideoParserPlugin(Star):
 
@@ -65,10 +66,19 @@ class VideoParserPlugin(Star):
             cache_dir=cfg.download.cache_dir,
             cache_dir_available=cfg.download.cache_dir_available,
             max_concurrent_downloads=cfg.download.max_concurrent_downloads,
+            video_cover_only=cfg.message.video_cover_only,
         )
 
         self.message_sender = MessageSender()
         self._cleanup_tasks: set[asyncio.Task] = set()
+        rate_limit = cfg.parse_rate_limit
+        self.parse_record_manager = ParseRecordManager(
+            record_file=rate_limit.record_file,
+            same_link_max_count=rate_limit.same_link.max_count,
+            same_link_window_seconds=rate_limit.same_link.window_seconds,
+            same_user_max_count=rate_limit.same_user.max_count,
+            same_user_window_seconds=rate_limit.same_user.window_seconds,
+        )
         self.admin_cookie_assist = BilibiliAdminCookieAssistManager(
             context=self.context,
             admin_id=cfg.permission.admin_id,
@@ -389,6 +399,27 @@ class VideoParserPlugin(Star):
         if not cfg.trigger.should_parse(original_message_text):
             return
 
+        rate_limit_user_key = ParseRecordManager.build_user_key(
+            event.get_platform_name(),
+            sender_id,
+        )
+        links_with_parser, blocked_links = (
+            self.parse_record_manager.filter_links(
+                links_with_parser,
+                user_key=rate_limit_user_key,
+            )
+        )
+        if blocked_links and cfg.admin.debug_mode:
+            for blocked in blocked_links:
+                self.logger.debug(
+                    f"解析频率限制跳过链接: {blocked.link}, "
+                    f"解析器={blocked.parser_name}, 原因={blocked.reason}"
+                )
+        if not links_with_parser:
+            if cfg.admin.debug_mode:
+                self.logger.debug("所有可解析链接均被解析频率限制拦截")
+            return
+
         if cfg.admin.debug_mode:
             self.logger.debug(
                 f"提取到 {len(links_with_parser)} 个可解析链接: "
@@ -404,6 +435,7 @@ class VideoParserPlugin(Star):
                 session,
                 links_with_parser=links_with_parser
             )
+            self.parse_record_manager.record_metadata_links(metadata_list)
             self._trigger_bilibili_cookie_assist_if_needed()
             if not metadata_list:
                 if cfg.admin.debug_mode:

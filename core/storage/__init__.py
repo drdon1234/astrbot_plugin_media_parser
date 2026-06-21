@@ -5,6 +5,7 @@ from .cache_marker import (
     stamp_subdir,
 )
 from .file_token import register_files_with_token_service
+from .parse_record import ParseRecordManager
 
 __all__ = [
     "cleanup_file",
@@ -13,4 +14,5 @@ __all__ = [
     "cleanup_marked_in",
     "stamp_subdir",
     "register_files_with_token_service",
+    "ParseRecordManager",
 ]

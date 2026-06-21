@@ -497,10 +497,20 @@ class KuaishouParser(BaseVideoParser):
             if isinstance(item, dict) and item.get('url')
             and '.mp4' in item['url']
         ]
+        cover_urls = photo_data.get('coverUrls') or []
+        cover_url_list = [
+            item.get('url') for item in cover_urls
+            if isinstance(item, dict) and item.get('url')
+        ]
 
         if video_urls:
             video_url = self._min_mp4(video_urls[0])
-            return {'type': 'video', 'video_url': video_url, 'photo': photo_data}
+            return {
+                'type': 'video',
+                'video_url': video_url,
+                'video_cover_urls': [cover_url_list] if cover_url_list else [],
+                'photo': photo_data,
+            }
 
         ext_params = photo_data.get('ext_params')
         if isinstance(ext_params, str):
@@ -517,12 +527,6 @@ class KuaishouParser(BaseVideoParser):
                     atlas_data = json.loads(atlas_data)
                 except (json.JSONDecodeError, ValueError):
                     atlas_data = None
-
-        cover_urls = photo_data.get('coverUrls') or []
-        cover_url_list = [
-            item.get('url') for item in cover_urls
-            if isinstance(item, dict) and item.get('url')
-        ]
 
         if single_data:
             cdn_list = single_data.get('cdnList') or []
@@ -676,6 +680,7 @@ class KuaishouParser(BaseVideoParser):
                         "desc": "",
                         "timestamp": self._extract_timestamp_from_photo(photo, vurl),
                         "video_urls": [[vurl]],
+                        "video_cover_urls": ssr.get('video_cover_urls', []),
                         "image_urls": [],
                         "image_headers": image_headers,
                         "video_headers": video_headers,

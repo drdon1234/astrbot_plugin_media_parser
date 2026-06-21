@@ -22,11 +22,17 @@ class MediaMetadata(TypedDict, total=False):
     translation_target_language: str
 
     video_urls: List[List[str]]
+    video_cover_urls: List[List[str]]
+    video_cover_url_lists: List[List[str]]
     image_urls: List[List[str]]
     image_headers: Dict[str, str]
     video_headers: Dict[str, str]
     video_force_download: bool
     video_force_downloads: List[bool]
+    video_cover_only: bool
+    video_cover_source_count: int
+    video_cover_fallbacks: List[Dict[str, Any]]
+    video_cover_fallback_indexes: List[int]
 
     access_status: str
     restriction_type: str

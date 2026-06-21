@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v6.2.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v6.3.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -34,7 +34,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 </tr>
 <tr>
 <td class="center"><strong>抖音</strong></td>
-<td>短链（<code>v.douyin.com/...</code>）<br>视频链接（<code>www.douyin.com/video/...</code>）<br>图集链接（<code>www.douyin.com/note/...</code>）</td>
+<td>短链（<code>v.douyin.com/...</code>）<br>视频链接（<code>www.douyin.com/video/...</code>）<br>图集/多分段链接（<code>www.douyin.com/note/...</code>、<code>www.douyin.com/slides/...</code>）</td>
 <td class="center">视频 / 图片 / 文本</td>
 </tr>
 <tr>
@@ -133,7 +133,11 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 
 `按条件打包阈值` 位于 `消息与展示 → 消息打包 → 按条件打包阈值`，仅在选择 `按条件打包` 时生效；阈值填 `0` 表示不按该项触发。节点总数包含文本、图片和视频节点。
 
+`消息与展示 → 媒体展示 → 视频仅发送封面` 开启后，插件不会发送视频节点，会把每个视频改为图片节点发送：解析结果自带封面时直接使用封面；没有封面时会尝试用 ffmpeg 截取视频第一帧作为封面。无封面截帧依赖缓存目录可用且运行环境存在 ffmpeg。
+
 `消息与展示 → 文本元数据 → 引用用户消息` 可在不打包时让文本元数据节点引用对应的用户消息；媒体节点和打包消息不引用。
+
+`解析频率限制` 默认关闭。可分别设置 `同视频链接限制` 和 `同用户限制` 的 `最多解析次数` 与 `时间窗秒数`；次数为 `0` 表示不限制。链接计数会使用清洗后的标准链接，过滤分享者、来源和追踪参数；短链解析完成后也会记录平台返回的最终链接别名。解析记录会持久化到插件运行时目录，并按已启用限制中的最大时间窗自动裁剪，避免记录无限增长。
 
 ---
 

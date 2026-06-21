@@ -150,6 +150,7 @@ class MessageConfig:
     pack_video_threshold: int = 2
     pack_node_threshold: int = 5
     quote_user_message: bool = False
+    video_cover_only: bool = False
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
     hot_comment_count: int = 0
@@ -263,6 +264,40 @@ class DownloadConfig:
 
 
 @dataclass
+class ParseRateLimitRuleConfig:
+    max_count: int = 0
+    window_seconds: int = 3600
+
+    @property
+    def enabled(self) -> bool:
+        return self.max_count > 0 and self.window_seconds > 0
+
+
+@dataclass
+class ParseRateLimitConfig:
+    same_link: ParseRateLimitRuleConfig = field(
+        default_factory=ParseRateLimitRuleConfig
+    )
+    same_user: ParseRateLimitRuleConfig = field(
+        default_factory=ParseRateLimitRuleConfig
+    )
+    record_file: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self.same_link.enabled or self.same_user.enabled
+
+    @property
+    def retention_seconds(self) -> int:
+        windows = [
+            rule.window_seconds
+            for rule in (self.same_link, self.same_user)
+            if rule.enabled
+        ]
+        return max(windows) if windows else 0
+
+
+@dataclass
 class ProxyConfig:
     address: str = ""
     xiaoheihe_use_video_proxy: bool = True
@@ -368,6 +403,7 @@ class ConfigManager:
         opening = message_raw.get("opening", {})
         packing = message_raw.get("packing", {})
         text_metadata = message_raw.get("text_metadata", {})
+        media_display = message_raw.get("media_display", {})
         hot_comments = message_raw.get("hot_comments", {})
         if not isinstance(opening, dict):
             opening = {}
@@ -375,6 +411,8 @@ class ConfigManager:
             packing = {}
         if not isinstance(text_metadata, dict):
             text_metadata = {}
+        if not isinstance(media_display, dict):
+            media_display = {}
         pack_thresholds = packing.get("thresholds", {})
         if not isinstance(pack_thresholds, dict):
             pack_thresholds = {}
@@ -409,6 +447,9 @@ class ConfigManager:
             ),
             quote_user_message=bool(
                 text_metadata.get("quote_user_message", False)
+            ),
+            video_cover_only=bool(
+                media_display.get("video_cover_only", False)
             ),
             opening_enabled=opening.get("enable", True),
             opening_content=opening.get(
@@ -567,6 +608,23 @@ class ConfigManager:
             cache_dir=cache_dir,
             cache_dir_available=cache_dir_available,
             max_concurrent_downloads=max_concurrent,
+        )
+
+        # --- parse_rate_limit ---
+        rate_limit_raw = config.get("parse_rate_limit", {})
+        if not isinstance(rate_limit_raw, dict):
+            rate_limit_raw = {}
+        self.parse_rate_limit = ParseRateLimitConfig(
+            same_link=self._parse_rate_limit_rule(
+                rate_limit_raw.get("same_link", {})
+            ),
+            same_user=self._parse_rate_limit_rule(
+                rate_limit_raw.get("same_user", {})
+            ),
+            record_file=os.path.join(
+                Config.build_runtime_dir(cache_dir, "parse_records"),
+                "records.json",
+            ) if cache_dir else "",
         )
 
         # --- bilibili_enhanced ---
@@ -814,6 +872,18 @@ class ConfigManager:
             return max(0, int(value))
         except (TypeError, ValueError):
             return max(0, int(default))
+
+    @classmethod
+    def _parse_rate_limit_rule(cls, value) -> ParseRateLimitRuleConfig:
+        if not isinstance(value, dict):
+            value = {}
+        return ParseRateLimitRuleConfig(
+            max_count=cls._parse_non_negative_int(value.get("max_count", 0), 0),
+            window_seconds=cls._parse_non_negative_int(
+                value.get("window_seconds", 3600),
+                3600,
+            ),
+        )
 
     @staticmethod
     def _normalize_id_list(values) -> List[str]:

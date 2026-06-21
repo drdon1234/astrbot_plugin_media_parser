@@ -142,6 +142,51 @@
             }
         }
     },
+    "parse_rate_limit": {
+        "description": "解析频率限制",
+        "type": "object",
+        "hint": "0 = 不限制；记录会持久化到插件运行时目录，并按启用限制中的最大时间窗自动裁剪，避免无限增长。",
+        "items": {
+            "same_link": {
+                "description": "同视频链接限制",
+                "type": "object",
+                "hint": "链接会先清洗为标准链接，过滤分享者、来源和追踪参数后再计数。",
+                "items": {
+                    "max_count": {
+                        "description": "最多解析次数",
+                        "type": "int",
+                        "hint": "同一标准链接在时间窗内最多解析的次数；0 = 不限制",
+                        "default": 0
+                    },
+                    "window_seconds": {
+                        "description": "时间窗秒数",
+                        "type": "int",
+                        "hint": "只统计该秒数内的解析记录；也用于自动裁剪持久化记录",
+                        "default": 3600
+                    }
+                }
+            },
+            "same_user": {
+                "description": "同用户限制",
+                "type": "object",
+                "hint": "按消息发送者 ID 计数；一条消息内解析多个链接会分别计数。",
+                "items": {
+                    "max_count": {
+                        "description": "最多解析次数",
+                        "type": "int",
+                        "hint": "同一用户在时间窗内最多解析的链接数；0 = 不限制",
+                        "default": 0
+                    },
+                    "window_seconds": {
+                        "description": "时间窗秒数",
+                        "type": "int",
+                        "hint": "只统计该秒数内的解析记录；也用于自动裁剪持久化记录",
+                        "default": 3600
+                    }
+                }
+            }
+        }
+    },
     "message": {
         "description": "消息与展示",
         "type": "object",
@@ -201,6 +246,18 @@
                                 "default": 5
                             }
                         }
+                    }
+                }
+            },
+            "media_display": {
+                "description": "媒体展示",
+                "type": "object",
+                "items": {
+                    "video_cover_only": {
+                        "description": "视频仅发送封面",
+                        "type": "bool",
+                        "hint": "开启后不发送视频节点；每个视频会改为发送封面图片。解析结果有封面时直接使用封面，否则尝试截取视频第一帧。",
+                        "default": false
                     }
                 }
             },

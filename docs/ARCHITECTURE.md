@@ -11,7 +11,7 @@
 当前支持的平台解析器包括：
 
 - B站：支持 视频 / 图片 / 文本 / 热评；覆盖普通视频、番剧、动态 / opus，支持 Cookie 增强和扫码登录运行时。
-- 抖音：支持 视频 / 图片 / 文本；覆盖短链、视频和图集分享页。
+- 抖音：支持 视频 / 图片 / 文本；覆盖短链、视频、图集和 slides 多分段分享页。
 - TikTok：支持 视频 / 图片 / 文本；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
 - 快手：支持 视频 / 图片 / 文本；覆盖短链和作品分享页。
 - 微博：支持 视频 / 图片 / 文本 / 热评；覆盖桌面详情、移动详情和视频组件页。
@@ -55,7 +55,8 @@ astrbot_plugin_media_parser/
     │       ├── range_downloader.py  # range: 前缀下载封装，失败降级普通下载
     │       ├── dash.py              # DASH 音视频下载与 ffmpeg 合并
     │       ├── m3u8.py              # M3U8 分片下载、拼接、音视频合并
-    │       └── image.py             # 图片下载与可选 ffmpeg 转 PNG
+    │       ├── image.py             # 图片下载与可选 ffmpeg 转 PNG
+    │       └── video_cover.py       # 视频仅封面模式的首帧截取
     ├── message_adapter/
     │   ├── node_builder.py          # Plain/Image/Video 节点构建
     │   └── sender.py                # 打包/非打包发送
@@ -67,7 +68,8 @@ astrbot_plugin_media_parser/
     │   ├── __init__.py              # 导出清理、标记、文件 Token 注册能力
     │   ├── file_cleaner.py          # 文件与空父目录清理
     │   ├── cache_marker.py          # .astrbot_media_parser 标记与安全清理
-    │   └── file_token.py            # AstrBot file_token_service 集成
+    │   ├── file_token.py            # AstrBot file_token_service 集成
+    │   └── parse_record.py          # 解析频率限制与持久化记录
     └── interaction/
         ├── base.py                  # AdminAssistManager 基类
         └── platform/bilibili/
@@ -129,10 +131,10 @@ cache/runtime_manager/bilibili/cookie.json
 
 `VideoParserPlugin` 负责：
 
-- 初始化 `ConfigManager`、`ParserManager`、`DownloadManager`、`MessageSender`、`BilibiliAdminCookieAssistManager`。
+- 初始化 `ConfigManager`、`ParserManager`、`DownloadManager`、`MessageSender`、`ParseRecordManager`、`BilibiliAdminCookieAssistManager`。
 - 监听所有消息事件。
 - 执行权限检查、触发判断、卡片 URL 和回复 URL 提取。
-- 协调解析、下载、文件 Token 注册、节点构建、发送与清理。
+- 协调解析限流、解析、下载、文件 Token 注册、节点构建、发送与清理。
 - 在 `terminate()` 中关闭延迟清理任务、管理员交互任务、下载任务，并清理当前缓存根目录下带标记的媒体子目录。
 
 管理员私聊发送 `admin.clean_cache_keyword`，且发送者为 `permissions.admin_id` 时，会触发 `cleanup_marked_in(cache_dir)` 主动清理媒体缓存。
@@ -142,9 +144,10 @@ cache/runtime_manager/bilibili/cookie.json
 配置被归一为 dataclass 分组：
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
-- `MessageConfig`：打包模式、条件打包阈值、文本元数据引用开关、开场语、各平台输出模式、热评开关。
+- `MessageConfig`：打包模式、条件打包阈值、视频仅封面模式、文本元数据引用开关、开场语、各平台输出模式、热评开关。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
+- `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
 - `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter/X 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
@@ -198,6 +201,8 @@ image_urls: List[List[str]]
 file_paths: List[Optional[str]]
 ```
 
+当 `message.media_display.video_cover_only=true` 时，下载器会先把视频媒体转换为图片媒体：解析结果提供 `video_cover_urls` 等封面字段时直接按图片下载封面；没有封面字段时创建本地 `video_cover` 任务，由 `handler/video_cover.py` 调用 ffmpeg 从视频 URL 截取第一帧。
+
 `file_paths` 索引固定为：
 
 ```text
@@ -234,7 +239,7 @@ video_count .. video_count + image_count   图片
 
 ### 2.6 存储与清理 `core/storage/`
 
-当前实现使用 `cache_marker.py`，没有持久化的 `CacheRegistry` 文件。
+当前实现使用 `cache_marker.py` 管理媒体缓存目录标记，没有持久化的 `CacheRegistry` 文件。解析频率记录由 `parse_record.py` 以 JSON 写入 `cache/runtime_manager/parse_records/records.json`，并按启用限制中的最大时间窗裁剪旧记录。
 
 - `stamp_subdir(directory)` 在媒体缓存子目录中写 `.astrbot_media_parser`。
 - `cleanup_marked_in(root_dir)` 只删除缓存根目录的直接子目录中带标记的条目，不删除根目录，不触碰未标记目录。
@@ -304,6 +309,10 @@ ParserManager.extract_all_links()
 TriggerConfig.should_parse(original_message_text)
   ├─ false -> 返回
   └─ true  -> 继续
+  ↓
+ParseRecordManager.filter_links()
+  ├─ 同标准链接或同用户超出时间窗限制 -> 跳过对应链接
+  └─ 允许解析 -> 写入本次解析尝试记录
   ↓
 创建 aiohttp.ClientSession
   ↓

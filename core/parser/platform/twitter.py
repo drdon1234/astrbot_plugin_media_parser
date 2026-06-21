@@ -614,12 +614,15 @@ class TwitterParser(BaseVideoParser):
             timestamp = media_info.get('timestamp', '')
             
             video_urls = []
+            video_cover_urls = []
             image_urls = []
             
             for video_info in videos:
                 video_url = video_info.get('url')
                 if video_url:
                     video_urls.append(video_url)
+                    thumbnail = video_info.get('thumbnail')
+                    video_cover_urls.append([thumbnail] if thumbnail else [])
             
             image_urls = [img for img in images if img]
             
@@ -650,6 +653,7 @@ class TwitterParser(BaseVideoParser):
                 result_dict = {
                     **metadata_base,
                     "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
+                    "video_cover_urls": video_cover_urls,
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": True,
                     "video_force_download": True,
@@ -660,6 +664,7 @@ class TwitterParser(BaseVideoParser):
                 result_dict = {
                     **metadata_base,
                     "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
+                    "video_cover_urls": video_cover_urls,
                     "image_urls": [],
                     "is_twitter_video": True,
                     "video_force_download": True,
@@ -670,6 +675,7 @@ class TwitterParser(BaseVideoParser):
                 result_dict = {
                     **metadata_base,
                     "video_urls": [],
+                    "video_cover_urls": [],
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": False,
                 }
