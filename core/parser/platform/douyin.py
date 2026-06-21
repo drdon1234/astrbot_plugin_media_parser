@@ -66,7 +66,7 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
         host = cls._get_host(url)
         if host == "v.douyin.com":
             return True
-        if re.search(r"/(?:share/)?(?:video|note)/\d+", path):
+        if re.search(r"/(?:share/)?(?:video|note|slides)/\d+", path):
             return True
         if re.search(r"\d{19}", path):
             return True
@@ -101,6 +101,10 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
                 lambda match, url: f"douyin:note:{match.group(1)}",
             ),
             (
+                r"https?://(?:www\.)?douyin\.com/slides/(\d+)[^\s<>\"'()]*",
+                lambda match, url: f"douyin:slides:{match.group(1)}",
+            ),
+            (
                 r"https?://(?:www\.)?douyin\.com/video/(\d+)[^\s<>\"'()]*",
                 lambda match, url: f"douyin:video:{match.group(1)}",
             ),
@@ -133,14 +137,389 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
 
         return result_links
 
+    @staticmethod
+    def _build_douyin_play_url(video_uri: str) -> str:
+        if video_uri.endswith(".mp3") or video_uri.startswith(
+            ("http://", "https://")
+        ):
+            return video_uri
+        return (
+            "https://www.douyin.com/aweme/v1/play/"
+            f"?video_id={video_uri}"
+        )
+
+    @staticmethod
+    def _looks_like_video_url(url: str) -> bool:
+        normalized = str(url or "").lower()
+        if not normalized.startswith(("http://", "https://")):
+            return False
+        return any(
+            marker in normalized
+            for marker in (
+                ".mp4",
+                ".m3u8",
+                "mime_type=video",
+                "video_id=",
+                "/aweme/v1/play/",
+                "/video/",
+                "videoplayback",
+                "douyinvod",
+            )
+        )
+
+    def _extract_douyin_play_addr_urls(self, play_addr: Any) -> List[str]:
+        urls: List[str] = []
+        if not play_addr:
+            return urls
+
+        if isinstance(play_addr, dict):
+            video_uri = str(play_addr.get("uri") or "").strip()
+            if video_uri:
+                self._extend_unique_urls(
+                    urls,
+                    [self._build_douyin_play_url(video_uri)]
+                )
+            self._extend_unique_urls(
+                urls,
+                self._extract_nested_http_urls(play_addr.get("url_list"))
+            )
+            self._extend_unique_urls(
+                urls,
+                self._extract_nested_http_urls(play_addr.get("urlList"))
+            )
+        else:
+            self._extend_unique_urls(
+                urls,
+                self._extract_nested_http_urls(play_addr)
+            )
+
+        return [
+            url
+            for url in urls
+            if self._looks_like_video_url(url) or "video_id=" in url
+        ]
+
+    def _extract_douyin_video_url_list(
+        self,
+        video_info: Any
+    ) -> List[str]:
+        """从标准 video 结构中提取一个视频媒体的备用 URL 列表。"""
+        if not isinstance(video_info, dict):
+            return []
+
+        urls: List[str] = []
+        for key in (
+            "play_addr",
+            "playAddr",
+            "PlayAddr",
+            "PlayAddrStruct",
+            "download_addr",
+            "downloadAddr",
+            "play_addr_h264",
+            "play_addr_265",
+        ):
+            self._extend_unique_urls(
+                urls,
+                self._extract_douyin_play_addr_urls(video_info.get(key))
+            )
+
+        for bitrate_info in video_info.get("bit_rate") or []:
+            if not isinstance(bitrate_info, dict):
+                continue
+            for key in ("play_addr", "playAddr", "PlayAddr"):
+                self._extend_unique_urls(
+                    urls,
+                    self._extract_douyin_play_addr_urls(
+                        bitrate_info.get(key)
+                    )
+                )
+
+        return urls
+
+    def _extract_douyin_slide_video_url_list(self, image_item: Any) -> List[str]:
+        """从 slides/images 条目中提取内嵌视频段 URL。"""
+        if not isinstance(image_item, dict):
+            return []
+
+        video_roots = []
+        for key in (
+            "video",
+            "video_info",
+            "videoInfo",
+            "video_clip",
+            "videoClip",
+            "clip",
+            "clip_info",
+            "clipInfo",
+        ):
+            value = image_item.get(key)
+            if value:
+                video_roots.append(value)
+
+        if any(
+            key in image_item
+            for key in (
+                "play_addr",
+                "playAddr",
+                "download_addr",
+                "downloadAddr",
+                "bit_rate",
+            )
+        ):
+            video_roots.append(image_item)
+
+        urls: List[str] = []
+        for video_root in video_roots:
+            if isinstance(video_root, dict):
+                self._extend_unique_urls(
+                    urls,
+                    self._extract_douyin_video_url_list(video_root)
+                )
+            else:
+                candidates = self._extract_nested_http_urls(video_root)
+                self._extend_unique_urls(
+                    urls,
+                    [
+                        candidate
+                        for candidate in candidates
+                        if self._looks_like_video_url(candidate)
+                    ]
+                )
+        return urls
+
+    def _extract_douyin_image_url_list(self, image_item: Any) -> List[str]:
+        """从图片条目中提取图片 URL，避免把视频 URL 误收进图片。"""
+        urls: List[str] = []
+        if isinstance(image_item, dict):
+            for key in (
+                "url_list",
+                "urlList",
+                "UrlList",
+                "urls",
+                "url",
+                "image",
+                "imageURL",
+                "imageUrl",
+                "displayImage",
+                "originImage",
+                "downloadImage",
+                "ownerWatermarkImage",
+                "ownerWatermarkUrl",
+                "cover",
+                "origin_cover",
+            ):
+                if key in image_item:
+                    self._extend_unique_urls(
+                        urls,
+                        self._extract_nested_http_urls(image_item.get(key))
+                    )
+        else:
+            self._extend_unique_urls(
+                urls,
+                self._extract_nested_http_urls(image_item)
+            )
+
+        return [
+            url
+            for url in urls
+            if not self._looks_like_video_url(url)
+        ]
+
+    def _extract_douyin_video_cover_url_list(
+        self,
+        video_info: Any
+    ) -> List[str]:
+        """从 video 结构中提取封面 URL。"""
+        if not isinstance(video_info, dict):
+            return []
+
+        urls: List[str] = []
+        for key in (
+            "cover",
+            "cover_url",
+            "coverUrl",
+            "origin_cover",
+            "originCover",
+            "dynamic_cover",
+            "dynamicCover",
+            "animated_cover",
+            "animatedCover",
+            "poster",
+        ):
+            if key in video_info:
+                self._extend_unique_urls(
+                    urls,
+                    self._extract_nested_http_urls(video_info.get(key))
+                )
+
+        return [
+            url
+            for url in urls
+            if not self._looks_like_video_url(url)
+        ]
+
+    def _extract_douyin_slide_cover_url_list(
+        self,
+        image_item: Any
+    ) -> List[str]:
+        """从 slides/images 视频条目中提取封面 URL。"""
+        if not isinstance(image_item, dict):
+            return []
+
+        urls = self._extract_douyin_image_url_list(image_item)
+        for key in (
+            "video",
+            "video_info",
+            "videoInfo",
+            "video_clip",
+            "videoClip",
+            "clip",
+            "clip_info",
+            "clipInfo",
+        ):
+            self._extend_unique_urls(
+                urls,
+                self._extract_douyin_video_cover_url_list(image_item.get(key))
+            )
+        return urls
+
+    def _extract_douyin_media_url_lists(
+        self,
+        item_info: Dict[str, Any]
+    ) -> tuple[List[List[str]], List[List[str]], List[List[str]]]:
+        """提取视频段和图片段；视频存在时不再把条目降级成图集。"""
+        video_url_lists: List[List[str]] = []
+        image_url_lists: List[List[str]] = []
+        video_cover_url_lists: List[List[str]] = []
+
+        top_level_video_urls = self._extract_douyin_video_url_list(
+            item_info.get("video")
+        )
+        if top_level_video_urls:
+            video_url_lists.append(top_level_video_urls)
+            video_cover_url_lists.append(
+                self._extract_douyin_video_cover_url_list(item_info.get("video"))
+            )
+            return video_url_lists, image_url_lists, video_cover_url_lists
+
+        for image_item in item_info.get("images") or []:
+            slide_video_urls = self._extract_douyin_slide_video_url_list(
+                image_item
+            )
+            if slide_video_urls:
+                video_url_lists.append(slide_video_urls)
+                video_cover_url_lists.append(
+                    self._extract_douyin_slide_cover_url_list(image_item)
+                )
+                continue
+
+            image_urls = self._extract_douyin_image_url_list(image_item)
+            if image_urls:
+                image_url_lists.append(image_urls)
+
+        return video_url_lists, image_url_lists, video_cover_url_lists
+
+    def _build_douyin_result_from_item(
+        self,
+        item_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        author_info = item_info.get("author", {})
+        nickname = author_info.get("nickname", "")
+        unique_id = author_info.get("unique_id", "")
+        (
+            video_url_lists,
+            image_url_lists,
+            video_cover_url_lists,
+        ) = self._extract_douyin_media_url_lists(item_info)
+
+        return {
+            "title": item_info.get("desc", ""),
+            "author": self._build_douyin_author(nickname, unique_id),
+            "timestamp": self._format_timestamp(item_info.get("create_time")),
+            "video_url_lists": video_url_lists,
+            "video_url_list": video_url_lists[0] if video_url_lists else [],
+            "video_cover_urls": video_cover_url_lists,
+            "image_url_lists": image_url_lists,
+            "is_gallery": bool(image_url_lists and not video_url_lists),
+            "user_agent": DOUYIN_USER_AGENT,
+        }
+
+    @staticmethod
+    def _extract_douyin_item_from_info(
+        video_info: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        for key in ("item_list", "aweme_details", "aweme_list"):
+            items = video_info.get(key)
+            if isinstance(items, list) and items:
+                for item in items:
+                    if isinstance(item, dict) and item:
+                        return item
+
+        item = video_info.get("aweme_detail")
+        if isinstance(item, dict) and item:
+            return item
+
+        return None
+
+    async def fetch_douyin_slides_info(
+        self,
+        session: aiohttp.ClientSession,
+        item_id: str,
+        referer: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """通过前端 slidesinfo 接口获取图文/视频混排作品。"""
+        headers = dict(self.douyin_headers)
+        headers.update({
+            "Accept": "application/json, text/plain, */*",
+            "Referer": referer or DOUYIN_REFERER,
+        })
+        try:
+            async with session.get(
+                "https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/",
+                params={
+                    "aweme_ids": f"[{item_id}]",
+                    "request_source": "200",
+                },
+                headers=headers,
+            ) as response:
+                if response.status >= 400:
+                    return None
+                data = await response.json(content_type=None)
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        item_info = self._extract_douyin_item_from_info(data)
+        if not item_info:
+            return None
+
+        return self._build_douyin_result_from_item(item_info)
+
     async def fetch_douyin_info(
         self,
         session: aiohttp.ClientSession,
         item_id: str,
-        is_note: bool = False
+        is_note: bool = False,
+        is_slides: bool = False,
+        referer: str = ""
     ) -> Optional[Dict[str, Any]]:
         """获取抖音视频 / 笔记信息。"""
-        if is_note:
+        if is_slides:
+            result = await self.fetch_douyin_slides_info(
+                session,
+                item_id,
+                referer=referer
+            )
+            if result:
+                return result
+            url = f"https://www.iesdouyin.com/share/slides/{item_id}/"
+        elif is_note:
             url = f"https://www.iesdouyin.com/share/note/{item_id}/"
         else:
             url = f"https://www.iesdouyin.com/share/video/{item_id}/"
@@ -170,52 +549,17 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
                 if isinstance(value, dict) and "noteDetailRes" in value:
                     video_info = value["noteDetailRes"]
                     break
+                if isinstance(value, dict) and "slidesInfoRes" in value:
+                    video_info = value["slidesInfoRes"]
+                    break
 
-            if not video_info or not video_info.get("item_list"):
+            if not video_info:
                 return None
 
-            item_info = video_info["item_list"][0]
-            author_info = item_info.get("author", {})
-            nickname = author_info.get("nickname", "")
-            unique_id = author_info.get("unique_id", "")
-
-            image_url_lists = []
-            for image in item_info.get("images") or []:
-                urls: List[str] = []
-                self._extend_unique_urls(
-                    urls,
-                    self._extract_nested_http_urls(image)
-                )
-                if urls:
-                    image_url_lists.append(urls)
-
-            video_url_list: List[str] = []
-            if not image_url_lists and "video" in item_info:
-                video_info_item = item_info["video"]
-                play_addr = video_info_item.get("play_addr", {})
-                video_uri = play_addr.get("uri")
-                if isinstance(video_uri, str) and video_uri:
-                    if video_uri.endswith(".mp3"):
-                        video_url_list = [video_uri]
-                    elif video_uri.startswith("https://"):
-                        video_url_list = [video_uri]
-                    else:
-                        video_url_list = [
-                            (
-                                "https://www.douyin.com/aweme/v1/play/"
-                                f"?video_id={video_uri}"
-                            )
-                        ]
-
-            return {
-                "title": item_info.get("desc", ""),
-                "author": self._build_douyin_author(nickname, unique_id),
-                "timestamp": self._format_timestamp(item_info.get("create_time")),
-                "video_url_list": video_url_list,
-                "image_url_lists": image_url_lists,
-                "is_gallery": bool(image_url_lists),
-                "user_agent": DOUYIN_USER_AGENT,
-            }
+            item_info = self._extract_douyin_item_from_info(video_info)
+            if not item_info:
+                return None
+            return self._build_douyin_result_from_item(item_info)
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return None
 
@@ -271,11 +615,12 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
         redirected_url: str
     ) -> Dict[str, Any]:
         is_note = "/note/" in redirected_url or "/note/" in original_url
-        if is_note:
-            logger.debug(f"[{self.name}] parse: 检测到抖音笔记类型")
-            note_match = re.search(r"/note/(\d+)", redirected_url)
+        is_slides = "/slides/" in redirected_url or "/slides/" in original_url
+        if is_note or is_slides:
+            logger.debug(f"[{self.name}] parse: 检测到抖音笔记/图文类型")
+            note_match = re.search(r"/(?:note|slides)/(\d+)", redirected_url)
             if not note_match:
-                note_match = re.search(r"/note/(\d+)", original_url)
+                note_match = re.search(r"/(?:note|slides)/(\d+)", original_url)
             if not note_match:
                 raise RuntimeError(f"无法解析此URL: {original_url}")
 
@@ -283,9 +628,15 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
             result = await self.fetch_douyin_info(
                 session,
                 note_id,
-                is_note=True
+                is_note=is_note and not is_slides,
+                is_slides=is_slides,
+                referer=redirected_url
             )
-            display_url = f"https://www.douyin.com/note/{note_id}"
+            display_url = (
+                f"https://www.douyin.com/slides/{note_id}"
+                if is_slides else
+                f"https://www.douyin.com/note/{note_id}"
+            )
         else:
             video_match = re.search(r"/video/(\d+)", redirected_url)
             if video_match:
@@ -355,7 +706,16 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
                 for url_list in result.get("image_url_lists", [])
                 if url_list
             ]
-            video_url_list = result.get("video_url_list") or []
+            video_url_lists = [
+                url_list
+                for url_list in result.get("video_url_lists", [])
+                if url_list
+            ]
+            video_cover_urls = result.get("video_cover_urls") or []
+            if not video_url_lists:
+                video_url_list = result.get("video_url_list") or []
+                if video_url_list:
+                    video_url_lists = [video_url_list]
             title = result.get("title", "")
             author = result.get("author", "")
             timestamp = result.get("timestamp", "")
@@ -363,7 +723,7 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
             user_agent = result.get("user_agent", DOUYIN_USER_AGENT)
             headers = self._build_result_headers(user_agent)
 
-            if is_gallery:
+            if is_gallery and not video_url_lists:
                 logger.debug(
                     f"[{self.name}] parse: 检测到图片集，共"
                     f"{len(image_url_lists)}张图片"
@@ -377,12 +737,13 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
                     "platform": "douyin",
                     "parser_name": self.name,
                     "video_urls": [],
+                    "video_cover_urls": [],
                     "image_urls": image_url_lists,
                     "image_headers": headers["image_headers"],
                     "video_headers": headers["video_headers"],
                 }
 
-            if not video_url_list:
+            if not video_url_lists:
                 logger.debug(f"[{self.name}] parse: 无法获取视频URL {url}")
                 raise RuntimeError(f"无法获取视频URL: {url}")
 
@@ -394,8 +755,9 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
                 "timestamp": timestamp,
                 "platform": "douyin",
                 "parser_name": self.name,
-                "video_urls": [video_url_list],
-                "image_urls": [],
+                "video_urls": video_url_lists,
+                "video_cover_urls": video_cover_urls,
+                "image_urls": image_url_lists,
                 "image_headers": headers["image_headers"],
                 "video_headers": headers["video_headers"],
             }

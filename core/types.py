@@ -15,16 +15,24 @@ class MediaMetadata(TypedDict, total=False):
     title: str
     author: str
     desc: str
+    _translated_fields: Dict[str, str]
     timestamp: str
     platform: str
     parser_name: str
+    translation_target_language: str
 
     video_urls: List[List[str]]
+    video_cover_urls: List[List[str]]
+    video_cover_url_lists: List[List[str]]
     image_urls: List[List[str]]
     image_headers: Dict[str, str]
     video_headers: Dict[str, str]
     video_force_download: bool
     video_force_downloads: List[bool]
+    video_cover_only: bool
+    video_cover_source_count: int
+    video_cover_fallbacks: List[Dict[str, Any]]
+    video_cover_fallback_indexes: List[int]
 
     access_status: str
     restriction_type: str
@@ -74,11 +82,13 @@ class MediaMetadata(TypedDict, total=False):
 
 class LinkBuildMeta(TypedDict):
     """node_builder 为每条链接构建的辅助元数据，用于发送阶段。"""
+    metadata_index: int
     link_nodes: List[Any]
     is_large_media: bool
     is_normal: bool
     video_files: List[str]
     temp_files: List[str]
+    metadata_text_node: Optional[Any]
 
 
 class BuildAllNodesResult(NamedTuple):

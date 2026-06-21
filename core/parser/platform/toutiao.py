@@ -271,17 +271,36 @@ class ToutiaoParser(BaseVideoParser):
 
     def _format_author(self, article_info: Dict[str, Any]) -> str:
         media_user = article_info.get("mediaUser") or {}
+        thread_base = self._get_thread_base(article_info)
+        thread_user_info = ((thread_base.get("user") or {}).get("info") or {})
         screen_name = self._first_non_empty(
             media_user.get("screenName"),
             article_info.get("detailSource"),
+            thread_user_info.get("name"),
         )
         user_id = self._first_non_empty(
             media_user.get("id"),
             article_info.get("creatorUid"),
+            thread_user_info.get("userId"),
         )
         if screen_name and user_id:
             return f"{screen_name}(uid:{user_id})"
         return screen_name or user_id
+
+    @staticmethod
+    def _get_thread_base(article_info: Dict[str, Any]) -> Dict[str, Any]:
+        return ((article_info.get("thread") or {}).get("threadBase") or {})
+
+    def _extract_article_content_html(
+        self,
+        article_info: Dict[str, Any],
+    ) -> str:
+        thread_base = self._get_thread_base(article_info)
+        return self._first_non_empty(
+            article_info.get("content"),
+            thread_base.get("richContent"),
+            thread_base.get("content"),
+        )
 
     @staticmethod
     def _clean_html_text(content_html: str) -> str:
@@ -309,6 +328,67 @@ class ToutiaoParser(BaseVideoParser):
             image_urls.append([url])
         return image_urls
 
+    @staticmethod
+    def _extract_image_urls_from_image_list_items(
+        image_list_items: Any,
+    ) -> List[List[str]]:
+        image_urls: List[List[str]] = []
+        if not isinstance(image_list_items, list):
+            return image_urls
+
+        for item in image_list_items:
+            if not isinstance(item, dict):
+                continue
+            url_list: List[str] = []
+            for value in (item.get("url"), item.get("webUrl")):
+                value_str = str(value or "").strip()
+                if value_str and value_str not in url_list:
+                    url_list.append(value_str)
+
+            nested_url_items = item.get("urlList") or item.get("url_list") or []
+            if isinstance(nested_url_items, list):
+                for nested in nested_url_items:
+                    if not isinstance(nested, dict):
+                        continue
+                    nested_url = str(nested.get("url") or "").strip()
+                    if nested_url and nested_url not in url_list:
+                        url_list.append(nested_url)
+
+            if url_list:
+                image_urls.append(url_list)
+
+        return image_urls
+
+    def _extract_thread_image_urls(
+        self,
+        thread_base: Dict[str, Any],
+    ) -> List[List[str]]:
+        merged: List[List[str]] = []
+        for key in (
+            "largeImageList",
+            "originImageList",
+            "ugcCutImageList",
+            "thumbImageList",
+        ):
+            merged = self._merge_image_candidate_lists(
+                merged,
+                self._extract_image_urls_from_image_list_items(
+                    thread_base.get(key)
+                ),
+            )
+        return merged
+
+    def _extract_article_image_urls(
+        self,
+        article_info: Dict[str, Any],
+    ) -> List[List[str]]:
+        return self._merge_image_candidate_lists(
+            self._extract_image_urls_from_content(
+                self._extract_article_content_html(article_info)
+            ),
+            self._extract_thread_image_urls(self._get_thread_base(article_info)),
+        )
+
     def _merge_image_candidate_lists(
         self,
         current_lists: List[List[str]],
@@ -331,9 +411,7 @@ class ToutiaoParser(BaseVideoParser):
         state: Dict[str, Any],
     ) -> List[List[str]]:
         article_info = state.get("articleInfo") or {}
-        merged_lists = self._extract_image_urls_from_content(
-            str(article_info.get("content") or "")
-        )
+        merged_lists = self._extract_article_image_urls(article_info)
         if not merged_lists:
             return []
 
@@ -342,11 +420,9 @@ class ToutiaoParser(BaseVideoParser):
             refreshed_state = json.loads(
                 self._extract_state_json_text(refreshed_html)
             )
-            refreshed_lists = self._extract_image_urls_from_content(
-                str(
-                    (refreshed_state.get("articleInfo") or {}).get("content")
-                    or ""
-                )
+            refreshed_article_info = refreshed_state.get("articleInfo") or {}
+            refreshed_lists = self._extract_article_image_urls(
+                refreshed_article_info
             )
             merged_lists = self._merge_image_candidate_lists(
                 merged_lists,
@@ -359,22 +435,39 @@ class ToutiaoParser(BaseVideoParser):
         source_url: str,
         page_url: str,
         state: Dict[str, Any],
+        image_urls: Optional[List[List[str]]] = None,
     ) -> Dict[str, Any]:
         article_info = state.get("articleInfo") or {}
-        title = self._first_non_empty(article_info.get("title"))
+        thread_base = self._get_thread_base(article_info)
+        seo_tdk = state.get("seoTDK") or {}
+        title = self._first_non_empty(
+            article_info.get("title"),
+            thread_base.get("title"),
+            seo_tdk.get("title"),
+        )
         if not title:
             raise RuntimeError("今日头条文章缺少标题")
 
-        content_html = str(article_info.get("content") or "")
+        content_html = self._extract_article_content_html(article_info)
         return {
             "url": source_url,
             "source_url": source_url,
             "title": title,
             "author": self._format_author(article_info),
             "desc": self._clean_html_text(content_html),
-            "timestamp": self._format_timestamp(article_info.get("publishTime")),
+            "timestamp": self._format_timestamp(
+                self._first_non_empty(
+                    article_info.get("publishTime"),
+                    thread_base.get("createTime"),
+                    seo_tdk.get("publishTime"),
+                )
+            ),
             "video_urls": [],
-            "image_urls": self._extract_image_urls_from_content(content_html),
+            "image_urls": (
+                image_urls
+                if image_urls is not None
+                else self._extract_article_image_urls(article_info)
+            ),
             "image_headers": build_request_headers(
                 is_video=False,
                 referer=page_url,
@@ -506,6 +599,7 @@ class ToutiaoParser(BaseVideoParser):
                     source_url=context["source_url"],
                     page_url=page_url,
                     state=state,
+                    image_urls=[],
                 )
                 metadata["image_urls"] = (
                     await self._collect_article_image_candidates(

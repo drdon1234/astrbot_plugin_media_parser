@@ -15,6 +15,7 @@ from ..storage import cleanup_directory, cleanup_file
 from .router import download_media
 from .utils import check_cache_dir_available, strip_media_prefixes
 from .validator import get_video_size, validate_media_url
+from .handler.video_cover import extract_video_cover_to_cache
 
 
 class DownloadManager:
@@ -27,7 +28,8 @@ class DownloadManager:
         large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB,
         cache_dir: str = Config.DEFAULT_CACHE_DIR,
         cache_dir_available: Optional[bool] = None,
-        max_concurrent_downloads: int = None
+        max_concurrent_downloads: int = None,
+        video_cover_only: bool = False
     ):
         self.max_video_size_mb = max_video_size_mb
         self.large_video_threshold_mb = large_video_threshold_mb
@@ -48,6 +50,7 @@ class DownloadManager:
             concurrency = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
         self.max_concurrent_downloads = concurrency
         self._download_semaphore = asyncio.Semaphore(concurrency)
+        self.video_cover_only = bool(video_cover_only)
 
         self._active_tasks: set[asyncio.Task] = set()
         self._shutting_down = False
@@ -66,6 +69,138 @@ class DownloadManager:
             elif isinstance(item, str) and item:
                 groups.append([item])
         return groups
+
+    @classmethod
+    def _extract_url_groups_from_any(cls, value: Any) -> List[List[str]]:
+        """从多种封面字段形态中提取 URL 分组。"""
+        if not value:
+            return []
+        if isinstance(value, str):
+            return [[value]]
+        if isinstance(value, list):
+            if all(isinstance(item, str) for item in value):
+                return [[item for item in value if item]]
+            groups: List[List[str]] = []
+            for item in value:
+                if isinstance(item, dict):
+                    groups.extend(cls._extract_url_groups_from_any(item))
+                elif isinstance(item, list):
+                    groups.extend(cls._normalize_url_groups([item]))
+                elif isinstance(item, str) and item:
+                    groups.append([item])
+            if groups:
+                return groups
+            return cls._normalize_url_groups(value)
+        if isinstance(value, dict):
+            for key in (
+                "video_cover_urls",
+                "cover_urls",
+                "cover_url_list",
+                "thumbnail_urls",
+                "thumbnail_url_list",
+                "url_list",
+                "urlList",
+                "urls",
+                "url",
+                "cover",
+                "thumbnail",
+                "poster",
+                "pic",
+            ):
+                if key in value:
+                    groups = cls._extract_url_groups_from_any(value.get(key))
+                    if groups:
+                        return groups
+            for key in (
+                "cover_url",
+                "cover",
+                "thumbnail_url",
+                "thumbnail",
+                "poster",
+                "pic",
+            ):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate:
+                    return [[candidate]]
+            return []
+        return []
+
+    @classmethod
+    def _normalize_video_cover_url_groups(
+        cls,
+        metadata: Dict[str, Any],
+        video_count: int
+    ) -> List[List[str]]:
+        """按视频数量归一封面 URL 列表。"""
+        cover_groups: List[List[str]] = []
+        for key in (
+            "video_cover_urls",
+            "video_cover_url_lists",
+            "cover_urls",
+            "cover_url_list",
+            "thumbnail_urls",
+            "thumbnail_url_list",
+        ):
+            groups = cls._extract_url_groups_from_any(metadata.get(key))
+            if groups:
+                cover_groups = groups
+                break
+
+        if not cover_groups:
+            for key in ("cover_url", "cover", "thumbnail_url", "thumbnail", "poster"):
+                candidate = metadata.get(key)
+                if isinstance(candidate, str) and candidate:
+                    cover_groups = [[candidate]]
+                    break
+
+        if not cover_groups:
+            return [[] for _ in range(video_count)]
+        if len(cover_groups) == 1 and video_count > 1:
+            return [list(cover_groups[0]) for _ in range(video_count)]
+        return [
+            list(cover_groups[idx]) if idx < len(cover_groups) else []
+            for idx in range(video_count)
+        ]
+
+    def _apply_video_cover_only_mode(
+        self,
+        metadata: Dict[str, Any],
+        video_urls: List[List[str]],
+        image_urls: List[List[str]]
+    ) -> tuple[List[List[str]], List[List[str]]]:
+        """将视频媒体转换为封面图片媒体。"""
+        if not self.video_cover_only or not video_urls:
+            metadata["video_cover_only"] = False
+            return video_urls, image_urls
+
+        cover_groups = self._normalize_video_cover_url_groups(
+            metadata,
+            len(video_urls)
+        )
+        converted_images: List[List[str]] = []
+        fallback_items = []
+        fallback_indexes = []
+        for idx, url_list in enumerate(video_urls):
+            cover_urls = cover_groups[idx] if idx < len(cover_groups) else []
+            if cover_urls:
+                converted_images.append(cover_urls)
+                continue
+            converted_images.append([f"video-cover://{idx}"])
+            fallback_indexes.append(len(converted_images) - 1)
+            fallback_items.append({
+                "index": idx,
+                "url_list": list(url_list),
+            })
+
+        metadata["video_cover_only"] = True
+        metadata["video_cover_source_count"] = len(video_urls)
+        metadata["video_cover_fallbacks"] = fallback_items
+        metadata["video_cover_fallback_indexes"] = fallback_indexes
+        converted_images.extend(image_urls)
+        metadata["video_urls"] = []
+        metadata["video_force_download"] = False
+        metadata["video_force_downloads"] = []
+        return [], converted_images
 
     @staticmethod
     def _is_dash_url(url: str) -> bool:
@@ -250,6 +385,48 @@ class DownloadManager:
 
                 last_error = "下载失败"
                 last_status_code = None
+                if kind == "video_cover":
+                    try:
+                        result = await extract_video_cover_to_cache(
+                            session=session,
+                            video_urls=url_list,
+                            cache_dir=cache_dir,
+                            media_id=media_id,
+                            index=index,
+                            headers=headers,
+                            proxy=proxy,
+                        )
+                        return {
+                            **item,
+                            "url": url_list[0],
+                            "file_path": (
+                                result.get("file_path") if result else None
+                            ),
+                            "size_mb": result.get("size_mb") if result else None,
+                            "status_code": (
+                                result.get("status_code") if result else None
+                            ),
+                            "success": bool(result and result.get("file_path")),
+                            "error": (
+                                result.get("error")
+                                if result else
+                                "截取视频封面失败"
+                            ),
+                        }
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"截取视频封面异常: {url_list[0]}, 错误: {e}")
+                        return {
+                            **item,
+                            "url": url_list[0],
+                            "file_path": None,
+                            "size_mb": None,
+                            "status_code": self._extract_status_code_from_error(e),
+                            "success": False,
+                            "error": str(e),
+                        }
+
                 for candidate in url_list:
                     try:
                         result = await download_media(
@@ -349,6 +526,11 @@ class DownloadManager:
         url = metadata.get("url", "")
         video_urls = self._normalize_url_groups(metadata.get("video_urls", []))
         image_urls = self._normalize_url_groups(metadata.get("image_urls", []))
+        video_urls, image_urls = self._apply_video_cover_only_mode(
+            metadata,
+            video_urls,
+            image_urls
+        )
         metadata["video_urls"] = video_urls
         metadata["image_urls"] = image_urls
         metadata.setdefault("video_headers", {})
@@ -366,6 +548,14 @@ class DownloadManager:
         image_skip_reasons: List[Optional[str]] = [None] * image_count
         has_access_denied = False
         size_exceeded = False
+        cover_fallbacks = {
+            int(image_index): item
+            for image_index, item in zip(
+                metadata.get("video_cover_fallback_indexes") or [],
+                metadata.get("video_cover_fallbacks") or []
+            )
+            if isinstance(item, dict)
+        }
 
         force_flags = self._effective_force_flags(metadata, video_count)
         media_id = self._generate_media_id(url, metadata)
@@ -430,6 +620,34 @@ class DownloadManager:
                 })
 
         for idx, url_list in enumerate(image_urls):
+            cover_fallback = cover_fallbacks.get(idx)
+            if cover_fallback:
+                source_urls = self._normalize_url_groups([
+                    cover_fallback.get("url_list") or []
+                ])
+                source_url_list = source_urls[0] if source_urls else []
+                if not source_url_list:
+                    image_skip_reasons[idx] = "未找到可截取封面的视频URL"
+                    continue
+                if not self.cache_dir_available:
+                    image_skip_reasons[idx] = (
+                        "媒体文件缓存目录不可用，无法截取视频封面"
+                    )
+                    continue
+                image_modes[idx] = "local"
+                if on_sendable_media:
+                    await on_sendable_media()
+                local_items.append({
+                    "kind": "video_cover",
+                    "position": video_count + idx,
+                    "index": idx,
+                    "url_list": source_url_list,
+                    "media_id": media_id,
+                    "headers": metadata.get("video_headers", {}),
+                    "proxy": self._proxy_for(metadata, "video", proxy_addr),
+                })
+                continue
+
             if not url_list:
                 image_skip_reasons[idx] = "未找到图片URL"
                 continue
@@ -475,7 +693,10 @@ class DownloadManager:
                     if status_code is not None:
                         image_status_codes[idx] = status_code
                     image_modes[idx] = "skip"
-                    image_skip_reasons[idx] = f"缓存下载失败: {reason}"
+                    if kind == "video_cover":
+                        image_skip_reasons[idx] = f"截取视频封面失败: {reason}"
+                    else:
+                        image_skip_reasons[idx] = f"缓存下载失败: {reason}"
                 continue
 
             file_path = result.get("file_path")

@@ -10,6 +10,9 @@ from ..downloader.utils import strip_media_prefixes
 from ..types import BuildAllNodesResult, LinkBuildMeta
 
 
+TEXT_SECTION_SEPARATOR = "-------------------------------------"
+
+
 def _resolve_output_flag(
     metadata: Dict[str, Any],
     key: str,
@@ -79,7 +82,20 @@ def _mark_media_failure(
         metadata[count_key] = 1
 
 
-def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, enable_text_metadata: bool = True) -> Optional[Plain]:
+def _translated_text(metadata: Dict[str, Any], field: str) -> str:
+    translated_fields = metadata.get("_translated_fields")
+    if isinstance(translated_fields, dict):
+        value = str(translated_fields.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def build_text_node(
+    metadata: Dict[str, Any],
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True
+) -> Optional[Plain]:
     """构建文本节点
 
     Args:
@@ -94,13 +110,12 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
         return None
         
     text_parts = []
-    
+    desc_text = str(metadata.get('desc') or "").strip()
+
     if metadata.get('title'):
         text_parts.append(f"标题：{metadata['title']}")
     if metadata.get('author'):
         text_parts.append(f"作者：{metadata['author']}")
-    if metadata.get('desc'):
-        text_parts.append(f"简介：{metadata['desc']}")
     if metadata.get('timestamp'):
         text_parts.append(f"发布时间：{metadata['timestamp']}")
     
@@ -158,28 +173,6 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
         except (TypeError, ValueError):
             pass
 
-    hot_comments = metadata.get("hot_comments", [])
-    if isinstance(hot_comments, list) and hot_comments:
-        text_parts.append(f"热评（{len(hot_comments)}条）:")
-        total = len(hot_comments)
-        for idx, item in enumerate(hot_comments, start=1):
-            if not isinstance(item, dict):
-                continue
-            username = str(item.get("username", "") or "").strip() or "未知用户"
-            uid = str(item.get("uid", "") or "").strip()
-            try:
-                likes = int(item.get("likes", 0) or 0)
-            except (TypeError, ValueError):
-                likes = 0
-            time_text = str(item.get("time", "") or "").strip() or "-"
-            message = str(item.get("message", "") or "").strip() or "（无文本内容）"
-            user_label = f"{username}(uid:{uid})" if uid else username
-            text_parts.append(f"[{idx}] {user_label}")
-            text_parts.append(f"点赞: {likes} | 时间: {time_text}")
-            text_parts.append(message)
-            if idx < total:
-                text_parts.append("")
-    
     if metadata.get('error'):
         text_parts.append(f"解析失败：{metadata['error']}")
 
@@ -203,11 +196,79 @@ def build_text_node(metadata: Dict[str, Any], max_video_size_mb: float = 0.0, en
     
     if metadata.get('url'):
         text_parts.append(f"原始链接：{metadata['url']}")
+
+    if desc_text:
+        if text_parts:
+            text_parts.append(TEXT_SECTION_SEPARATOR)
+        text_parts.append("简介/正文：")
+        text_parts.append(desc_text)
     
     if not text_parts:
         return None
-    desc_text = "\n".join(text_parts)
-    return Plain(desc_text)
+    return Plain("\n".join(text_parts))
+
+
+def build_hot_comments_node(
+    metadata: Dict[str, Any],
+    enable_text_metadata: bool = True
+) -> Optional[Plain]:
+    """构建独立热评节点，避免与基础文本元数据混排。"""
+    if not enable_text_metadata:
+        return None
+
+    hot_comments = metadata.get("hot_comments", [])
+    if not isinstance(hot_comments, list) or not hot_comments:
+        return None
+
+    text_parts = [f"热评（{len(hot_comments)}条）："]
+    total = len(hot_comments)
+    for idx, item in enumerate(hot_comments, start=1):
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username", "") or "").strip() or "未知用户"
+        uid = str(item.get("uid", "") or "").strip()
+        try:
+            likes = int(item.get("likes", 0) or 0)
+        except (TypeError, ValueError):
+            likes = 0
+        time_text = str(item.get("time", "") or "").strip() or "-"
+        message = str(item.get("message", "") or "").strip() or "（无文本内容）"
+        user_label = f"{username}(uid:{uid})" if uid else username
+        text_parts.append(f"[{idx}] {user_label}")
+        text_parts.append(f"点赞: {likes} | 时间: {time_text}")
+        text_parts.append(message)
+        if idx < total:
+            text_parts.append("")
+
+    if len(text_parts) <= 1:
+        return None
+    return Plain("\n".join(text_parts))
+
+
+def build_translation_node(
+    metadata: Dict[str, Any],
+    enable_text_metadata: bool = True
+) -> Optional[Plain]:
+    """构建独立翻译节点，翻译内容不混入基础文本元数据。"""
+    if not enable_text_metadata:
+        return None
+
+    title_text = _translated_text(metadata, "title")
+    desc_text = _translated_text(metadata, "desc")
+    if not title_text and not desc_text:
+        return None
+
+    language = str(metadata.get("translation_target_language") or "").strip()
+    heading = f"翻译（{language}）" if language else "翻译"
+    text_parts = [heading]
+    if title_text:
+        text_parts.append(f"标题：{title_text}")
+    if desc_text:
+        if len(text_parts) > 1:
+            text_parts.append(TEXT_SECTION_SEPARATOR)
+        text_parts.append("简介/正文：")
+        text_parts.append(desc_text)
+    return Plain("\n".join(text_parts))
 
 
 def build_media_nodes(
@@ -382,7 +443,24 @@ def build_nodes_for_link(
     Returns:
         节点列表（Plain、Image、Video对象）
     """
-    nodes = []
+    nodes, _ = _build_node_parts_for_link(
+        metadata,
+        use_local_files,
+        max_video_size_mb,
+        enable_text_metadata,
+        enable_rich_media,
+    )
+    return nodes
+
+
+def _build_node_parts_for_link(
+    metadata: Dict[str, Any],
+    use_local_files: bool = False,
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True,
+    enable_rich_media: bool = True
+) -> tuple[List[Union[Plain, Image, Video]], Optional[Plain]]:
+    nodes: List[Union[Plain, Image, Video]] = []
     effective_text_metadata = _resolve_output_flag(
         metadata,
         "_enable_text_metadata",
@@ -404,11 +482,17 @@ def build_nodes_for_link(
         max_video_size_mb,
         effective_text_metadata,
     )
+    hot_comments_node = build_hot_comments_node(
+        metadata,
+        effective_text_metadata,
+    )
     if text_node:
         nodes.append(text_node)
+    if hot_comments_node:
+        nodes.append(hot_comments_node)
     nodes.extend(media_nodes)
-    
-    return nodes
+
+    return nodes, text_node
 
 
 def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
@@ -431,9 +515,34 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
     return has_image and not has_video
 
 
+def summarize_node_counts(
+    all_link_nodes: List[List[Union[Plain, Image, Video]]]
+) -> Dict[str, int]:
+    """统计最终可发送节点数量，用于条件打包判定。"""
+    image_count = 0
+    video_count = 0
+    node_count = 0
+
+    for link_nodes in all_link_nodes:
+        for node in link_nodes:
+            if node is None:
+                continue
+            node_count += 1
+            if isinstance(node, Image):
+                image_count += 1
+            elif isinstance(node, Video):
+                video_count += 1
+
+    return {
+        "image_count": image_count,
+        "video_count": video_count,
+        "node_count": node_count,
+    }
+
+
 def build_all_nodes(
     metadata_list: List[Dict[str, Any]],
-    is_auto_pack: bool,
+    pack_mode: Any,
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
@@ -443,7 +552,7 @@ def build_all_nodes(
 
     Args:
         metadata_list: 元数据列表
-        is_auto_pack: 是否打包为Node
+        pack_mode: 打包模式，仅用于日志
         large_video_threshold_mb: 大视频阈值(MB)
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
         enable_text_metadata: 是否发送图文文本消息
@@ -457,7 +566,7 @@ def build_all_nodes(
     temp_files = []
     video_files = []
     
-    logger.debug(f"开始构建所有节点，元数据数量: {len(metadata_list)}, 打包模式: {is_auto_pack}")
+    logger.debug(f"开始构建所有节点，元数据数量: {len(metadata_list)}, 打包模式: {pack_mode}")
     
     for idx, metadata in enumerate(metadata_list):
         url = metadata.get('url', '')
@@ -475,12 +584,12 @@ def build_all_nodes(
             f"大媒体: {is_large_media}, 使用本地文件: {use_local_files}"
         )
         
-        link_nodes = build_nodes_for_link(
+        link_nodes, metadata_text_node = _build_node_parts_for_link(
             metadata,
             use_local_files,
             max_video_size_mb,
             enable_text_metadata,
-            enable_rich_media
+            enable_rich_media,
         )
         
         logger.debug(f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}")
@@ -512,11 +621,13 @@ def build_all_nodes(
         if link_nodes:
             all_link_nodes.append(link_nodes)
             link_metadata.append(LinkBuildMeta(
+                metadata_index=idx,
                 link_nodes=link_nodes,
                 is_large_media=is_large_media,
                 is_normal=not is_large_media,
                 video_files=link_video_files,
                 temp_files=link_temp_files,
+                metadata_text_node=metadata_text_node,
             ))
         else:
             logger.debug(f"节点为空，跳过发送队列: {url}")
@@ -529,4 +640,21 @@ def build_all_nodes(
     )
     
     return BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)
+
+
+def build_translation_nodes_for_all(
+    metadata_list: List[Dict[str, Any]],
+    enable_text_metadata: bool = True
+) -> List[List[Plain]]:
+    """按原 metadata 顺序构建翻译节点列表，空翻译保留空列表占位。"""
+    all_translation_nodes: List[List[Plain]] = []
+    for metadata in metadata_list:
+        effective_text_metadata = _resolve_output_flag(
+            metadata,
+            "_enable_text_metadata",
+            enable_text_metadata,
+        )
+        node = build_translation_node(metadata, effective_text_metadata)
+        all_translation_nodes.append([node] if node else [])
+    return all_translation_nodes
 

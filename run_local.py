@@ -3,8 +3,11 @@ import sys
 import os
 import logging
 import asyncio
+import importlib
+import inspect
+import pkgutil
 import aiohttp
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Type
 
 _project_root = os.path.dirname(os.path.abspath(__file__))
 if _project_root not in sys.path:
@@ -20,19 +23,7 @@ try:
     from core.parser.utils import format_duration_ms
     from core.downloader import DownloadManager
     from core.downloader.utils import check_cache_dir_available
-    from core.parser.platform import (
-        BilibiliParser,
-        DouyinParser,
-        TikTokParser,
-        KuaishouParser,
-        WeiboParser,
-        XiaohongshuParser,
-        XianyuParser,
-        ToutiaoParser,
-        XiaoheiheParser,
-        TwitterParser
-    )
-    from core.storage import set_stamp_subdir_enabled
+    from core.parser.platform.base import BaseVideoParser
 except ImportError as e:
     print(f"导入模块失败: {e}")
     print("请确保所有模块在正确的路径下")
@@ -46,7 +37,173 @@ logging.basicConfig(
 from core.logger import logger
 
 LOCAL_MEDIA_DIR = Config.build_cache_dir(_project_root)
-set_stamp_subdir_enabled(False)
+
+PARSER_DISCOVERY_PACKAGE = "core.parser.platform"
+PARSER_DISCOVERY_SKIP_MODULES = {"base", "short_video_shared"}
+PARSER_DISCOVERY_ORDER = (
+    "bilibili",
+    "douyin",
+    "tiktok",
+    "kuaishou",
+    "weibo",
+    "xiaohongshu",
+    "xianyu",
+    "toutiao",
+    "xiaoheihe",
+    "twitter",
+)
+PARSER_DISCOVERY_ORDER_INDEX = {
+    module_name: index
+    for index, module_name in enumerate(PARSER_DISCOVERY_ORDER)
+}
+
+
+def _parser_order_key(parser_class: Type[BaseVideoParser]):
+    """保持已知解析器的路由优先级，新解析器自动排到后面。"""
+    module_name = parser_class.__module__.rsplit(".", 1)[-1]
+    return (
+        PARSER_DISCOVERY_ORDER_INDEX.get(
+            module_name,
+            len(PARSER_DISCOVERY_ORDER_INDEX),
+        ),
+        module_name,
+        parser_class.__name__,
+    )
+
+
+def discover_local_parser_classes() -> List[Type[BaseVideoParser]]:
+    """自动发现平台解析器类，避免本地调试脚本重复维护注册列表。"""
+    package = importlib.import_module(PARSER_DISCOVERY_PACKAGE)
+    parser_classes = {}
+
+    for module_info in pkgutil.iter_modules(package.__path__):
+        module_short_name = module_info.name
+        if (
+            module_info.ispkg
+            or module_short_name.startswith("_")
+            or module_short_name in PARSER_DISCOVERY_SKIP_MODULES
+        ):
+            continue
+
+        module_name = f"{package.__name__}.{module_short_name}"
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as e:
+            logger.warning(f"跳过解析器模块 {module_name}: {e}")
+            continue
+
+        for _, member in inspect.getmembers(module, inspect.isclass):
+            if member is BaseVideoParser:
+                continue
+            if member.__module__ != module.__name__:
+                continue
+            if not issubclass(member, BaseVideoParser):
+                continue
+            if inspect.isabstract(member):
+                continue
+            parser_classes[f"{member.__module__}.{member.__name__}"] = member
+
+    return sorted(parser_classes.values(), key=_parser_order_key)
+
+
+def _build_local_parser_kwargs(
+    parser_class: Type[BaseVideoParser],
+    *,
+    use_proxy: bool,
+    proxy_url: Optional[str],
+    cache_dir_available: bool,
+    bilibili_cookie_runtime_file: str
+) -> Dict[str, Any]:
+    """按解析器构造签名注入本地调试参数。"""
+    effective_proxy_url = proxy_url if use_proxy and proxy_url else None
+    local_values = {
+        "cookie_runtime_enabled": cache_dir_available,
+        "configured_cookie": "",
+        "admin_assist_enabled": False,
+        "credential_path": bilibili_cookie_runtime_file,
+        "max_quality": 0,
+        "hot_comment_count": 0,
+        "use_proxy": bool(effective_proxy_url),
+        "use_parse_proxy": bool(effective_proxy_url),
+        "use_image_proxy": bool(effective_proxy_url),
+        "use_video_proxy": bool(effective_proxy_url),
+        "proxy_url": effective_proxy_url,
+    }
+
+    kwargs = {}
+    missing_required = []
+    signature = inspect.signature(parser_class)
+    for name, parameter in signature.parameters.items():
+        if name == "self":
+            continue
+        if parameter.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if name in local_values:
+            kwargs[name] = local_values[name]
+        elif parameter.default is inspect.Parameter.empty:
+            missing_required.append(name)
+
+    if missing_required:
+        missing = ", ".join(missing_required)
+        raise TypeError(f"缺少自动实例化参数: {missing}")
+    return kwargs
+
+
+def _enable_local_bilibili_interaction(
+    parser: BaseVideoParser,
+    cache_dir_available: bool
+) -> None:
+    """为带鉴权运行时的解析器启用 run_local 阻塞式登录交互。"""
+    get_auth_runtime = getattr(parser, "get_auth_runtime", None)
+    if not callable(get_auth_runtime):
+        return
+
+    try:
+        auth_runtime = get_auth_runtime()
+    except Exception as e:
+        logger.warning(f"读取解析器 {parser.name} 鉴权运行时失败: {e}")
+        return
+
+    setattr(auth_runtime, "local_debug_mode", cache_dir_available)
+
+
+def create_local_parsers(
+    *,
+    use_proxy: bool,
+    proxy_url: Optional[str],
+    cache_dir_available: bool,
+    bilibili_cookie_runtime_file: str
+) -> List[BaseVideoParser]:
+    """创建本地调试解析器列表，新增平台解析器时自动纳入。"""
+    parsers = []
+    for parser_class in discover_local_parser_classes():
+        try:
+            kwargs = _build_local_parser_kwargs(
+                parser_class,
+                use_proxy=use_proxy,
+                proxy_url=proxy_url,
+                cache_dir_available=cache_dir_available,
+                bilibili_cookie_runtime_file=bilibili_cookie_runtime_file,
+            )
+            parser = parser_class(**kwargs)
+        except Exception as e:
+            logger.warning(f"跳过解析器 {parser_class.__name__}: {e}")
+            continue
+
+        _enable_local_bilibili_interaction(parser, cache_dir_available)
+        parsers.append(parser)
+
+    if not parsers:
+        raise RuntimeError("未发现可用的平台解析器")
+    return parsers
+
+
+def format_supported_platforms(parsers: List[BaseVideoParser]) -> str:
+    """格式化当前自动发现到的解析器名称。"""
+    return "、".join(parser.name for parser in parsers)
 
 def print_metadata(
     metadata: Dict[str, Any],
@@ -189,9 +346,10 @@ async def prepare_bilibili_cookie_interaction(
     """本地调试时先阻塞处理 B 站 Cookie 交互，再进入并发解析。"""
     handled_runtimes = set()
     for _, parser in links_with_parser:
-        if not isinstance(parser, BilibiliParser):
+        get_auth_runtime = getattr(parser, "get_auth_runtime", None)
+        if not callable(get_auth_runtime):
             continue
-        auth_runtime = parser.get_auth_runtime()
+        auth_runtime = get_auth_runtime()
         if not (
             getattr(auth_runtime, "enabled", False) and
             getattr(auth_runtime, "local_debug_mode", False)
@@ -466,12 +624,6 @@ async def main(
         proxy_url: 代理地址
         cache_dir: 缓存目录
     """
-    print("=" * 80)
-    print("媒体链接解析测试工具（简化版）")
-    print("支持的平台: B站、抖音、TikTok、快手、小红书、微博、闲鱼、今日头条、Twitter/X、小黑盒")
-    print("输入 'q' 退出程序")
-    print("=" * 80)
-    
     if debug_mode:
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug模式已启用")
@@ -489,39 +641,21 @@ async def main(
             bilibili_cookie_dir,
             "cookie.json"
         )
-    
-    parsers = [
-        BilibiliParser(
-            cookie_runtime_enabled=cache_dir_available,
-            configured_cookie="",
-            max_quality=0,
-            admin_assist_enabled=False,
-            credential_path=bilibili_cookie_runtime_file,
-            local_debug_mode=cache_dir_available
-        ),
-        DouyinParser(),
-        TikTokParser(
-            use_proxy=use_proxy,
-            proxy_url=proxy_url if use_proxy else None,
-        ),
-        KuaishouParser(),
-        WeiboParser(),
-        XiaohongshuParser(),
-        XianyuParser(),
-        ToutiaoParser(),
-        XiaoheiheParser(
-            use_video_proxy=use_proxy,
-            proxy_url=proxy_url
-        ) if use_proxy and proxy_url else XiaoheiheParser(),
-        TwitterParser(
-            use_parse_proxy=use_proxy,
-            use_image_proxy=use_proxy,
-            use_video_proxy=use_proxy,
-            proxy_url=proxy_url
-        ) if use_proxy and proxy_url else TwitterParser(),
-    ]
+
+    parsers = create_local_parsers(
+        use_proxy=use_proxy,
+        proxy_url=proxy_url,
+        cache_dir_available=cache_dir_available,
+        bilibili_cookie_runtime_file=bilibili_cookie_runtime_file,
+    )
     
     parser_manager = ParserManager(parsers)
+
+    print("=" * 80)
+    print("媒体链接解析测试工具（简化版）")
+    print(f"支持的平台: {format_supported_platforms(parsers)}")
+    print("输入 'q' 退出程序")
+    print("=" * 80)
     
     download_manager = DownloadManager(
         max_video_size_mb=0.0,

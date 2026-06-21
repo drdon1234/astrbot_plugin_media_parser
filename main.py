@@ -1,4 +1,5 @@
 import asyncio
+import copy
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -6,6 +7,7 @@ import aiohttp
 from .core.logger import logger
 
 from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.message_components import Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
@@ -15,11 +17,17 @@ from .core.downloader import DownloadManager
 from .core.storage import (
     cleanup_files,
     cleanup_marked_in,
+    ParseRecordManager,
     register_files_with_token_service,
 )
 from .core.constants import Config
 from .core.message_adapter.sender import MessageSender
-from .core.message_adapter.node_builder import build_all_nodes
+from .core.message_adapter.node_builder import (
+    build_all_nodes,
+    build_translation_nodes_for_all,
+    summarize_node_counts,
+)
+from .core.translation import MetadataTranslator
 from .core.config_manager import ConfigManager
 from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
 
@@ -28,7 +36,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "0.7.1"
+    "0.8.0"
 )
 class VideoParserPlugin(Star):
 
@@ -42,6 +50,10 @@ class VideoParserPlugin(Star):
         parsers = cfg.create_parsers()
         self.parser_manager = ParserManager(parsers)
         self.bilibili_parser = cfg.bilibili_parser
+        self.metadata_translator = MetadataTranslator(
+            cfg.translation,
+            self.context,
+        )
         self.bilibili_auth_runtime = (
             self.bilibili_parser.get_auth_runtime()
             if self.bilibili_parser else
@@ -54,10 +66,19 @@ class VideoParserPlugin(Star):
             cache_dir=cfg.download.cache_dir,
             cache_dir_available=cfg.download.cache_dir_available,
             max_concurrent_downloads=cfg.download.max_concurrent_downloads,
+            video_cover_only=cfg.message.video_cover_only,
         )
 
         self.message_sender = MessageSender()
         self._cleanup_tasks: set[asyncio.Task] = set()
+        rate_limit = cfg.parse_rate_limit
+        self.parse_record_manager = ParseRecordManager(
+            record_file=rate_limit.record_file,
+            same_link_max_count=rate_limit.same_link.max_count,
+            same_link_window_seconds=rate_limit.same_link.window_seconds,
+            same_user_max_count=rate_limit.same_user.max_count,
+            same_user_window_seconds=rate_limit.same_user.window_seconds,
+        )
         self.admin_cookie_assist = BilibiliAdminCookieAssistManager(
             context=self.context,
             admin_id=cfg.permission.admin_id,
@@ -125,14 +146,9 @@ class VideoParserPlugin(Star):
             return None
 
     def _try_extract_reply_links(self, event: AstrMessageEvent):
-        try:
-            from astrbot.api.message_components import Reply
-        except ImportError:
-            return []
-
         messages = event.get_messages()
         if not messages:
-            return []
+            return [], ""
 
         reply_comp = None
         for comp in messages:
@@ -140,12 +156,13 @@ class VideoParserPlugin(Star):
                 reply_comp = comp
                 break
         if reply_comp is None:
-            return []
+            return [], ""
 
+        reply_message_id = str(getattr(reply_comp, "id", "") or "").strip()
         reply_text = reply_comp.message_str or ""
         links = self.parser_manager.extract_all_links(reply_text)
         if links:
-            return links
+            return links, reply_message_id
 
         if reply_comp.chain:
             for comp in reply_comp.chain:
@@ -155,9 +172,9 @@ class VideoParserPlugin(Star):
                 if card_url:
                     links = self.parser_manager.extract_all_links(card_url)
                     if links:
-                        return links
+                        return links, reply_message_id
 
-        return []
+        return [], ""
 
     @staticmethod
     def _has_sendable_rich_media(metadata_list) -> bool:
@@ -202,6 +219,52 @@ class VideoParserPlugin(Star):
             )
             metadata["_enable_text_metadata"] = text_enabled
             metadata["_enable_rich_media"] = rich_enabled
+
+    @staticmethod
+    def _event_context(event: AstrMessageEvent) -> Dict[str, Any]:
+        """提取 AstrBot 会话上下文，供内置大模型路由使用。"""
+        umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        return {"_astrbot_unified_msg_origin": umo} if umo else {}
+
+    def _start_translation_task(
+        self,
+        metadata_list,
+        event: AstrMessageEvent,
+    ):
+        """后台启动翻译，使用元数据副本避免影响主消息先发。"""
+        if not self.config_manager.translation.enabled:
+            return None, []
+        translation_metadata_list = copy.deepcopy(metadata_list)
+        task = asyncio.create_task(
+            self.metadata_translator.translate_metadata_list(
+                translation_metadata_list,
+                event_context=self._event_context(event),
+            )
+        )
+        return task, translation_metadata_list
+
+    @staticmethod
+    async def _cancel_translation_task(task) -> None:
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _build_translation_nodes_after_task(
+        self,
+        task,
+        translation_metadata_list,
+    ):
+        if task is None:
+            return []
+        try:
+            await task
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.warning(f"等待翻译任务失败，跳过翻译节点: {e}")
+            return []
+        return build_translation_nodes_for_all(translation_metadata_list)
 
     def _metadata_has_output_candidate(
         self,
@@ -277,6 +340,9 @@ class VideoParserPlugin(Star):
 
         original_message_text = event.message_str or ""
         parse_text = original_message_text
+        quote_source_message_id = str(
+            getattr(event.message_obj, "message_id", "") or ""
+        ).strip()
 
         clean_kw = cfg.admin.clean_cache_keyword
         if clean_kw and original_message_text.strip() == clean_kw:
@@ -310,7 +376,11 @@ class VideoParserPlugin(Star):
                 cfg.trigger.reply_trigger
                 and cfg.trigger.has_keyword(original_message_text)
             ):
-                links_with_parser = self._try_extract_reply_links(event)
+                links_with_parser, reply_message_id = (
+                    self._try_extract_reply_links(event)
+                )
+                if reply_message_id:
+                    quote_source_message_id = reply_message_id
                 links_with_parser = self._filter_links_by_output(
                     links_with_parser
                 )
@@ -329,6 +399,27 @@ class VideoParserPlugin(Star):
         if not cfg.trigger.should_parse(original_message_text):
             return
 
+        rate_limit_user_key = ParseRecordManager.build_user_key(
+            event.get_platform_name(),
+            sender_id,
+        )
+        links_with_parser, blocked_links = (
+            self.parse_record_manager.filter_links(
+                links_with_parser,
+                user_key=rate_limit_user_key,
+            )
+        )
+        if blocked_links and cfg.admin.debug_mode:
+            for blocked in blocked_links:
+                self.logger.debug(
+                    f"解析频率限制跳过链接: {blocked.link}, "
+                    f"解析器={blocked.parser_name}, 原因={blocked.reason}"
+                )
+        if not links_with_parser:
+            if cfg.admin.debug_mode:
+                self.logger.debug("所有可解析链接均被解析频率限制拦截")
+            return
+
         if cfg.admin.debug_mode:
             self.logger.debug(
                 f"提取到 {len(links_with_parser)} 个可解析链接: "
@@ -344,6 +435,7 @@ class VideoParserPlugin(Star):
                 session,
                 links_with_parser=links_with_parser
             )
+            self.parse_record_manager.record_metadata_links(metadata_list)
             self._trigger_bilibili_cookie_assist_if_needed()
             if not metadata_list:
                 if cfg.admin.debug_mode:
@@ -363,6 +455,10 @@ class VideoParserPlugin(Star):
                         "（可能是直播链接或解析失败）"
                     )
                 return
+
+            translation_task, translation_metadata_list = (
+                self._start_translation_task(metadata_list, event)
+            )
 
             if cfg.admin.debug_mode:
                 self.logger.debug(
@@ -461,12 +557,14 @@ class VideoParserPlugin(Star):
                         if not task.done():
                             task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
+                    await self._cancel_translation_task(translation_task)
                     raise
                 except Exception:
                     for task in tasks:
                         if not task.done():
                             task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
+                    await self._cancel_translation_task(translation_task)
                     raise
 
                 processed_metadata_list = [
@@ -497,7 +595,7 @@ class VideoParserPlugin(Star):
 
             build_result = build_all_nodes(
                 processed_metadata_list,
-                cfg.message.auto_pack,
+                cfg.message.pack_mode,
                 cfg.download.large_video_threshold_mb,
                 cfg.download.max_video_size_mb,
                 True,
@@ -525,16 +623,24 @@ class VideoParserPlugin(Star):
                         raise
                     except Exception as e:
                         self.logger.warning(f"发送空结果提示失败: {e}")
+                await self._cancel_translation_task(translation_task)
                 cleanup_files(build_result.temp_files + build_result.video_files)
                 return
 
+            node_counts = summarize_node_counts(build_result.all_link_nodes)
+            should_pack = cfg.message.should_pack(**node_counts)
+
             if cfg.admin.debug_mode:
                 self.logger.debug(
-                    f"开始发送结果，打包模式: {cfg.message.auto_pack}"
+                    f"开始发送结果，打包模式: {cfg.message.pack_mode}, "
+                    f"实际打包: {should_pack}, "
+                    f"图片节点: {node_counts['image_count']}, "
+                    f"视频节点: {node_counts['video_count']}, "
+                    f"总节点: {node_counts['node_count']}"
                 )
 
             try:
-                if cfg.message.auto_pack:
+                if should_pack:
                     await self.message_sender.send_packed_results(
                         event,
                         build_result.link_metadata,
@@ -546,11 +652,27 @@ class VideoParserPlugin(Star):
                     await self.message_sender.send_unpacked_results(
                         event,
                         build_result.all_link_nodes,
+                        build_result.link_metadata,
+                        quote_user_message=cfg.message.quote_user_message,
+                        quote_message_id=quote_source_message_id,
                     )
+
+                translation_nodes = await self._build_translation_nodes_after_task(
+                    translation_task,
+                    translation_metadata_list,
+                )
+                await self.message_sender.send_translation_results(
+                    event,
+                    translation_nodes,
+                    should_pack=should_pack,
+                    sender_name=sender_name,
+                    sender_id=sender_id,
+                )
 
                 if cfg.admin.debug_mode:
                     self.logger.debug("发送完成")
             except Exception as e:
+                await self._cancel_translation_task(translation_task)
                 self.logger.exception(
                     f"发送消息失败: {e}, "
                     f"临时文件数: {len(build_result.temp_files)}, "
