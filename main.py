@@ -36,7 +36,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "6.3.0"
+    "6.3.1"
 )
 class VideoParserPlugin(Star):
 

@@ -149,9 +149,28 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
         )
 
     @staticmethod
-    def _looks_like_video_url(url: str) -> bool:
+    def _looks_like_audio_url(url: str) -> bool:
         normalized = str(url or "").lower()
         if not normalized.startswith(("http://", "https://")):
+            return False
+        return any(
+            marker in normalized
+            for marker in (
+                ".mp3",
+                ".m4a",
+                ".aac",
+                "mime_type=audio",
+                "/music/",
+                "ies-music",
+            )
+        )
+
+    @classmethod
+    def _looks_like_video_url(cls, url: str) -> bool:
+        normalized = str(url or "").lower()
+        if not normalized.startswith(("http://", "https://")):
+            return False
+        if cls._looks_like_audio_url(normalized):
             return False
         return any(
             marker in normalized
@@ -196,7 +215,7 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
         return [
             url
             for url in urls
-            if self._looks_like_video_url(url) or "video_id=" in url
+            if self._looks_like_video_url(url)
         ]
 
     def _extract_douyin_video_url_list(
@@ -323,6 +342,7 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
             url
             for url in urls
             if not self._looks_like_video_url(url)
+            and not self._looks_like_audio_url(url)
         ]
 
     def _extract_douyin_video_cover_url_list(
@@ -356,6 +376,7 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
             url
             for url in urls
             if not self._looks_like_video_url(url)
+            and not self._looks_like_audio_url(url)
         ]
 
     def _extract_douyin_slide_cover_url_list(
