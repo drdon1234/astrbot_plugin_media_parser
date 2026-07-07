@@ -50,6 +50,8 @@ _TRACKING_PARAM_NAMES = {
     "xhsshare",
 }
 
+_SENT_LINK_RECORD_LIMIT = 10000
+
 
 @dataclass
 class ParseRateLimitRule:
@@ -90,6 +92,7 @@ class ParseRecordManager:
         same_link_window_seconds: int = 0,
         same_user_max_count: int = 0,
         same_user_window_seconds: int = 0,
+        sent_link_ttl_seconds: int = 0,
     ):
         self.record_file = str(record_file or "").strip()
         self.same_link = ParseRateLimitRule(
@@ -99,6 +102,10 @@ class ParseRecordManager:
         self.same_user = ParseRateLimitRule(
             max(0, int(same_user_max_count or 0)),
             max(0, int(same_user_window_seconds or 0)),
+        )
+        self.sent_link_ttl_seconds = max(
+            0,
+            int(sent_link_ttl_seconds or 0),
         )
         self._lock = threading.RLock()
         self._loaded = False
@@ -120,7 +127,13 @@ class ParseRecordManager:
 
     @staticmethod
     def _empty_records() -> Dict[str, Any]:
-        return {"version": 1, "links": {}, "users": {}, "updated_at": 0}
+        return {
+            "version": 1,
+            "links": {},
+            "users": {},
+            "sent_links": {},
+            "updated_at": 0,
+        }
 
     @staticmethod
     def build_user_key(platform_name: Any, sender_id: Any) -> str:
@@ -179,6 +192,23 @@ class ParseRecordManager:
         parser = str(parser_name or "unknown").strip() or "unknown"
         canonical = cls.canonicalize_url(url)
         return f"{parser}:{canonical}" if canonical else ""
+
+    @classmethod
+    def build_metadata_link_keys(cls, metadata: Dict[str, Any]) -> List[str]:
+        parser_name = (
+            metadata.get("parser_name") or
+            metadata.get("platform") or
+            "unknown"
+        )
+        urls = (metadata.get("source_url") or "", metadata.get("url") or "")
+        keys: List[str] = []
+        seen = set()
+        for url in urls:
+            key = cls.build_link_key(url, parser_name)
+            if key and key not in seen:
+                keys.append(key)
+                seen.add(key)
+        return keys
 
     def filter_links(
         self,
@@ -294,6 +324,126 @@ class ParseRecordManager:
             if changed:
                 self._save(current)
 
+    def filter_duplicate_links(
+        self,
+        links_with_parser: List[Tuple[str, Any]],
+        *,
+        now: Optional[float] = None,
+    ) -> Tuple[List[Tuple[str, Any]], List[Tuple[str, str]]]:
+        """过滤已经发送过结果的原始链接，避免重复解析和重复输出。"""
+        if not links_with_parser:
+            return [], []
+
+        current = int(now or time.time())
+        with self._lock:
+            self._load()
+            self._ensure_record_buckets()
+            if self._prune_sent_links(current):
+                self._save(current)
+            sent_links = self._records["sent_links"]
+            allowed: List[Tuple[str, Any]] = []
+            duplicates: List[Tuple[str, str]] = []
+            seen_in_batch = set()
+
+            for link, parser in links_with_parser:
+                parser_name = getattr(parser, "name", "") or "unknown"
+                link_key = self.build_link_key(link, parser_name)
+                if link_key and (
+                    link_key in sent_links or link_key in seen_in_batch
+                ):
+                    duplicates.append((link, str(parser_name)))
+                    continue
+
+                allowed.append((link, parser))
+                if link_key:
+                    seen_in_batch.add(link_key)
+
+            return allowed, duplicates
+
+    def filter_duplicate_metadata(
+        self,
+        metadata_list: Iterable[Dict[str, Any]],
+        *,
+        now: Optional[float] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """过滤已经发送过结果的 metadata；用于解析后识别短链别名。"""
+        if not metadata_list:
+            return [], 0
+
+        current = int(now or time.time())
+        with self._lock:
+            self._load()
+            self._ensure_record_buckets()
+            if self._prune_sent_links(current):
+                self._save(current)
+            sent_links = self._records["sent_links"]
+            filtered: List[Dict[str, Any]] = []
+            duplicate_count = 0
+            seen_in_batch = set()
+
+            for metadata in metadata_list or []:
+                if not isinstance(metadata, dict):
+                    filtered.append(metadata)
+                    continue
+
+                keys = self.build_metadata_link_keys(metadata)
+                if not keys:
+                    filtered.append(metadata)
+                    continue
+
+                is_duplicate = any(
+                    key in sent_links or key in seen_in_batch
+                    for key in keys
+                )
+                if is_duplicate:
+                    duplicate_count += 1
+                    continue
+
+                filtered.append(metadata)
+                seen_in_batch.update(keys)
+
+            return filtered, duplicate_count
+
+    def record_sent_link_metadata(
+        self,
+        metadata_list: Iterable[Dict[str, Any]],
+        *,
+        now: Optional[float] = None,
+    ) -> int:
+        """记录本次已发送过结果的链接，用于后续重复解析时整条跳过。"""
+        current = int(now or time.time())
+        recorded = 0
+
+        with self._lock:
+            self._load()
+            self._ensure_record_buckets()
+            changed = self._prune_sent_links(current)
+            sent_links = self._records["sent_links"]
+
+            for metadata in metadata_list or []:
+                if not isinstance(metadata, dict):
+                    continue
+
+                keys = self.build_metadata_link_keys(metadata)
+                if not keys:
+                    continue
+
+                has_new_key = False
+                for key in keys:
+                    if key in sent_links:
+                        continue
+                    sent_links[key] = current
+                    has_new_key = True
+                    changed = True
+                if has_new_key:
+                    recorded += 1
+
+            changed = self._trim_sent_link_records() or changed
+            if changed:
+                self._save(current)
+
+        return recorded
+
     def _load(self) -> None:
         if self._loaded:
             return
@@ -316,6 +466,11 @@ class ParseRecordManager:
                 "users": (
                     data.get("users")
                     if isinstance(data.get("users"), dict) else
+                    {}
+                ),
+                "sent_links": (
+                    data.get("sent_links")
+                    if isinstance(data.get("sent_links"), dict) else
                     {}
                 ),
                 "updated_at": data.get("updated_at", 0),
@@ -364,7 +519,9 @@ class ParseRecordManager:
     def _prune(self, current: int) -> None:
         retention = self.retention_seconds
         if retention <= 0:
-            self._records = self._empty_records()
+            self._records["links"] = {}
+            self._records["users"] = {}
+            self._records.setdefault("sent_links", {})
             return
         cutoff = current - retention
         for bucket in ("links", "users"):
@@ -416,3 +573,57 @@ class ParseRecordManager:
         values = self._normalize_timestamps(items.get(key))
         values.append(int(timestamp))
         items[key] = values
+
+    def _ensure_record_buckets(self) -> None:
+        for bucket in ("links", "users", "sent_links"):
+            if not isinstance(self._records.get(bucket), dict):
+                self._records[bucket] = {}
+
+    @staticmethod
+    def _coerce_timestamp(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _trim_sent_link_records(self) -> bool:
+        sent_links = self._records.get("sent_links")
+        if not isinstance(sent_links, dict):
+            self._records["sent_links"] = {}
+            return True
+
+        overflow = len(sent_links) - _SENT_LINK_RECORD_LIMIT
+        if overflow <= 0:
+            return False
+
+        oldest_keys = sorted(
+            sent_links,
+            key=lambda key: self._coerce_timestamp(sent_links.get(key)),
+        )[:overflow]
+        for key in oldest_keys:
+            sent_links.pop(key, None)
+        return True
+
+    def _prune_sent_links(self, current: int) -> bool:
+        if self.sent_link_ttl_seconds <= 0:
+            return False
+
+        sent_links = self._records.get("sent_links")
+        if not isinstance(sent_links, dict):
+            self._records["sent_links"] = {}
+            return True
+
+        expired_keys = []
+        for key, value in sent_links.items():
+            timestamp = self._coerce_timestamp(value)
+            if (
+                timestamp <= 0 or
+                current - timestamp >= self.sent_link_ttl_seconds
+            ):
+                expired_keys.append(key)
+        if not expired_keys:
+            return False
+
+        for key in expired_keys:
+            sent_links.pop(key, None)
+        return True

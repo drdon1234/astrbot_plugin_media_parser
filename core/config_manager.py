@@ -151,6 +151,7 @@ class MessageConfig:
     pack_node_threshold: int = 5
     quote_user_message: bool = False
     video_cover_only: bool = False
+    suppress_duplicate_links: bool = False
     opening_enabled: bool = True
     opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
     hot_comment_count: int = 0
@@ -450,6 +451,9 @@ class ConfigManager:
             ),
             video_cover_only=bool(
                 media_display.get("video_cover_only", False)
+            ),
+            suppress_duplicate_links=bool(
+                media_display.get("suppress_duplicate_links", False)
             ),
             opening_enabled=opening.get("enable", True),
             opening_content=opening.get(

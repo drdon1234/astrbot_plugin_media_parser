@@ -81,6 +81,7 @@ class VideoParserPlugin(Star):
             same_link_window_seconds=rate_limit.same_link.window_seconds,
             same_user_max_count=rate_limit.same_user.max_count,
             same_user_window_seconds=rate_limit.same_user.window_seconds,
+            sent_link_ttl_seconds=cfg.relay.file_token_ttl,
         )
         self.admin_cookie_assist = BilibiliAdminCookieAssistManager(
             context=self.context,
@@ -465,6 +466,21 @@ class VideoParserPlugin(Star):
         if not cfg.trigger.should_parse(original_message_text):
             return
 
+        if cfg.message.suppress_duplicate_links:
+            links_with_parser, duplicate_links = (
+                self.parse_record_manager.filter_duplicate_links(
+                    links_with_parser
+                )
+            )
+            if duplicate_links and cfg.admin.debug_mode:
+                for link, parser_name in duplicate_links:
+                    self.logger.debug(
+                        f"重复链接已发送过结果，跳过解析与发送: "
+                        f"{link}, 解析器={parser_name}"
+                    )
+            if not links_with_parser:
+                return
+
         rate_limit_user_key = ParseRecordManager.build_user_key(
             event.get_platform_name(),
             sender_id,
@@ -508,6 +524,20 @@ class VideoParserPlugin(Star):
                     self.logger.debug("解析后未获得任何元数据")
                 return
             self._apply_output_flags(metadata_list)
+
+            if cfg.message.suppress_duplicate_links:
+                metadata_list, duplicate_link_count = (
+                    self.parse_record_manager.filter_duplicate_metadata(
+                        metadata_list
+                    )
+                )
+                if duplicate_link_count and cfg.admin.debug_mode:
+                    self.logger.debug(
+                        f"已过滤 {duplicate_link_count} 条重复链接结果，"
+                        "本次不发送任何内容"
+                    )
+                if not metadata_list:
+                    return
 
             has_valid_metadata = any(
                 self._metadata_has_output_candidate(metadata)
@@ -734,6 +764,23 @@ class VideoParserPlugin(Star):
                     sender_name=sender_name,
                     sender_id=sender_id,
                 )
+
+                if cfg.message.suppress_duplicate_links:
+                    sent_metadata_list = [
+                        processed_metadata_list[meta["metadata_index"]]
+                        for meta in build_result.link_metadata
+                        if 0 <= meta["metadata_index"] < len(processed_metadata_list)
+                    ]
+                    recorded_link_count = (
+                        self.parse_record_manager.record_sent_link_metadata(
+                            sent_metadata_list
+                        )
+                    )
+                    if recorded_link_count and cfg.admin.debug_mode:
+                        self.logger.debug(
+                            f"已记录 {recorded_link_count} 条已发送链接，"
+                            "用于后续重复解析整条跳过"
+                        )
 
                 if cfg.admin.debug_mode:
                     self.logger.debug("发送完成")

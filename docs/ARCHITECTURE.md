@@ -144,7 +144,7 @@ cache/runtime_manager/bilibili/cookie.json
 配置被归一为 dataclass 分组：
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
-- `MessageConfig`：打包模式、条件打包阈值、视频仅封面模式、文本元数据引用开关、开场语、各平台输出模式、热评开关。
+- `MessageConfig`：打包模式、条件打包阈值、视频仅封面模式、重复链接整条跳过、文本元数据引用开关、开场语、各平台输出模式、热评开关。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
@@ -239,7 +239,7 @@ video_count .. video_count + image_count   图片
 
 ### 2.6 存储与清理 `core/storage/`
 
-当前实现使用 `cache_marker.py` 管理媒体缓存目录标记，没有持久化的 `CacheRegistry` 文件。解析频率记录由 `parse_record.py` 以 JSON 写入 `cache/runtime_manager/parse_records/records.json`，并按启用限制中的最大时间窗裁剪旧记录。
+当前实现使用 `cache_marker.py` 管理媒体缓存目录标记，没有持久化的 `CacheRegistry` 文件。解析频率记录与“已发送链接”记录由 `parse_record.py` 以 JSON 写入 `cache/runtime_manager/parse_records/records.json`；频率限制的 `links/users` 会按已启用限制中的最大时间窗裁剪，`sent_links` 会按 `media_relay.ttl` 过期，并使用固定上限保留最近记录。
 
 - `stamp_subdir(directory)` 在媒体缓存子目录中写 `.astrbot_media_parser`。
 - `cleanup_marked_in(root_dir)` 只删除缓存根目录的直接子目录中带标记的条目，不删除根目录，不触碰未标记目录。
@@ -310,6 +310,10 @@ TriggerConfig.should_parse(original_message_text)
   ├─ false -> 返回
   └─ true  -> 继续
   ↓
+message.media_display.suppress_duplicate_links=true?
+  ├─ 是 -> ParseRecordManager.filter_duplicate_links() 跳过已发送链接，不再解析或发送
+  └─ 否 -> 不处理
+  ↓
 ParseRecordManager.filter_links()
   ├─ 同标准链接或同用户超出时间窗限制 -> 跳过对应链接
   └─ 允许解析 -> 写入本次解析尝试记录
@@ -319,6 +323,10 @@ ParseRecordManager.filter_links()
 ParserManager.parse_text(parse_text, session, links_with_parser)
   ↓
 触发 B站 Cookie 协助请求检查
+  ↓
+message.media_display.suppress_duplicate_links=true?
+  ├─ 是 -> ParseRecordManager.filter_duplicate_metadata() 按最终链接别名丢弃重复结果
+  └─ 否 -> 不处理
   ↓
 有效 metadata 检查
   ├─ 无有效 metadata -> 返回
@@ -346,6 +354,10 @@ summarize_node_counts()
 等待 translation_task
   ├─ 有翻译节点 -> send_translation_results()
   └─ 无翻译节点 -> 跳过
+  ↓
+message.media_display.suppress_duplicate_links=true?
+  ├─ 是 -> ParseRecordManager.record_sent_link_metadata() 记录本次实际已发送的链接
+  └─ 否 -> 不处理
   ↓
 finally 清理本次 temp_files + video_files
   ├─ relay 开启 -> 延迟 media_relay.ttl 秒
