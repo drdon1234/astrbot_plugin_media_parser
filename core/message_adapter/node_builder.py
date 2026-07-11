@@ -7,10 +7,19 @@ from ..logger import logger
 from astrbot.api.message_components import Plain, Image, Video
 
 from ..downloader.utils import strip_media_prefixes
+from ..message_text import split_message_text
+from ..metadata_visibility import text_metadata_field_enabled
 from ..types import BuildAllNodesResult, LinkBuildMeta
 
 
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
+
+
+def _split_plain_node(node: Optional[Plain]) -> List[Plain]:
+    """将文本节点统一拆分为不超过单消息长度上限的节点。"""
+    if node is None:
+        return []
+    return [Plain(chunk) for chunk in split_message_text(node.text)]
 
 
 def _resolve_output_flag(
@@ -110,13 +119,26 @@ def build_text_node(
         return None
         
     text_parts = []
-    desc_text = str(metadata.get('desc') or "").strip()
+    desc_text = (
+        str(metadata.get('desc') or "").strip()
+        if text_metadata_field_enabled(metadata, "description") else
+        ""
+    )
 
-    if metadata.get('title'):
+    if (
+        text_metadata_field_enabled(metadata, "title") and
+        metadata.get('title')
+    ):
         text_parts.append(f"标题：{metadata['title']}")
-    if metadata.get('author'):
+    if (
+        text_metadata_field_enabled(metadata, "author") and
+        metadata.get('author')
+    ):
         text_parts.append(f"作者：{metadata['author']}")
-    if metadata.get('timestamp'):
+    if (
+        text_metadata_field_enabled(metadata, "timestamp") and
+        metadata.get('timestamp')
+    ):
         text_parts.append(f"发布时间：{metadata['timestamp']}")
     
     video_count = metadata.get('video_count', 0)
@@ -138,10 +160,19 @@ def build_text_node(
     image_urls = metadata.get('image_urls', [])
     
     has_text_metadata = bool(
-        metadata.get('title') or 
-        metadata.get('author') or 
-        metadata.get('desc') or 
-        metadata.get('timestamp')
+        (
+            text_metadata_field_enabled(metadata, "title") and
+            metadata.get('title')
+        ) or
+        (
+            text_metadata_field_enabled(metadata, "author") and
+            metadata.get('author')
+        ) or
+        desc_text or
+        (
+            text_metadata_field_enabled(metadata, "timestamp") and
+            metadata.get('timestamp')
+        )
     )
 
     access_status = metadata.get("access_status")
@@ -194,7 +225,10 @@ def build_text_node(
     
     _append_media_skip_summary(text_parts, metadata)
     
-    if metadata.get('url'):
+    if (
+        text_metadata_field_enabled(metadata, "original_link") and
+        metadata.get('url')
+    ):
         text_parts.append(f"原始链接：{metadata['url']}")
 
     if desc_text:
@@ -253,8 +287,16 @@ def build_translation_node(
     if not enable_text_metadata:
         return None
 
-    title_text = _translated_text(metadata, "title")
-    desc_text = _translated_text(metadata, "desc")
+    title_text = (
+        _translated_text(metadata, "title")
+        if text_metadata_field_enabled(metadata, "title") else
+        ""
+    )
+    desc_text = (
+        _translated_text(metadata, "desc")
+        if text_metadata_field_enabled(metadata, "description") else
+        ""
+    )
     if not title_text and not desc_text:
         return None
 
@@ -486,13 +528,14 @@ def _build_node_parts_for_link(
         metadata,
         effective_text_metadata,
     )
-    if text_node:
-        nodes.append(text_node)
-    if hot_comments_node:
-        nodes.append(hot_comments_node)
+    text_nodes = _split_plain_node(text_node)
+    hot_comments_nodes = _split_plain_node(hot_comments_node)
+    nodes.extend(text_nodes)
+    nodes.extend(hot_comments_nodes)
     nodes.extend(media_nodes)
 
-    return nodes, text_node
+    metadata_text_node = text_nodes[0] if text_nodes else None
+    return nodes, metadata_text_node
 
 
 def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
@@ -655,6 +698,5 @@ def build_translation_nodes_for_all(
             enable_text_metadata,
         )
         node = build_translation_node(metadata, effective_text_metadata)
-        all_translation_nodes.append([node] if node else [])
+        all_translation_nodes.append(_split_plain_node(node))
     return all_translation_nodes
-

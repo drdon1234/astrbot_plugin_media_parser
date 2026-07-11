@@ -51,6 +51,7 @@ class MediaMetadata(TypedDict, total=False):
     error: str
     _enable_text_metadata: bool
     _enable_rich_media: bool
+    _text_metadata_fields: Dict[str, bool]
 
     # ── 下载阶段（DownloadManager 回填）─────────────────
 

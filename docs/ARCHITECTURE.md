@@ -101,6 +101,8 @@ astrbot_plugin_media_parser/
 
 `message.text_metadata.quote_user_message` 控制非打包发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
 
+`message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。现有 `message.*` 路径保持不变，避免 AstrBot 递归更新 schema 时删除用户旧配置。
+
 #### 缓存目录
 
 `download.cache_dir` 是媒体缓存根目录，但非 Docker 环境不会直接使用用户配置值：
@@ -144,7 +146,8 @@ cache/runtime_manager/bilibili/cookie.json
 配置被归一为 dataclass 分组：
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
-- `MessageConfig`：打包模式、条件打包阈值、视频仅封面模式、文本元数据引用开关、开场语、各平台输出模式、热评开关。
+- `ParserOutputConfig`：各平台输出模式，负责解析器启用、文本/富媒体输出判定。
+- `MessageConfig`：消息输出聚合域，由 `OpeningMessageConfig`、`PackingConfig`、`MediaDisplayConfig`、`TextMetadataConfig` 和 `HotCommentConfig` 组成。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
@@ -154,7 +157,7 @@ cache/runtime_manager/bilibili/cookie.json
 - `TranslationConfig`：翻译开关、翻译范围、目标语言、AstrBot 内置或自定义大模型配置。输入/输出上限固定为 4000，超时固定为 60 秒，随机性固定为 0。
 - `AdminConfig`：清理关键词和 debug 模式。
 
-`ConfigManager` 会将 `parsers` 的输出模式归一到 `MessageConfig.parser_outputs`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。`message.packing.mode` 会被归一为 `不打包`、`全部打包`、`按条件打包` 三种模式；条件阈值会按非负整数兜底。
+`ConfigManager` 会将 `parsers` 的输出模式归一到 `ParserOutputConfig.modes`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`，不同平台之间不互相继承配置。`message.packing.mode` 会被归一为 `不打包`、`全部打包`、`按条件打包` 三种模式；条件阈值会按非负整数兜底。
 
 权限优先级为：管理员直接放行，其次个人白名单、个人黑名单、群组白名单、群组黑名单；均未命中时，白名单开启则拒绝，白名单关闭则放行。管理员 ID 会自动加入用户白名单。
 
@@ -189,6 +192,7 @@ cache/runtime_manager/bilibili/cookie.json
 - 只有管理员私聊过机器人后，才有可主动发送的私聊会话标识。
 - 当 B站解析器消费到 Cookie 不可用请求后，后台向管理员发送确认消息。
 - 管理员回复 `确定` 后发送登录链接/二维码，并后台轮询登录结果。
+- Notice、Request 等非用户消息事件不会更新私聊会话或消费待确认状态。
 - 管理员发送可解析链接时会优先进入解析流程，不会被纯文本协助回复处理抢走。
 
 ### 2.5 下载器模块 `core/downloader/`
@@ -258,7 +262,7 @@ video_count .. video_count + image_count   图片
 
 `node_builder.py` 负责将 metadata 转成节点：
 
-- 文本元数据节点展示标题、作者、发布时间、访问状态、视频大小、跳过原因、解析错误、原始链接；简介/正文放在最后，并用分隔符与前面的元数据分开。
+- 文本元数据节点按 `_text_metadata_fields` 展示标题、作者、发布时间、原始链接和简介/正文；访问状态、视频大小、跳过原因和解析错误始终保留。简介/正文放在最后，并用分隔符与前面的元数据分开。
 - 热评节点和翻译节点是独立文本节点，不混入文本元数据节点。热评不进入翻译流程。
 - 翻译结果来自后台大模型任务，按链接独立请求，每条请求最多包含标题和简介/正文；无需翻译时不会生成翻译节点。
 - 富媒体节点只消费 `video_modes/image_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的 URL，`skip` 不构建节点。
@@ -284,7 +288,7 @@ main.py::VideoParserPlugin.auto_parse(event)
   ↓
 admin_cookie_assist.try_update_admin_origin(event)
   ↓
-message.has_any_output()
+parser_output.has_any_output()
   ├─ false -> 返回
   └─ true  -> 继续
   ↓
@@ -420,12 +424,13 @@ build_all_nodes()
   │   └─ skip
   ├─ build_text_node()
   ├─ build_hot_comments_node()
+  ├─ Plain 文本按 4000 字上限统一分片
   ├─ 判定大媒体
   └─ 分类 temp_files/video_files
   ↓
 summarize_node_counts()
   ↓
-MessageConfig.should_pack()
+PackingConfig.should_pack()
   ↓
 MessageSender
   ├─ 需要打包 -> send_packed_results()
@@ -509,6 +514,7 @@ file_token_urls
 
 ```text
 _enable_text_metadata -> 文本元数据 Plain / 热评 Plain / 翻译 Plain
+_text_metadata_fields -> 标题 / 作者 / 发布时间 / 原始链接 / 简介正文的展示与翻译输入
 _enable_rich_media + video_modes/image_modes + file_paths/file_token_urls/video_urls/image_urls -> Video/Image
 ```
 

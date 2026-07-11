@@ -144,48 +144,21 @@ class TriggerConfig:
 
 
 @dataclass
-class MessageConfig:
-    pack_mode: str = PACK_MODE_NONE
-    pack_image_threshold: int = 3
-    pack_video_threshold: int = 2
-    pack_node_threshold: int = 5
-    quote_user_message: bool = False
-    video_cover_only: bool = False
-    opening_enabled: bool = True
-    opening_content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
-    hot_comment_count: int = 0
-    hot_comment_bilibili: bool = True
-    hot_comment_weibo: bool = True
-    hot_comment_xiaohongshu: bool = True
-    parser_outputs: Dict[str, str] = field(default_factory=dict)
+class ParserOutputConfig:
+    modes: Dict[str, str] = field(default_factory=dict)
 
     def has_any_output(self) -> bool:
         """至少有一个解析器会发送文本元数据或富媒体。"""
         return any(
             any(OUTPUT_MODE_FLAGS.get(mode, (False, False)))
-            for mode in self.parser_outputs.values()
+            for mode in self.modes.values()
         )
 
-    def should_pack(
-        self,
-        image_count: int,
-        video_count: int,
-        node_count: int
-    ) -> bool:
-        """根据打包模式和实际节点数量判断是否发送消息集合。"""
-        if self.pack_mode == PACK_MODE_ALL:
-            return True
-        if self.pack_mode != PACK_MODE_CONDITIONAL:
-            return False
-
-        thresholds = (
-            (self.pack_image_threshold, image_count),
-            (self.pack_video_threshold, video_count),
-            (self.pack_node_threshold, node_count),
-        )
+    def has_any_text_output(self) -> bool:
+        """至少有一个解析器会发送文本元数据。"""
         return any(
-            threshold > 0 and count >= threshold
-            for threshold, count in thresholds
+            OUTPUT_MODE_FLAGS.get(mode, (False, False))[0]
+            for mode in self.modes.values()
         )
 
     def _flags_for_mode(self, mode: str) -> Tuple[bool, bool]:
@@ -194,7 +167,7 @@ class MessageConfig:
     def output_for_controller(self, controller: Any) -> Tuple[bool, bool]:
         """返回指定解析器的文本/富媒体发送开关。"""
         key = str(controller or "").strip()
-        mode = self.parser_outputs.get(key, OUTPUT_MODE_ALL)
+        mode = self.modes.get(key, OUTPUT_MODE_ALL)
         return self._flags_for_mode(mode)
 
     def controller_has_any_output(self, controller: Any) -> bool:
@@ -215,9 +188,87 @@ class MessageConfig:
             if not key or key in seen:
                 continue
             seen.add(key)
-            if key in self.parser_outputs:
-                return self._flags_for_mode(self.parser_outputs[key])
+            if key in self.modes:
+                return self._flags_for_mode(self.modes[key])
         return OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL]
+
+
+@dataclass
+class OpeningMessageConfig:
+    enabled: bool = True
+    content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
+
+
+@dataclass
+class PackingConfig:
+    mode: str = PACK_MODE_NONE
+    image_threshold: int = 3
+    video_threshold: int = 2
+    node_threshold: int = 5
+
+    def should_pack(
+        self,
+        image_count: int,
+        video_count: int,
+        node_count: int,
+    ) -> bool:
+        """根据打包模式和实际节点数量判断是否发送消息集合。"""
+        if self.mode == PACK_MODE_ALL:
+            return True
+        if self.mode != PACK_MODE_CONDITIONAL:
+            return False
+
+        thresholds = (
+            (self.image_threshold, image_count),
+            (self.video_threshold, video_count),
+            (self.node_threshold, node_count),
+        )
+        return any(
+            threshold > 0 and count >= threshold
+            for threshold, count in thresholds
+        )
+
+
+@dataclass
+class MediaDisplayConfig:
+    video_cover_only: bool = False
+
+
+@dataclass
+class TextMetadataConfig:
+    show_title: bool = True
+    show_author: bool = True
+    show_timestamp: bool = True
+    show_original_link: bool = True
+    show_description: bool = True
+    quote_user_message: bool = False
+
+    def visibility(self) -> Dict[str, bool]:
+        """返回写入 metadata 的稳定字段名与展示开关。"""
+        return {
+            "title": self.show_title,
+            "author": self.show_author,
+            "timestamp": self.show_timestamp,
+            "original_link": self.show_original_link,
+            "description": self.show_description,
+        }
+
+
+@dataclass
+class HotCommentConfig:
+    count: int = 0
+    bilibili: bool = True
+    weibo: bool = True
+    xiaohongshu: bool = True
+
+
+@dataclass
+class MessageConfig:
+    opening: OpeningMessageConfig = field(default_factory=OpeningMessageConfig)
+    packing: PackingConfig = field(default_factory=PackingConfig)
+    media_display: MediaDisplayConfig = field(default_factory=MediaDisplayConfig)
+    text_metadata: TextMetadataConfig = field(default_factory=TextMetadataConfig)
+    hot_comments: HotCommentConfig = field(default_factory=HotCommentConfig)
 
 
 @dataclass
@@ -384,7 +435,10 @@ class ConfigManager:
 
         # --- parsers/output modes ---
         parsers_raw = config.get("parsers", {})
-        self.parser_outputs = self._parse_parser_outputs(parsers_raw)
+        self.parser_output = ParserOutputConfig(
+            modes=self._parse_parser_outputs(parsers_raw)
+        )
+        self.parser_outputs = self.parser_output.modes
         self._enable_bilibili = self._parser_enabled("bilibili")
         self._enable_douyin = self._parser_enabled("douyin")
         self._enable_tiktok = self._parser_enabled("tiktok")
@@ -422,48 +476,63 @@ class ConfigManager:
         hot_count = self._parse_non_negative_int(
             hot_comments.get("count", 0), 0
         )
-        any_text_output_enabled = any(
-            flags[0]
-            for flags in (
-                OUTPUT_MODE_FLAGS.get(mode, (False, False))
-                for mode in self.parser_outputs.values()
-            )
-        )
+        any_text_output_enabled = self.parser_output.has_any_text_output()
         if not any_text_output_enabled:
             hot_count = 0
 
         self.message = MessageConfig(
-            pack_mode=self._parse_pack_mode(
-                packing.get("mode", PACK_MODE_NONE)
+            opening=OpeningMessageConfig(
+                enabled=bool(opening.get("enable", True)),
+                content=str(opening.get(
+                    "content",
+                    "流媒体解析bot为您服务 ٩( 'ω' )و",
+                ) or "流媒体解析bot为您服务 ٩( 'ω' )و"),
             ),
-            pack_image_threshold=self._parse_non_negative_int(
-                pack_thresholds.get("image_count", 3), 3
+            packing=PackingConfig(
+                mode=self._parse_pack_mode(
+                    packing.get("mode", PACK_MODE_NONE)
+                ),
+                image_threshold=self._parse_non_negative_int(
+                    pack_thresholds.get("image_count", 3), 3
+                ),
+                video_threshold=self._parse_non_negative_int(
+                    pack_thresholds.get("video_count", 2), 2
+                ),
+                node_threshold=self._parse_non_negative_int(
+                    pack_thresholds.get("node_count", 5), 5
+                ),
             ),
-            pack_video_threshold=self._parse_non_negative_int(
-                pack_thresholds.get("video_count", 2), 2
+            media_display=MediaDisplayConfig(
+                video_cover_only=bool(
+                    media_display.get("video_cover_only", False)
+                ),
             ),
-            pack_node_threshold=self._parse_non_negative_int(
-                pack_thresholds.get("node_count", 5), 5
+            text_metadata=TextMetadataConfig(
+                show_title=bool(text_metadata.get("show_title", True)),
+                show_author=bool(text_metadata.get("show_author", True)),
+                show_timestamp=bool(
+                    text_metadata.get("show_timestamp", True)
+                ),
+                show_original_link=bool(
+                    text_metadata.get("show_original_link", True)
+                ),
+                show_description=bool(
+                    text_metadata.get("show_description", True)
+                ),
+                quote_user_message=bool(
+                    text_metadata.get("quote_user_message", False)
+                ),
             ),
-            quote_user_message=bool(
-                text_metadata.get("quote_user_message", False)
+            hot_comments=HotCommentConfig(
+                count=hot_count,
+                bilibili=bool(hot_comments.get("bilibili", True)),
+                weibo=bool(hot_comments.get("weibo", True)),
+                xiaohongshu=bool(
+                    hot_comments.get("xiaohongshu", True)
+                ),
             ),
-            video_cover_only=bool(
-                media_display.get("video_cover_only", False)
-            ),
-            opening_enabled=opening.get("enable", True),
-            opening_content=opening.get(
-                "content", "流媒体解析bot为您服务 ٩( 'ω' )و"
-            ),
-            hot_comment_count=hot_count,
-            hot_comment_bilibili=bool(hot_comments.get("bilibili", True)),
-            hot_comment_weibo=bool(hot_comments.get("weibo", True)),
-            hot_comment_xiaohongshu=bool(
-                hot_comments.get("xiaohongshu", True)
-            ),
-            parser_outputs=self.parser_outputs,
         )
-        if not self.message.has_any_output():
+        if not self.parser_output.has_any_output():
             logger.warning(
                 "所有解析器输出均已关闭，插件将不会触发解析。"
             )
@@ -720,24 +789,19 @@ class ConfigManager:
     # ── 工厂方法 ────────────────────────────────────────
 
     def _parser_enabled(self, parser_name: str) -> bool:
-        return any(
-            OUTPUT_MODE_FLAGS.get(
-                self.parser_outputs.get(parser_name, OUTPUT_MODE_ALL),
-                OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL],
-            )
-        )
+        return self.parser_output.controller_has_any_output(parser_name)
 
     def _effective_hot_comment_count(
         self,
         enabled: bool,
         controller: str
     ) -> int:
-        text_enabled, _ = self.message.output_for_controller(controller)
+        text_enabled, _ = self.parser_output.output_for_controller(controller)
         if not text_enabled:
             return 0
         if not enabled:
             return 0
-        return self.message.hot_comment_count
+        return self.message.hot_comments.count
 
     def create_parsers(self) -> List:
         """根据配置创建并返回解析器列表。
@@ -747,15 +811,15 @@ class ConfigManager:
         """
         parsers = []
         bili_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_bilibili,
+            self.message.hot_comments.bilibili,
             "bilibili",
         )
         weibo_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_weibo,
+            self.message.hot_comments.weibo,
             "weibo",
         )
         xhs_hc = self._effective_hot_comment_count(
-            self.message.hot_comment_xiaohongshu,
+            self.message.hot_comments.xiaohongshu,
             "xiaohongshu",
         )
         proxy_addr = self.proxy.address or None
@@ -786,7 +850,7 @@ class ConfigManager:
         if self._enable_xianyu:
             parsers.append(XianyuParser())
         if self._enable_toutiao:
-            _, toutiao_rich_enabled = self.message.output_for_controller(
+            _, toutiao_rich_enabled = self.parser_output.output_for_controller(
                 "toutiao"
             )
             if toutiao_rich_enabled and self.download.cache_dir_available:

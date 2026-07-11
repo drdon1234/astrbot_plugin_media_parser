@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..logger import logger
+from ..metadata_visibility import text_metadata_field_enabled
 from .llm_client import LLMClient
 
 
@@ -125,7 +126,10 @@ class MetadataTranslator:
                 )
                 or CONTENT_SCOPE_BODY_AND_TITLE
             ).strip()
-            if content_scope == CONTENT_SCOPE_BODY_AND_TITLE:
+            if (
+                content_scope == CONTENT_SCOPE_BODY_AND_TITLE and
+                text_metadata_field_enabled(metadata, "title")
+            ):
                 self._append_text_item(
                     items,
                     meta_idx,
@@ -133,13 +137,14 @@ class MetadataTranslator:
                     metadata.get("title"),
                     target_language,
                 )
-            self._append_text_item(
-                items,
-                meta_idx,
-                "desc",
-                metadata.get("desc"),
-                target_language,
-            )
+            if text_metadata_field_enabled(metadata, "description"):
+                self._append_text_item(
+                    items,
+                    meta_idx,
+                    "desc",
+                    metadata.get("desc"),
+                    target_language,
+                )
             if not items:
                 continue
             total_chars = sum(len(item["text"]) for item in items)

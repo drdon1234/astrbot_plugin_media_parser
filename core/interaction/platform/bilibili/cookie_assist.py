@@ -42,6 +42,8 @@ class BilibiliAdminCookieAssistManager(AdminAssistManager):
         """
         if not self._is_admin_private_event(event):
             return False
+        if not self._is_user_message_event(event):
+            return False
 
         self._admin_private_origin = event.unified_msg_origin
         if not self.enabled:

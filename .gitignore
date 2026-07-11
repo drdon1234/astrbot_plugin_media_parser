@@ -153,7 +153,8 @@ cython_debug/
 cache/
 
 # 本地测试目录
-tests/
+tests/*
+!tests/test_cache_cleanup.py
 
 # 临时文件
 *.tmp

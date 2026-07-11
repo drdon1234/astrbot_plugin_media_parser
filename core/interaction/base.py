@@ -49,9 +49,34 @@ class AdminAssistManager(ABC):
         sender_id = self._normalize_sender_id(event.get_sender_id())
         return bool(self.admin_id and sender_id == self.admin_id)
 
+    @staticmethod
+    def _is_user_message_event(event: AstrMessageEvent) -> bool:
+        """排除 Notice/Request 等被适配成私聊会话的非消息事件。"""
+        message_obj = getattr(event, "message_obj", None)
+        raw_message = getattr(message_obj, "raw_message", None)
+        raw_get = getattr(raw_message, "get", None)
+        if callable(raw_get):
+            try:
+                post_type = str(raw_get("post_type") or "").strip().lower()
+            except (KeyError, TypeError, ValueError):
+                post_type = ""
+            if post_type:
+                return post_type == "message"
+
+        message_text = str(getattr(event, "message_str", "") or "").strip()
+        if message_text:
+            return True
+        try:
+            return bool(event.get_messages())
+        except (AttributeError, TypeError):
+            return False
+
     def try_update_admin_origin(self, event: AstrMessageEvent) -> None:
         """若消息来自管理员私聊，更新可用的私聊会话标识。"""
-        if self._is_admin_private_event(event):
+        if (
+            self._is_admin_private_event(event) and
+            self._is_user_message_event(event)
+        ):
             self._admin_private_origin = event.unified_msg_origin
             logger.debug("已更新管理员私聊会话标识")
 

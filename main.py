@@ -15,8 +15,10 @@ from .core.parser import ParserManager
 from .core.parser.utils import extract_url_from_card_data
 from .core.downloader import DownloadManager
 from .core.storage import (
+    cleanup_expired_marked_in,
     cleanup_files,
     cleanup_marked_in,
+    mark_files_expire_after,
     ParseRecordManager,
     register_files_with_token_service,
 )
@@ -36,7 +38,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "0.8.0"
+    "0.8.1"
 )
 class VideoParserPlugin(Star):
 
@@ -66,11 +68,12 @@ class VideoParserPlugin(Star):
             cache_dir=cfg.download.cache_dir,
             cache_dir_available=cfg.download.cache_dir_available,
             max_concurrent_downloads=cfg.download.max_concurrent_downloads,
-            video_cover_only=cfg.message.video_cover_only,
+            video_cover_only=cfg.message.media_display.video_cover_only,
         )
 
         self.message_sender = MessageSender()
         self._cleanup_tasks: set[asyncio.Task] = set()
+        self._expired_cleanup_task: Optional[asyncio.Task] = None
         rate_limit = cfg.parse_rate_limit
         self.parse_record_manager = ParseRecordManager(
             record_file=rate_limit.record_file,
@@ -89,8 +92,11 @@ class VideoParserPlugin(Star):
             reply_timeout_minutes=cfg.bilibili.admin_reply_timeout_minutes,
             request_cooldown_minutes=cfg.bilibili.admin_request_cooldown_minutes,
         )
+        self._cleanup_expired_cache_once()
+        self._start_expired_cache_cleanup()
 
     async def terminate(self):
+        await self._shutdown_expired_cache_cleanup()
         await self._shutdown_delayed_cleanups()
         await self.admin_cookie_assist.shutdown()
         await self.download_manager.shutdown()
@@ -119,9 +125,68 @@ class VideoParserPlugin(Star):
             logger.warning(f"延迟清理文件失败: {e}")
 
     def _schedule_delayed_cleanup(self, files, delay: int):
-        task = asyncio.create_task(self._delayed_cleanup(list(files), delay))
+        files = list(files)
+        marked = mark_files_expire_after(files, delay)
+        if marked and self.config_manager.admin.debug_mode:
+            logger.debug(f"已写入 {marked} 个媒体缓存子目录的过期标记")
+        task = asyncio.create_task(self._delayed_cleanup(files, delay))
         self._cleanup_tasks.add(task)
         task.add_done_callback(self._cleanup_tasks.discard)
+
+    def _cleanup_expired_cache_once(self) -> None:
+        cache_dir = self.download_manager.cache_dir
+        if not cache_dir:
+            return
+        try:
+            subdirs_cleaned, files_cleaned = cleanup_expired_marked_in(
+                cache_dir,
+                ttl_seconds=self.config_manager.relay.file_token_ttl,
+            )
+            if subdirs_cleaned:
+                logger.info(
+                    f"已清理过期媒体缓存: {subdirs_cleaned} 个子目录, "
+                    f"{files_cleaned} 个文件"
+                )
+        except Exception as e:
+            logger.warning(f"清理过期媒体缓存失败: {e}")
+
+    def _expired_cleanup_interval(self) -> int:
+        ttl = self.config_manager.relay.file_token_ttl
+        try:
+            ttl = int(ttl)
+        except (TypeError, ValueError):
+            ttl = 300
+        return max(30, min(ttl, 300))
+
+    async def _expired_cache_cleanup_loop(self) -> None:
+        try:
+            while True:
+                self._cleanup_expired_cache_once()
+                await asyncio.sleep(self._expired_cleanup_interval())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"过期媒体缓存清理任务异常退出: {e}")
+
+    def _start_expired_cache_cleanup(self) -> None:
+        if not self.download_manager.cache_dir:
+            return
+        if self._expired_cleanup_task and not self._expired_cleanup_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._expired_cleanup_task = loop.create_task(
+            self._expired_cache_cleanup_loop()
+        )
+
+    async def _shutdown_expired_cache_cleanup(self):
+        task = self._expired_cleanup_task
+        self._expired_cleanup_task = None
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _shutdown_delayed_cleanups(self):
         tasks = list(self._cleanup_tasks)
@@ -191,9 +256,20 @@ class VideoParserPlugin(Star):
     @staticmethod
     def _has_text_metadata(metadata: Dict[str, Any]) -> bool:
         """判断解析结果是否包含可发送的文本元数据。"""
+        fields = metadata.get("_text_metadata_fields")
+        if not isinstance(fields, dict):
+            fields = {}
+        candidates = (
+            ("title", "title"),
+            ("author", "author"),
+            ("description", "desc"),
+            ("timestamp", "timestamp"),
+            ("original_link", "url"),
+        )
         return any(
-            bool(str(metadata.get(key) or "").strip())
-            for key in ("title", "author", "desc", "timestamp")
+            bool(fields.get(field_name, True)) and
+            bool(str(metadata.get(metadata_key) or "").strip())
+            for field_name, metadata_key in candidates
         )
 
     def _filter_links_by_output(self, links_with_parser):
@@ -202,7 +278,7 @@ class VideoParserPlugin(Star):
         filtered = []
         for link, parser in links_with_parser:
             parser_name = getattr(parser, "name", "")
-            if cfg.message.controller_has_any_output(parser_name):
+            if cfg.parser_output.controller_has_any_output(parser_name):
                 filtered.append((link, parser))
             elif cfg.admin.debug_mode:
                 self.logger.debug(
@@ -215,10 +291,13 @@ class VideoParserPlugin(Star):
         """将每条解析结果的有效输出开关写入 metadata。"""
         for metadata in metadata_list:
             text_enabled, rich_enabled = (
-                self.config_manager.message.output_for_metadata(metadata)
+                self.config_manager.parser_output.output_for_metadata(metadata)
             )
             metadata["_enable_text_metadata"] = text_enabled
             metadata["_enable_rich_media"] = rich_enabled
+            metadata["_text_metadata_fields"] = (
+                self.config_manager.message.text_metadata.visibility()
+            )
 
     @staticmethod
     def _event_context(event: AstrMessageEvent) -> Dict[str, Any]:
@@ -291,8 +370,7 @@ class VideoParserPlugin(Star):
         )
         has_text = (
             self._has_text_metadata(metadata) or
-            bool(metadata.get("access_message")) or
-            has_media
+            bool(metadata.get("access_message"))
         )
         return bool((rich_enabled and has_media) or (text_enabled and has_text))
 
@@ -323,10 +401,11 @@ class VideoParserPlugin(Star):
 
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse(self, event: AstrMessageEvent):
+        self._start_expired_cache_cleanup()
         cfg = self.config_manager
         self.admin_cookie_assist.try_update_admin_origin(event)
 
-        if not cfg.message.has_any_output():
+        if not cfg.parser_output.has_any_output():
             if cfg.admin.debug_mode:
                 self.logger.debug("文本元数据和富媒体均关闭，跳过解析")
             return
@@ -485,13 +564,13 @@ class VideoParserPlugin(Star):
 
                 async def send_opening_once() -> None:
                     nonlocal opening_sent
-                    if not cfg.message.opening_enabled:
+                    if not cfg.message.opening.enabled:
                         return
                     async with opening_lock:
                         if opening_sent:
                             return
                         msg_text = (
-                            cfg.message.opening_content
+                            cfg.message.opening.content
                             or "流媒体解析bot为您服务 ٩( 'ω' )و"
                         )
                         try:
@@ -595,7 +674,7 @@ class VideoParserPlugin(Star):
 
             build_result = build_all_nodes(
                 processed_metadata_list,
-                cfg.message.pack_mode,
+                cfg.message.packing.mode,
                 cfg.download.large_video_threshold_mb,
                 cfg.download.max_video_size_mb,
                 True,
@@ -628,11 +707,11 @@ class VideoParserPlugin(Star):
                 return
 
             node_counts = summarize_node_counts(build_result.all_link_nodes)
-            should_pack = cfg.message.should_pack(**node_counts)
+            should_pack = cfg.message.packing.should_pack(**node_counts)
 
             if cfg.admin.debug_mode:
                 self.logger.debug(
-                    f"开始发送结果，打包模式: {cfg.message.pack_mode}, "
+                    f"开始发送结果，打包模式: {cfg.message.packing.mode}, "
                     f"实际打包: {should_pack}, "
                     f"图片节点: {node_counts['image_count']}, "
                     f"视频节点: {node_counts['video_count']}, "
@@ -653,7 +732,9 @@ class VideoParserPlugin(Star):
                         event,
                         build_result.all_link_nodes,
                         build_result.link_metadata,
-                        quote_user_message=cfg.message.quote_user_message,
+                        quote_user_message=(
+                            cfg.message.text_metadata.quote_user_message
+                        ),
                         quote_message_id=quote_source_message_id,
                     )
 

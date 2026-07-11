@@ -4,7 +4,7 @@ import shutil
 from typing import List
 
 from ..logger import logger
-from .cache_marker import MARKER_FILE_NAME
+from .cache_marker import EXPIRY_FILE_NAME, MARKER_FILE_NAME
 
 
 def cleanup_file(file_path: str) -> bool:
@@ -45,8 +45,12 @@ def _try_remove_empty_parent(file_path: str) -> None:
         remaining = os.listdir(parent)
         if not remaining:
             os.rmdir(parent)
-        elif remaining == [MARKER_FILE_NAME]:
-            os.unlink(os.path.join(parent, MARKER_FILE_NAME))
+        elif remaining and set(remaining).issubset({
+            MARKER_FILE_NAME,
+            EXPIRY_FILE_NAME,
+        }):
+            for name in remaining:
+                os.unlink(os.path.join(parent, name))
             os.rmdir(parent)
     except OSError:
         pass
