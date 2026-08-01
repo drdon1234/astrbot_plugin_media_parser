@@ -29,6 +29,10 @@ from .core.message_adapter.node_builder import (
     build_translation_nodes_for_all,
     summarize_node_counts,
 )
+from .core.message_adapter.archive_builder import (
+    build_zip_archive,
+    cleanup_zip_archive,
+)
 from .core.translation import MetadataTranslator
 from .core.config_manager import ConfigManager
 from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
@@ -38,7 +42,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "0.8.1"
+    "0.9.0"
 )
 class VideoParserPlugin(Star):
 
@@ -441,41 +445,64 @@ class VideoParserPlugin(Star):
                 )
             parse_text = card_url
 
-        links_with_parser = self.parser_manager.extract_all_links(
-            parse_text
+        zip_command = cfg.message.packing.zip_command
+        zip_requested = bool(
+            zip_command and original_message_text.strip() == zip_command
         )
-        found_direct_links = bool(links_with_parser)
-        if found_direct_links:
-            links_with_parser = self._filter_links_by_output(links_with_parser)
+        if zip_requested:
+            links_with_parser, reply_message_id = (
+                self._try_extract_reply_links(event)
+            )
+            if reply_message_id:
+                quote_source_message_id = reply_message_id
+            links_with_parser = self._filter_links_by_output(
+                links_with_parser
+            )
             if not links_with_parser:
+                await event.send(event.plain_result(
+                    "请引用包含可解析链接的消息后再发送打包命令。"
+                ))
                 return
-
-        if not links_with_parser:
-            if (
-                cfg.trigger.reply_trigger
-                and cfg.trigger.has_keyword(original_message_text)
-            ):
-                links_with_parser, reply_message_id = (
-                    self._try_extract_reply_links(event)
-                )
-                if reply_message_id:
-                    quote_source_message_id = reply_message_id
+        else:
+            links_with_parser = self.parser_manager.extract_all_links(
+                parse_text
+            )
+            found_direct_links = bool(links_with_parser)
+            if found_direct_links:
                 links_with_parser = self._filter_links_by_output(
                     links_with_parser
                 )
-                if links_with_parser and cfg.admin.debug_mode:
-                    self.logger.debug(
-                        f"通过回复触发解析，提取到 "
-                        f"{len(links_with_parser)} 个链接"
-                    )
-            if not links_with_parser:
-                await self.admin_cookie_assist.handle_admin_reply(
-                    event,
-                    self.bilibili_auth_runtime
-                )
-                return
+                if not links_with_parser:
+                    return
 
-        if not cfg.trigger.should_parse(original_message_text):
+            if not links_with_parser:
+                if (
+                    cfg.trigger.reply_trigger
+                    and cfg.trigger.has_keyword(original_message_text)
+                ):
+                    links_with_parser, reply_message_id = (
+                        self._try_extract_reply_links(event)
+                    )
+                    if reply_message_id:
+                        quote_source_message_id = reply_message_id
+                    links_with_parser = self._filter_links_by_output(
+                        links_with_parser
+                    )
+                    if links_with_parser and cfg.admin.debug_mode:
+                        self.logger.debug(
+                            f"通过回复触发解析，提取到 "
+                            f"{len(links_with_parser)} 个链接"
+                        )
+                if not links_with_parser:
+                    await self.admin_cookie_assist.handle_admin_reply(
+                        event,
+                        self.bilibili_auth_runtime
+                    )
+                    return
+
+        if not zip_requested and not cfg.trigger.should_parse(
+            original_message_text
+        ):
             return
 
         rate_limit_user_key = ParseRecordManager.build_user_key(
@@ -718,37 +745,59 @@ class VideoParserPlugin(Star):
                     f"总节点: {node_counts['node_count']}"
                 )
 
+            archive_path = ""
             try:
-                if should_pack:
-                    await self.message_sender.send_packed_results(
-                        event,
+                if zip_requested:
+                    translation_nodes = (
+                        await self._build_translation_nodes_after_task(
+                            translation_task,
+                            translation_metadata_list,
+                        )
+                    )
+                    archive_path = build_zip_archive(
+                        processed_metadata_list,
                         build_result.link_metadata,
-                        sender_name,
-                        sender_id,
-                        cfg.download.large_video_threshold_mb,
+                        should_pack=should_pack,
+                        translation_nodes=translation_nodes,
+                        output_dir=cfg.download.cache_dir,
+                    )
+                    await self.message_sender.send_zip_result(
+                        event,
+                        archive_path,
                     )
                 else:
-                    await self.message_sender.send_unpacked_results(
-                        event,
-                        build_result.all_link_nodes,
-                        build_result.link_metadata,
-                        quote_user_message=(
-                            cfg.message.text_metadata.quote_user_message
-                        ),
-                        quote_message_id=quote_source_message_id,
-                    )
+                    if should_pack:
+                        await self.message_sender.send_packed_results(
+                            event,
+                            build_result.link_metadata,
+                            sender_name,
+                            sender_id,
+                            cfg.download.large_video_threshold_mb,
+                        )
+                    else:
+                        await self.message_sender.send_unpacked_results(
+                            event,
+                            build_result.all_link_nodes,
+                            build_result.link_metadata,
+                            quote_user_message=(
+                                cfg.message.text_metadata.quote_user_message
+                            ),
+                            quote_message_id=quote_source_message_id,
+                        )
 
-                translation_nodes = await self._build_translation_nodes_after_task(
-                    translation_task,
-                    translation_metadata_list,
-                )
-                await self.message_sender.send_translation_results(
-                    event,
-                    translation_nodes,
-                    should_pack=should_pack,
-                    sender_name=sender_name,
-                    sender_id=sender_id,
-                )
+                    translation_nodes = (
+                        await self._build_translation_nodes_after_task(
+                            translation_task,
+                            translation_metadata_list,
+                        )
+                    )
+                    await self.message_sender.send_translation_results(
+                        event,
+                        translation_nodes,
+                        should_pack=should_pack,
+                        sender_name=sender_name,
+                        sender_id=sender_id,
+                    )
 
                 if cfg.admin.debug_mode:
                     self.logger.debug("发送完成")
@@ -761,6 +810,7 @@ class VideoParserPlugin(Star):
                 )
                 raise
             finally:
+                cleanup_zip_archive(archive_path)
                 all_files = (
                     build_result.temp_files + build_result.video_files
                 )

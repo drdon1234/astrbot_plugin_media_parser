@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v6.3.2-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v6.5.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -54,7 +54,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 </tr>
 <tr>
 <td class="center"><strong>小红书</strong></td>
-<td>短链（<code>xhslink.com/...</code>）<br>笔记链接（<code>www.xiaohongshu.com/explore/...</code>、<code>www.xiaohongshu.com/discovery/item/...</code>）<br>小程序卡片（<code>message.meta.news.jumpUrl</code>）</td>
+<td>短链（<code>xhslink.com/...</code>、<code>xhslink.cn/...</code>）<br>笔记链接（<code>www.xiaohongshu.com/explore/...</code>、<code>www.xiaohongshu.com/discovery/item/...</code>）<br>小程序卡片（<code>message.meta.news.jumpUrl</code>）</td>
 <td class="center">视频 / 图片 / 文本 / 热评</td>
 </tr>
 <tr>
@@ -77,6 +77,11 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 <td>统一链接（<code>twitter.com/.../status/...</code>、<code>x.com/.../status/...</code>）</td>
 <td class="center">视频 / 图片 / 文本</td>
 </tr>
+<tr>
+<td class="center"><strong>Pixiv</strong></td>
+<td>插画/漫画链接（<code>pixiv.net/artworks/...</code>、<code>pixiv.net/i/...</code>，支持 <code>/en/</code> 前缀）</td>
+<td class="center">图片 / 文本</td>
+</tr>
 </tbody>
 </table>
 
@@ -96,6 +101,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - ✅ 每个平台可独立选择输出模式：全部发送、仅文本、仅富媒体或关闭
 - ✅ 可选大模型翻译正文和标题，支持 AstrBot 内置 AI 或插件自定义 OpenAI 兼容接口
 - ✅ 支持消息集合打包策略：不打包、全部打包或按条件打包
+- ✅ 可将引用链接的解析文本和已下载媒体打包为 ZIP 文件发送
 - ✅ 可选 B站 Cookie 解锁高画质 + 管理员协助自动续期
 - ✅ 媒体中转模式，跨服务器部署无需共享目录
 
@@ -151,6 +157,8 @@ QQ 普通文本消息没有可移植的“超链接文本”协议，因此插�
 
 `消息输出 → 文本元数据 → 引用用户消息` 可在不打包时让文本元数据节点引用对应的用户消息；媒体节点和打包消息不引用。
 
+在 `消息输出 → 发送行为：消息打包 → 引用链接打包命令` 中填写命令后，引用包含可解析链接的消息并单独发送该命令即可生成 ZIP。每条链接的 `metadata.txt` 与对应媒体位于同一目录；启用消息集合打包时，链接目录会统一放在 ZIP 顶层目录下。无法取得本地媒体文件时，文本中会记录未打包的媒体链接。留空可关闭此功能。
+
 `解析频率限制` 默认关闭。可分别设置 `同视频链接限制` 和 `同用户限制` 的 `最多解析次数` 与 `时间窗秒数`；次数为 `0` 表示不限制。链接计数会使用清洗后的标准链接，过滤分享者、来源和追踪参数；短链解析完成后也会记录平台返回的最终链接别名。解析记录会持久化到插件运行时目录，并按已启用限制中的最大时间窗自动裁剪，避免记录无限增长。
 
 ---
@@ -174,6 +182,7 @@ QQ 普通文本消息没有可移植的“超链接文本”协议，因此插�
 **概率风控（建议缓存目录可用）**
 - **TikTok**：受地区和风控影响较明显，必要时请同时配置代理
 - **小红书**：部分媒体有身份验证和时效性，缓存发送更稳定
+- **Pixiv**：图片必须先下载到缓存；受地区限制时需开启 Pixiv 代理
 
 **提高性能（可选）**
 - **B站**：支持 Range 并发下载提升速度；Cookie 登录后 DASH 音视频流也可独立 Range 加速
@@ -210,6 +219,19 @@ Cookie 会过期失效，开启 `管理员协助登录` 后，当 Cookie 失效�
 
 ---
 
+## 🖼️ Pixiv Cookie 与代理
+
+Pixiv 支持插画和漫画的多页图片解析，优先下载原图，原图不可用时自动尝试较低分辨率图片。
+解析结果会附带作品标签，并标注 R-18、R-18G 和 AI 生成状态。
+
+1. 公开作品通常可直接解析；需要登录或受年龄限制的作品应在 `Pixiv 设置 → Pixiv Cookie` 中填写包含 `PHPSESSID` 的完整 Cookie
+2. 无法直连 Pixiv 时，填写 `代理设置 → 代理地址` 并开启 `Pixiv解析与图片下载使用代理`
+3. Pixiv 图片需要携带 Referer 下载并缓存后发送，因此媒体缓存目录必须可用
+
+Cookie 仅用于访问 Pixiv，不会写入日志或发送到消息平台。Cookie 失效或遭遇 Cloudflare 拦截时，解析结果会返回对应错误提示。
+
+---
+
 ## 🔁 媒体中转模式
 
 当 AstrBot 与消息平台协议端（如 NapCat、Lagrange）**不在同一台机器**或**无法共享文件目录**时，本地下载的媒体文件对协议端不可达。
@@ -243,6 +265,7 @@ Cookie 会过期失效，开启 `管理员协助登录` 后，当 Cookie 失效�
 - **小红书**：部分媒体有身份验证和时效性，移动端分享链解析结果带水印
 - **小黑盒**：BBS 分享和部分视频解析依赖 `cryptography` 库；游戏预览视频下载速度不佳（Steam CDN）时建议启用代理
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境，建议按需开启代理
+- **Pixiv**：登录或年龄限制作品需要有效 Cookie；受地区限制时需同时代理解析请求和图片下载
 - **图片处理**：格式除 ```.jpg```, ```.jpeg```, ```.png``` 外的所有图片会先转换为 ```.png``` 格式再发送
 - **其他**：插件会跳过包含 `"原始链接："` 字段的消息，防止重复解析；直播链接会自动跳过
 

@@ -58,7 +58,7 @@ class XiaohongshuParser(BaseVideoParser):
         if not url:
             return False
         url_lower = url.lower()
-        if 'xhslink.com' in url_lower or 'xiaohongshu.com' in url_lower:
+        if 'xhslink.com' in url_lower or 'xhslink.cn' in url_lower or 'xiaohongshu.com' in url_lower:
             return True
         return False
 
@@ -74,7 +74,7 @@ class XiaohongshuParser(BaseVideoParser):
         result_links_set = set()
         seen_urls = set()
         
-        short_pattern = r'https?://xhslink\.com/[^\s<>"\'()]+'
+        short_pattern = r'https?://xhslink\.(?:com|cn)/[^\s<>"\'()]+'
         short_links = re.findall(short_pattern, text, re.IGNORECASE)
         for link in short_links:
             normalized = link.lower()
@@ -635,7 +635,7 @@ class XiaohongshuParser(BaseVideoParser):
         """
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
-            if "xhslink.com" in url:
+            if "xhslink.com" in url or "xhslink.cn" in url:
                 full_url = await self._get_redirect_url(session, url)
                 logger.debug(f"[{self.name}] parse: 短链展开 {url} -> {full_url}")
             else:

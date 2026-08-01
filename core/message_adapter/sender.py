@@ -288,3 +288,20 @@ class MessageSender:
             if item_idx < len(non_empty) - 1:
                 await event.send(event.plain_result(separator))
 
+    async def send_zip_result(
+        self,
+        event: AstrMessageEvent,
+        archive_path: str,
+    ) -> None:
+        """发送本地 ZIP 文件。"""
+        try:
+            from astrbot.api.message_components import File
+        except ImportError as exc:
+            raise RuntimeError("当前 AstrBot 版本不支持文件消息组件") from exc
+
+        try:
+            file_component = File.fromFileSystem(archive_path)
+        except AttributeError:
+            file_component = File(file=archive_path)
+        await event.send(event.chain_result([file_component]))
+

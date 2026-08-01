@@ -153,8 +153,7 @@ cython_debug/
 cache/
 
 # 本地测试目录
-tests/*
-!tests/test_cache_cleanup.py
+/test/
 
 # 临时文件
 *.tmp
@@ -165,6 +164,3 @@ tests/*
 # 日志文件
 *.log
 logs/
-
-# Local tests
-/test/

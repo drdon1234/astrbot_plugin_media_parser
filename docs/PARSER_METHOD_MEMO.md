@@ -255,10 +255,10 @@ Component_Play_Playinfo
 
 支持能力：视频 / 图片 / 文本 / 热评
 
-小红书要兼容移动端和 PC 端两套状态树。短链 `xhslink.com` 只是入口，必须先展开到正式笔记页。
+小红书要兼容移动端和 PC 端两套状态树。短链 `xhslink.com` / `xhslink.cn` 只是入口，必须先展开到正式笔记页。
 
 ```text
-xhslink.com / xiaohongshu.com
+xhslink.com / xhslink.cn / xiaohongshu.com
   ↓
 展开短链
   ↓
@@ -491,7 +491,44 @@ Twitter 的响应嵌套很深，不能假设固定路径永远存在。解析时
 
 如果一条推文没有图片和视频，但有正文，也仍然是可解析内容。
 
-## 十二、维护原则
+## 十二、Pixiv
+
+支持能力：图片 / 文本
+
+Pixiv 的稳定入口是作品 ID。解析器支持 `artworks/{id}`、`i/{id}` 以及带 `/en/` 前缀的链接；提链时保留原始匹配文本，并按作品 ID 去重，避免规范化链接后无法在原消息中定位。
+
+```text
+pixiv.net/artworks/{illust_id} / pixiv.net/i/{illust_id}
+  ↓
+提取 illust_id
+  ↓
+/ajax/illust/{illust_id}
+  └─ 标题、作者、标签、访问限制、AI 类型
+  ↓
+/ajax/illust/{illust_id}/pages?lang=zh
+  └─ 每页 original / regular / small 图片地址
+```
+
+元信息接口的 `body` 提供 `illustTitle`、`userName`、`userId`、`tags`、`xRestrict`、`aiType` 和 `sl`。标签最多取前 20 个用于文本描述；`xRestrict` 映射为 R-18 或 R-18G，`aiType=2` 标记为 AI 生成。
+
+分页接口按作品页返回图片 URL。每一页必须保持为一个独立候选组：
+
+```text
+image_urls = [
+  [original_page_0, regular_or_small_page_0],
+  [original_page_1, regular_or_small_page_1],
+]
+```
+
+下载管理器会按组内顺序尝试，原图失败后再降级较低分辨率，同一作品的不同页面不能合并成一个候选组。
+
+请求头需要桌面 User-Agent、Accept-Language 和指向当前作品页的 Referer。公开作品可不带 Cookie；登录或年龄限制作品需要配置包含 `PHPSESSID` 的完整 Cookie。API 返回 HTML 时要先识别 Cloudflare 防护页，再处理 HTTP 状态和 JSON，避免把拦截页面误报为普通 JSON 错误。
+
+Pixiv 的代理开关同时覆盖 Web Ajax API 和 `i.pximg.net` 图片下载。解析结果写入 `use_image_proxy` 与 `proxy_url`，图片下载继续携带作品页 Referer。图片只能缓存后发送，因此缓存目录不可用时会按统一下载规则标记为 `skip`。
+
+单个作品依次请求元信息和分页接口；多个作品并发解析时由 `Config.PARSER_MAX_CONCURRENT` 限制，避免一条消息中的大量链接形成无界请求突发。
+
+## 十三、维护原则
 
 修改平台解析逻辑时，优先问这些问题：
 
