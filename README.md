@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v6.5.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v6.6.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -104,6 +104,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - ✅ 可将引用链接的解析文本和已下载媒体打包为 ZIP 文件发送
 - ✅ 可选 B站 Cookie 解锁高画质 + 管理员协助自动续期
 - ✅ 媒体中转模式，跨服务器部署无需共享目录
+- ✅ 可选在被分享的源消息上贴表情反馈，逻辑参考 [astrbot_plugin_emoji_like](https://github.com/Zhalslar/astrbot_plugin_emoji_like)
 
 ---
 
@@ -254,6 +255,38 @@ Cookie 仅用于访问 Pixiv，不会写入日志或发送到消息平台。Cook
 3. 设置 `中转缓存有效期`（默认 300 秒），到期后临时链接失效并自动清理缓存
 
 > **注意**：开启媒体中转后，不会强制下载所有媒体，也不会自动切换缓存目录；它只会增强已经成功缓存到本地的媒体文件。Token 注册失败时会自动回退为本地文件发送
+
+---
+
+## 😄 解析后贴表情反馈
+
+借鉴 [astrbot_plugin_emoji_like](https://github.com/Zhalslar/astrbot_plugin_emoji_like) 的实现，本插件在自动解析成功后可以给**触发解析的源消息**贴一个表情包作为反馈，让分享链接的群友/好友更有"被回应"的感觉。
+
+### 触发场景
+
+| 场景 | 是否贴表情 |
+| --- | --- |
+| 群友/好友直接分享 B站/抖音/小红书 等链接 | ✅ 贴 |
+| 引用一条带链接的消息并发送触发关键词 | ✅ 贴（贴在原消息上） |
+| JSON 卡片 / 转发卡片 中提取到的链接 | ✅ 贴 |
+| 显式输入打包命令（如 `/zip`）触发解析 | ❌ 默认跳过（可关） |
+
+### 配置项（`贴表情` 分组）
+
+| 配置项 | 说明 | 默认 |
+| --- | --- | --- |
+| `启用` | 总开关 | `false` |
+| `表情ID池` | 可贴的表情 ID 列表（参考 QQ 表情 ID，可用 `astrbot_plugin_multimsg` 的 `face <ID范围>` 命令查询） | `4, 16, 28, 99, 101, 178, 269, 270, 277, 283` |
+| `单次贴表情数量` | 每次最多贴几个 | `1` |
+| `贴表情间隔（秒）` | 多个表情之间的间隔 | `0.4` |
+| `跳过显式管理命令` | 显式命令（打包等）触发时跳过 | `true` |
+
+### 平台兼容
+
+- 仅在 **OneBot v11 (aiocqhttp / go-cqhttp / napcat / llonebot 等)** 平台上生效
+- 其他平台（telegram、gewechat、webchat 等）会自动跳过，不影响主流程
+
+> **安全说明**：贴表情通过 `event.bot.set_msg_emoji_like` 接口调用，与参考插件一致；失败仅打 warning 日志，不会中断主流程。QQ 单条消息最多可贴 20 个表情，建议把 `单次贴表情数量` 控制在 1~3。
 
 ---
 

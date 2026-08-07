@@ -42,7 +42,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "6.5.0"
+    "6.6.0"
 )
 class VideoParserPlugin(Star):
 
@@ -117,6 +117,104 @@ class VideoParserPlugin(Star):
         if not reason:
             return
         self.admin_cookie_assist.trigger_assist_request(reason)
+
+    async def _attach_emoji_like(
+        self,
+        event: AstrMessageEvent,
+        message_id: Any,
+        emoji_ids: Optional[list] = None,
+    ) -> None:
+        """在分享/触发自动解析的源消息上贴表情包。
+
+        参考实现：https://github.com/Zhalslar/astrbot_plugin_emoji_like
+
+        仅当事件为 OneBot v11 (aiocqhttp) 平台时尝试调用
+        `bot.set_msg_emoji_like`；其他平台 / 能力缺失时静默跳过。
+        """
+        cfg = self.config_manager.emoji_like
+        debug = bool(self.config_manager.admin.debug_mode)
+        if not cfg.enabled:
+            return
+
+        if not message_id:
+            return
+
+        ids = list(emoji_ids) if emoji_ids else cfg.pick_emoji_ids()
+        if not ids:
+            if debug:
+                self.logger.debug("贴表情跳过: 没有可用的表情 ID")
+            return
+
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            if debug:
+                self.logger.debug(
+                    "贴表情跳过: event 没有 bot 属性 "
+                    f"(platform={event.get_platform_name()})"
+                )
+            return
+
+        set_emoji_like = getattr(bot, "set_msg_emoji_like", None)
+        if not callable(set_emoji_like):
+            if debug:
+                self.logger.debug(
+                    "贴表情跳过: 当前平台 bot 不支持 set_msg_emoji_like"
+                )
+            return
+
+        # 顺序去重、限制数量
+        seen: set = set()
+        ordered: list = []
+        for raw in ids:
+            try:
+                eid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if eid in seen:
+                continue
+            seen.add(eid)
+            ordered.append(eid)
+        if not ordered:
+            return
+
+        for emoji_id in ordered:
+            try:
+                await set_emoji_like(
+                    message_id=message_id,
+                    emoji_id=emoji_id,
+                    set=True,
+                )
+                if debug:
+                    self.logger.debug(
+                        f"贴表情成功: message_id={message_id}, "
+                        f"emoji_id={emoji_id}"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.logger.warning(
+                    f"贴表情失败: message_id={message_id}, "
+                    f"emoji_id={emoji_id}, error={e}"
+                )
+            if cfg.interval > 0 and emoji_id is not ordered[-1]:
+                await asyncio.sleep(cfg.interval)
+
+    def _schedule_emoji_like(
+        self,
+        event: AstrMessageEvent,
+        message_id: Any,
+    ) -> Optional[asyncio.Task]:
+        """以 fire-and-forget 方式调度贴表情，不阻塞主流程。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        task = loop.create_task(
+            self._attach_emoji_like(event, message_id)
+        )
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+        return task
 
     async def _delayed_cleanup(self, files, delay: int):
         try:
@@ -531,6 +629,17 @@ class VideoParserPlugin(Star):
                 f"提取到 {len(links_with_parser)} 个可解析链接: "
                 f"{[link for link, _ in links_with_parser]}"
             )
+
+        # ── 开始解析时给源消息贴表情包 ──────────────────
+        # 参考 https://github.com/Zhalslar/astrbot_plugin_emoji_like
+        # 默认跳过显式管理类命令（zip 等），仅在被分享的内容开始
+        # 解析时给原消息贴表情。
+        if cfg.emoji_like.enabled and quote_source_message_id:
+            if not (cfg.emoji_like.skip_admin_command and zip_requested):
+                self._schedule_emoji_like(
+                    event,
+                    quote_source_message_id,
+                )
 
         sender_name, sender_id = self.message_sender.get_sender_info(event)
 

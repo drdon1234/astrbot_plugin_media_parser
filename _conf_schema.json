@@ -702,5 +702,52 @@
                 "default": false
             }
         }
+    },
+    "emoji_like": {
+        "description": "自动解析后给源消息贴表情",
+        "type": "object",
+        "items": {
+            "enable": {
+                "description": "启用贴表情",
+                "type": "bool",
+                "hint": "自动解析成功后，给触发该解析的源消息贴一个表情（参考 astrbot_plugin_emoji_like）。仅在 OneBot v11 (aiocqhttp) 平台生效，其他平台自动跳过。",
+                "default": false
+            },
+            "emoji_ids": {
+                "description": "表情 ID 池",
+                "type": "list",
+                "hint": "可贴的表情 ID 列表，按 max_count 顺序取前 N 个（确定性，避免重复刷屏）。QQ 表情 ID 可用 astrbot_plugin_multimsg 插件的 face <ID范围> 命令查看",
+                "default": [
+                    4,
+                    16,
+                    28,
+                    99,
+                    101,
+                    178,
+                    269,
+                    270,
+                    277,
+                    283
+                ]
+            },
+            "max_count": {
+                "description": "单次贴表情数量",
+                "type": "int",
+                "hint": "每次解析成功最多给源消息贴几个表情，QQ 单条消息上限 20 个",
+                "default": 1
+            },
+            "interval": {
+                "description": "贴表情间隔（秒）",
+                "type": "float",
+                "hint": "贴多个表情时每个之间的间隔，避免被风控",
+                "default": 0.4
+            },
+            "skip_admin_command": {
+                "description": "跳过显式管理命令",
+                "type": "bool",
+                "hint": "开启后，使用打包/清理缓存等显式命令触发解析时不给源消息贴表情；仅对用户分享的链接自动解析生效",
+                "default": true
+            }
+        }
     }
 }

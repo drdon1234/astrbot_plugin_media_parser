@@ -266,6 +266,48 @@ class HotCommentConfig:
 
 
 @dataclass
+class EmojiLikeConfig:
+    """自动解析后给源消息贴表情包（参考 astrbot_plugin_emoji_like）。
+
+    注意：该能力依赖 OneBot v11 适配器的 `set_msg_emoji_like` 接口，
+    其他平台（telegram、webchat 等）将自动跳过，不影响主流程。
+    """
+    enabled: bool = False
+    emoji_ids: List[int] = field(default_factory=lambda: [
+        4, 16, 28, 99, 101, 178, 269, 270, 277, 283,
+    ])
+    max_count: int = 1
+    interval: float = 0.4
+    skip_admin_command: bool = True
+
+    def pick_emoji_ids(self) -> List[int]:
+        """按 max_count 从池子里选出不重复的表情 ID。"""
+        if not self.emoji_ids:
+            return []
+        count = max(0, int(self.max_count))
+        if count == 0:
+            return []
+        # 保留顺序去重
+        seen: set = set()
+        deduped: List[int] = []
+        for eid in self.emoji_ids:
+            try:
+                eid_int = int(eid)
+            except (TypeError, ValueError):
+                continue
+            if eid_int in seen:
+                continue
+            seen.add(eid_int)
+            deduped.append(eid_int)
+        if not deduped:
+            return []
+        if count >= len(deduped):
+            return deduped
+        # 顺序取前 count 个（确定性，避免每次随机刷屏）
+        return deduped[:count]
+
+
+@dataclass
 class MessageConfig:
     opening: OpeningMessageConfig = field(default_factory=OpeningMessageConfig)
     packing: PackingConfig = field(default_factory=PackingConfig)
@@ -805,6 +847,38 @@ class ConfigManager:
             import logging
             logger.setLevel(logging.DEBUG)
             logger.debug("Debug模式已启用")
+
+        # --- emoji_like ---
+        # 开始解析时给源消息贴表情包（参考 astrbot_plugin_emoji_like）。
+        emoji_raw = config.get("emoji_like", {})
+        if not isinstance(emoji_raw, dict):
+            emoji_raw = {}
+        raw_ids = emoji_raw.get("emoji_ids", [
+            4, 16, 28, 99, 101, 178, 269, 270, 277, 283,
+        ])
+        if not isinstance(raw_ids, (list, tuple)):
+            raw_ids = []
+        parsed_ids: List[int] = []
+        for eid in raw_ids:
+            try:
+                parsed_ids.append(int(eid))
+            except (TypeError, ValueError):
+                continue
+        if not parsed_ids:
+            parsed_ids = [4, 16, 28, 99, 101, 178, 269, 270, 277, 283]
+        self.emoji_like = EmojiLikeConfig(
+            enabled=bool(emoji_raw.get("enable", False)),
+            emoji_ids=parsed_ids,
+            max_count=self._parse_non_negative_int(
+                emoji_raw.get("max_count", 1), 1
+            ),
+            interval=self._parse_non_negative_float(
+                emoji_raw.get("interval", 0.4), 0.4
+            ),
+            skip_admin_command=bool(
+                emoji_raw.get("skip_admin_command", True)
+            ),
+        )
 
     # ── 工厂方法 ────────────────────────────────────────
 
