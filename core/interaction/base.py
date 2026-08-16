@@ -41,12 +41,16 @@ class AdminAssistManager(ABC):
         """将发送者标识规范化为字符串，便于权限判断。"""
         return str(sender_id or "").strip()
 
+    def _is_admin_event(self, event: AstrMessageEvent) -> bool:
+        """判断事件发送者是否为配置的管理员（不限私聊/群聊会话）。"""
+        sender_id = self._normalize_sender_id(event.get_sender_id())
+        return bool(self.admin_id and sender_id == self.admin_id)
+
     def _is_admin_private_event(self, event: AstrMessageEvent) -> bool:
         """判断事件是否来自管理员私聊会话。"""
         if not event.is_private_chat():
             return False
-        sender_id = self._normalize_sender_id(event.get_sender_id())
-        return bool(self.admin_id and sender_id == self.admin_id)
+        return self._is_admin_event(event)
 
     @staticmethod
     def _is_user_message_event(event: AstrMessageEvent) -> bool:
