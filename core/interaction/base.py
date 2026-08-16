@@ -24,7 +24,10 @@ class AdminAssistManager(ABC):
         """初始化管理员交互管理器并记录运行时依赖。"""
         self.context = context
         self.admin_id = str(admin_id or "").strip()
-        self.enabled = bool(enabled and self.admin_id)
+        # enabled 仅表示功能开关(use_cookie 与 admin_assist 均已开启)。
+        # 管理员身份判定统一走 _is_admin_event(), 兼容插件 admin_id
+        # 与 AstrBot 全局 admins_id(避免 admin_id 留空时误判功能未启用)。
+        self.enabled = bool(enabled)
 
         self.reply_timeout_seconds = max(1, int(reply_timeout_minutes) * 60)
         self.request_cooldown_seconds = max(1, int(request_cooldown_minutes) * 60)
@@ -41,12 +44,23 @@ class AdminAssistManager(ABC):
         """将发送者标识规范化为字符串，便于权限判断。"""
         return str(sender_id or "").strip()
 
+    def _is_admin_event(self, event: AstrMessageEvent) -> bool:
+        """判断事件发送者是否为管理员。
+
+        兼容两种管理员来源:
+        1. AstrBot 全局配置的 admins_id(waking_check 已设置 event.role == "admin");
+        2. 插件配置的“权限控制 → 管理员 ID”。
+        """
+        if event.is_admin():
+            return True
+        sender_id = self._normalize_sender_id(event.get_sender_id())
+        return bool(self.admin_id and sender_id == self.admin_id)
+
     def _is_admin_private_event(self, event: AstrMessageEvent) -> bool:
         """判断事件是否来自管理员私聊会话。"""
         if not event.is_private_chat():
             return False
-        sender_id = self._normalize_sender_id(event.get_sender_id())
-        return bool(self.admin_id and sender_id == self.admin_id)
+        return self._is_admin_event(event)
 
     @staticmethod
     def _is_user_message_event(event: AstrMessageEvent) -> bool:

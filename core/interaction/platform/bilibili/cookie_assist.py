@@ -93,14 +93,34 @@ class BilibiliAdminCookieAssistManager(AdminAssistManager):
     async def handle_admin_command(
         self, event: AstrMessageEvent, auth_runtime: Optional[Any]
     ) -> bool:
-        """处理管理员主动更新 Cookie 指令，不受自动请求冷却限制。"""
-        if not self._is_admin_private_event(event):
-            return False
+        """处理管理员主动更新 Cookie 指令，不受自动请求冷却限制。
+
+        指令文本匹配时必定消费该消息（返回 True），避免指令流向 LLM。
+        管理员可在私聊或群聊会话中触发；非管理员/未配置管理员时会给出
+        明确提示而不是静默失败。
+        """
         if not self._is_user_message_event(event):
             return False
         message_text = (event.message_str or "").strip()
         if not self.command or message_text.casefold() != self.command.casefold():
             return False
+
+        if self._is_admin_event(event):
+            # 管理员(插件配置的 admin_id 或 AstrBot 全局管理员)可直接触发
+            pass
+        elif not self.admin_id:
+            await event.send(
+                event.plain_result(
+                    "尚未配置管理员 ID，无法使用“B站更新Cookie”指令。"
+                    "请在插件配置的“权限控制 → 管理员 ID”中填写你的用户 ID。"
+                )
+            )
+            return True
+        else:
+            await event.send(
+                event.plain_result("“B站更新Cookie”指令仅管理员可使用。")
+            )
+            return True
 
         self._admin_private_origin = event.unified_msg_origin
         if not self.enabled:
