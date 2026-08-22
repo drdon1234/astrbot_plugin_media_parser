@@ -1,9 +1,9 @@
 """Provider-aware LLM adapter for metadata translation."""
+
 from __future__ import annotations
 
 import copy
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +28,41 @@ class ProviderHttpRequest:
     json: Dict[str, Any]
 
 
+class LLMHTTPError(RuntimeError):
+    """Structured HTTP error returned by an LLM provider."""
+
+    def __init__(
+        self,
+        status: int,
+        response_text: str,
+        error_payload: Optional[Dict[str, Any]] = None,
+    ):
+        payload = error_payload if isinstance(error_payload, dict) else {}
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            error = payload
+        self.status = int(status)
+        self.code = str(error.get("code", "") or "").strip().lower()
+        self.error_type = str(error.get("type", "") or "").strip().lower()
+        self.parameter = (
+            str(
+                error.get("param", "")
+                or error.get("parameter", "")
+                or error.get("field", "")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+        detail = str(
+            error.get("message", "")
+            or payload.get("message", "")
+            or response_text
+            or "empty response"
+        ).strip()
+        super().__init__(f"HTTP {self.status}: {detail}")
+
+
 PROVIDER_DEFINITIONS: Dict[str, LLMProviderDefinition] = {
     key: LLMProviderDefinition(
         key=key,
@@ -47,9 +82,6 @@ class LLMClient:
 
     def __init__(self, config: Any):
         self.config = config
-
-    def is_configured(self) -> bool:
-        return not self.missing_fields()
 
     def missing_fields(self) -> List[str]:
         provider = self._provider_definition()
@@ -72,9 +104,12 @@ class LLMClient:
         drop_temperature = False
         token_limit_field = self._provider_definition().token_limit_field
         working_payload = copy.deepcopy(payload)
+        retried_token_limit_field = False
+        retried_temperature = False
+        previous_http_error: Optional[LLMHTTPError] = None
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            for attempt in range(3):
+            for _ in range(3):
                 request = self.build_http_request(
                     working_payload,
                     drop_temperature=drop_temperature,
@@ -88,20 +123,39 @@ class LLMClient:
                     ) as response:
                         body = await response.text()
                         if response.status >= 400:
-                            raise RuntimeError(f"HTTP {response.status}: {body}")
+                            raise LLMHTTPError(
+                                response.status,
+                                body,
+                                self._load_error_payload(body),
+                            )
                         return self.extract_content(json.loads(body))
-                except RuntimeError as exc:
-                    message = str(exc)
-                    if self._should_retry_token_limit_field(message):
+                except LLMHTTPError as exc:
+                    if previous_http_error is not None:
+                        exc.__cause__ = previous_http_error
+                    if (
+                        not retried_token_limit_field
+                        and self._should_retry_token_limit_field(
+                            exc,
+                            token_limit_field,
+                        )
+                    ):
+                        retried_token_limit_field = True
                         token_limit_field = self._alternate_token_limit_field(
                             token_limit_field
                         )
+                        previous_http_error = exc
                         continue
-                    if attempt <= 1 and self._should_drop_temperature(message):
+                    if not retried_temperature and self._should_drop_temperature(exc):
+                        retried_temperature = True
                         drop_temperature = True
+                        previous_http_error = exc
                         continue
+                    if previous_http_error is not None:
+                        raise exc from previous_http_error
                     raise
 
+        if previous_http_error is not None:
+            raise RuntimeError("LLM 请求在参数协商后仍失败") from previous_http_error
         raise RuntimeError("LLM 请求失败")
 
     def build_http_request(
@@ -238,17 +292,45 @@ class LLMClient:
         return text
 
     @staticmethod
-    def _should_retry_token_limit_field(message: str) -> bool:
-        lowered = str(message or "").lower()
-        return (
-            "max_completion_tokens" in lowered
-            or "max_tokens" in lowered
-            or "unrecognized" in lowered
-        )
+    def _load_error_payload(body: str) -> Dict[str, Any]:
+        try:
+            payload = json.loads(str(body or ""))
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
-    def _should_drop_temperature(message: str) -> bool:
-        return "temperature" in str(message or "").lower()
+    def _is_structured_parameter_error(error: LLMHTTPError) -> bool:
+        if error.status not in {400, 422}:
+            return False
+        return error.code in {
+            "unsupported_parameter",
+            "invalid_parameter",
+            "unknown_parameter",
+            "unrecognized_parameter",
+            "extra_forbidden",
+        } or error.error_type in {
+            "invalid_request_error",
+            "validation_error",
+        }
+
+    @classmethod
+    def _should_retry_token_limit_field(
+        cls,
+        error: LLMHTTPError,
+        submitted_field: str,
+    ) -> bool:
+        return (
+            error.parameter == submitted_field
+            and submitted_field in {"max_tokens", "max_completion_tokens"}
+            and cls._is_structured_parameter_error(error)
+        )
+
+    @classmethod
+    def _should_drop_temperature(cls, error: LLMHTTPError) -> bool:
+        return error.parameter == "temperature" and cls._is_structured_parameter_error(
+            error
+        )
 
     def _token_limit_field(self, token_limit_field: Optional[str]) -> str:
         if token_limit_field in {"max_tokens", "max_completion_tokens"}:

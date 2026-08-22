@@ -1,7 +1,9 @@
 """配置管理模块，负责默认值处理、类型转换与配置兜底。"""
+
+import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .logger import logger
 
@@ -63,13 +65,13 @@ OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_RICH_ONLY: (False, True),
 }
 
-PACK_MODE_NONE = "不打包"
-PACK_MODE_ALL = "全部打包"
-PACK_MODE_CONDITIONAL = "按条件打包"
-PACK_MODES = {
-    PACK_MODE_NONE,
-    PACK_MODE_ALL,
-    PACK_MODE_CONDITIONAL,
+AGGREGATION_MODE_NONE = "不聚合"
+AGGREGATION_MODE_ALL = "全部聚合"
+AGGREGATION_MODE_CONDITIONAL = "按条件聚合"
+AGGREGATION_MODES = {
+    AGGREGATION_MODE_NONE,
+    AGGREGATION_MODE_ALL,
+    AGGREGATION_MODE_CONDITIONAL,
 }
 TRANSLATION_TARGET_LANGUAGES = {
     "简体中文",
@@ -98,6 +100,7 @@ def _get_astrbot_plugin_cache_dir() -> str:
     """获取默认媒体缓存目录；非 AstrBot 运行时回退到项目 cache 目录。"""
     try:
         from astrbot.core import astrbot_config
+
         data_dir = str(astrbot_config.get("data_dir") or "").strip()
         if data_dir:
             prefix = os.path.join(
@@ -111,6 +114,7 @@ def _get_astrbot_plugin_cache_dir() -> str:
 
     try:
         from astrbot.core.utils.io import get_astrbot_data_path
+
         prefix = os.path.join(
             get_astrbot_data_path(),
             "plugin_data",
@@ -164,7 +168,7 @@ class ParserOutputConfig:
         )
 
     def _flags_for_mode(self, mode: str) -> Tuple[bool, bool]:
-        return OUTPUT_MODE_FLAGS.get(mode, OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL])
+        return OUTPUT_MODE_FLAGS.get(mode, OUTPUT_MODE_FLAGS[OUTPUT_MODE_DISABLED])
 
     def output_for_controller(self, controller: Any) -> Tuple[bool, bool]:
         """返回指定解析器的文本/富媒体发送开关。"""
@@ -176,10 +180,7 @@ class ParserOutputConfig:
         """指定解析器是否至少会发送一种输出。"""
         return any(self.output_for_controller(controller))
 
-    def output_for_metadata(
-        self,
-        metadata: Dict[str, Any]
-    ) -> Tuple[bool, bool]:
+    def output_for_metadata(self, metadata: Dict[str, Any]) -> Tuple[bool, bool]:
         """按 metadata 的平台名或解析器名返回有效输出开关。"""
         keys = [
             str(metadata.get("platform") or "").strip(),
@@ -198,27 +199,27 @@ class ParserOutputConfig:
 @dataclass
 class OpeningMessageConfig:
     enabled: bool = True
-    content: str = "流媒体解析bot为您服务 ٩( 'ω' )و"
+    content: str = Config.DEFAULT_OPENING_CONTENT
+    archive_content: str = Config.DEFAULT_ARCHIVE_OPENING_CONTENT
 
 
 @dataclass
-class PackingConfig:
-    mode: str = PACK_MODE_NONE
+class AggregationConfig:
+    mode: str = AGGREGATION_MODE_NONE
     image_threshold: int = 3
     video_threshold: int = 2
     node_threshold: int = 5
-    zip_command: str = ""
 
-    def should_pack(
+    def should_aggregate_nodes(
         self,
         image_count: int,
         video_count: int,
         node_count: int,
     ) -> bool:
-        """根据打包模式和实际节点数量判断是否发送消息集合。"""
-        if self.mode == PACK_MODE_ALL:
+        """根据聚合模式和实际节点数量判断是否发送合并转发消息。"""
+        if self.mode == AGGREGATION_MODE_ALL:
             return True
-        if self.mode != PACK_MODE_CONDITIONAL:
+        if self.mode != AGGREGATION_MODE_CONDITIONAL:
             return False
 
         thresholds = (
@@ -227,9 +228,14 @@ class PackingConfig:
             (self.node_threshold, node_count),
         )
         return any(
-            threshold > 0 and count >= threshold
-            for threshold, count in thresholds
+            threshold > 0 and count >= threshold for threshold, count in thresholds
         )
+
+
+@dataclass
+class ArchiveConfig:
+    command: str = ""
+    max_total_size_mb: float = 1024.0
 
 
 @dataclass
@@ -268,7 +274,8 @@ class HotCommentConfig:
 @dataclass
 class MessageConfig:
     opening: OpeningMessageConfig = field(default_factory=OpeningMessageConfig)
-    packing: PackingConfig = field(default_factory=PackingConfig)
+    aggregation: AggregationConfig = field(default_factory=AggregationConfig)
+    archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     media_display: MediaDisplayConfig = field(default_factory=MediaDisplayConfig)
     text_metadata: TextMetadataConfig = field(default_factory=TextMetadataConfig)
     hot_comments: HotCommentConfig = field(default_factory=HotCommentConfig)
@@ -276,6 +283,7 @@ class MessageConfig:
 
 @dataclass
 class PermissionConfig:
+    configuration_valid: bool = True
     admin_id: str = ""
     whitelist_enable: bool = False
     whitelist_user: List[str] = field(default_factory=list)
@@ -286,6 +294,8 @@ class PermissionConfig:
 
     def check(self, is_private: bool, sender_id: Any, group_id: Any) -> bool:
         """检查用户或群组是否有权限使用解析"""
+        if not self.configuration_valid:
+            return False
         sender_id_str = str(sender_id or "").strip()
         group_id_str = "" if is_private else str(group_id or "").strip()
 
@@ -297,9 +307,17 @@ class PermissionConfig:
             allowed = True
         elif self.blacklist_enable and sender_id_str in self.blacklist_user:
             allowed = False
-        elif self.whitelist_enable and group_id_str and group_id_str in self.whitelist_group:
+        elif (
+            self.whitelist_enable
+            and group_id_str
+            and group_id_str in self.whitelist_group
+        ):
             allowed = True
-        elif self.blacklist_enable and group_id_str and group_id_str in self.blacklist_group:
+        elif (
+            self.blacklist_enable
+            and group_id_str
+            and group_id_str in self.blacklist_group
+        ):
             allowed = False
 
         if allowed is None:
@@ -373,6 +391,7 @@ class BilibiliEnhancedConfig:
     enable_admin_assist: bool = False
     admin_reply_timeout_minutes: int = 1440
     admin_request_cooldown_minutes: int = 1440
+    admin_cookie_update_command: str = "B站更新Cookie"
 
 
 @dataclass
@@ -414,10 +433,18 @@ class AdminConfig:
 
 
 class ConfigManager:
-
     """配置读取门面，向业务层提供类型安全的配置访问。"""
+
     def __init__(self, config: dict):
         self.bilibili_parser = None
+        if not isinstance(config, dict):
+            logger.warning("插件根配置不是对象，已安全关闭解析并拒绝所有消息")
+            config = {
+                "trigger": None,
+                "parsers": None,
+                "permissions": None,
+            }
+        self._migrate_message_config(config)
         self._parse_config(config)
 
     # ── 内部解析 ────────────────────────────────────────
@@ -426,11 +453,32 @@ class ConfigManager:
         """解析原始 dict，填充各领域配置分组。"""
 
         # --- trigger ---
-        trigger_raw = config.get("trigger", {})
+        trigger_config_valid = "trigger" not in config or isinstance(
+            config.get("trigger"), dict
+        )
+        if trigger_config_valid:
+            trigger_raw = self._as_dict(config.get("trigger"))
+        else:
+            logger.warning("trigger 配置存在但不是对象，已安全关闭全部解析触发")
+            trigger_raw = {
+                "auto_parse": False,
+                "keywords": [],
+                "reply_trigger": False,
+            }
         self.trigger = TriggerConfig(
-            auto_parse=trigger_raw.get("auto_parse", True),
-            keywords=trigger_raw.get("keywords", ["视频解析", "解析视频"]),
-            reply_trigger=bool(trigger_raw.get("reply_trigger", False)),
+            auto_parse=self._parse_bool(
+                trigger_raw.get("auto_parse", True),
+                True,
+                "trigger.auto_parse",
+            ),
+            keywords=self._normalize_string_list(
+                trigger_raw.get("keywords", ["视频解析", "解析视频"])
+            ),
+            reply_trigger=self._parse_bool(
+                trigger_raw.get("reply_trigger", False),
+                False,
+                "trigger.reply_trigger",
+            ),
         )
         if (
             not self.trigger.auto_parse
@@ -443,11 +491,16 @@ class ConfigManager:
             )
 
         # --- parsers/output modes ---
-        parsers_raw = config.get("parsers", {})
+        if "parsers" not in config:
+            parsers_raw = {}
+        elif isinstance(config.get("parsers"), dict):
+            parsers_raw = config["parsers"]
+        else:
+            logger.warning("parsers 配置存在但不是对象，已安全关闭全部解析器")
+            parsers_raw = {key: OUTPUT_MODE_DISABLED for key in PARSER_OUTPUT_KEYS}
         self.parser_output = ParserOutputConfig(
             modes=self._parse_parser_outputs(parsers_raw)
         )
-        self.parser_outputs = self.parser_output.modes
         self._enable_bilibili = self._parser_enabled("bilibili")
         self._enable_douyin = self._parser_enabled("douyin")
         self._enable_tiktok = self._parser_enabled("tiktok")
@@ -461,135 +514,193 @@ class ConfigManager:
         self._enable_pixiv = self._parser_enabled("pixiv")
 
         # --- message ---
-        message_raw = config.get("message", {})
-        if not isinstance(message_raw, dict):
-            message_raw = {}
-        opening = message_raw.get("opening", {})
-        packing = message_raw.get("packing", {})
-        text_metadata = message_raw.get("text_metadata", {})
-        media_display = message_raw.get("media_display", {})
-        hot_comments = message_raw.get("hot_comments", {})
-        if not isinstance(opening, dict):
-            opening = {}
-        if not isinstance(packing, dict):
-            packing = {}
-        if not isinstance(text_metadata, dict):
-            text_metadata = {}
-        if not isinstance(media_display, dict):
-            media_display = {}
-        pack_thresholds = packing.get("thresholds", {})
-        if not isinstance(pack_thresholds, dict):
-            pack_thresholds = {}
-        if not isinstance(hot_comments, dict):
-            hot_comments = {}
+        message_raw = self._as_dict(config.get("message"))
+        opening = self._as_dict(message_raw.get("opening"))
+        aggregation = self._as_dict(message_raw.get("packing"))
+        archive = self._as_dict(message_raw.get("archive"))
+        text_metadata = self._as_dict(message_raw.get("text_metadata"))
+        media_display = self._as_dict(message_raw.get("media_display"))
+        hot_comments = self._as_dict(message_raw.get("hot_comments"))
+        aggregation_thresholds = self._as_dict(aggregation.get("thresholds"))
 
-        hot_count = self._parse_non_negative_int(
-            hot_comments.get("count", 0), 0
-        )
+        hot_count = self._parse_non_negative_int(hot_comments.get("count", 0), 0)
         any_text_output_enabled = self.parser_output.has_any_text_output()
         if not any_text_output_enabled:
             hot_count = 0
 
         self.message = MessageConfig(
             opening=OpeningMessageConfig(
-                enabled=bool(opening.get("enable", True)),
-                content=str(opening.get(
-                    "content",
-                    "流媒体解析bot为您服务 ٩( 'ω' )و",
-                ) or "流媒体解析bot为您服务 ٩( 'ω' )و"),
+                enabled=self._parse_bool(
+                    opening.get("enable", True),
+                    True,
+                    "message.opening.enable",
+                ),
+                content=str(
+                    opening.get(
+                        "content",
+                        Config.DEFAULT_OPENING_CONTENT,
+                    )
+                    or Config.DEFAULT_OPENING_CONTENT
+                ),
+                archive_content=str(
+                    opening.get(
+                        "archive_content",
+                        Config.DEFAULT_ARCHIVE_OPENING_CONTENT,
+                    )
+                    or Config.DEFAULT_ARCHIVE_OPENING_CONTENT
+                ),
             ),
-            packing=PackingConfig(
-                mode=self._parse_pack_mode(
-                    packing.get("mode", PACK_MODE_NONE)
+            aggregation=AggregationConfig(
+                mode=self._parse_aggregation_mode(
+                    aggregation.get("mode", AGGREGATION_MODE_NONE)
                 ),
                 image_threshold=self._parse_non_negative_int(
-                    pack_thresholds.get("image_count", 3), 3
+                    aggregation_thresholds.get("image_count", 3), 3
                 ),
                 video_threshold=self._parse_non_negative_int(
-                    pack_thresholds.get("video_count", 2), 2
+                    aggregation_thresholds.get("video_count", 2), 2
                 ),
                 node_threshold=self._parse_non_negative_int(
-                    pack_thresholds.get("node_count", 5), 5
+                    aggregation_thresholds.get("node_count", 5), 5
                 ),
-                zip_command=str(packing.get("zip_command", "") or "").strip(),
+            ),
+            archive=ArchiveConfig(
+                command=str(archive.get("command", "") or "").strip(),
+                max_total_size_mb=min(
+                    4096.0,
+                    max(
+                        1.0,
+                        self._parse_non_negative_float(
+                            archive.get("max_total_size_mb", 1024.0),
+                            1024.0,
+                        ),
+                    ),
+                ),
             ),
             media_display=MediaDisplayConfig(
-                video_cover_only=bool(
-                    media_display.get("video_cover_only", False)
+                video_cover_only=self._parse_bool(
+                    media_display.get("video_cover_only", False),
+                    False,
+                    "message.media_display.video_cover_only",
                 ),
             ),
             text_metadata=TextMetadataConfig(
-                show_title=bool(text_metadata.get("show_title", True)),
-                show_author=bool(text_metadata.get("show_author", True)),
-                show_timestamp=bool(
-                    text_metadata.get("show_timestamp", True)
+                show_title=self._parse_bool(
+                    text_metadata.get("show_title", True),
+                    True,
+                    "message.text_metadata.show_title",
                 ),
-                show_original_link=bool(
-                    text_metadata.get("show_original_link", True)
+                show_author=self._parse_bool(
+                    text_metadata.get("show_author", True),
+                    True,
+                    "message.text_metadata.show_author",
                 ),
-                show_description=bool(
-                    text_metadata.get("show_description", True)
+                show_timestamp=self._parse_bool(
+                    text_metadata.get("show_timestamp", True),
+                    True,
+                    "message.text_metadata.show_timestamp",
                 ),
-                quote_user_message=bool(
-                    text_metadata.get("quote_user_message", False)
+                show_original_link=self._parse_bool(
+                    text_metadata.get("show_original_link", True),
+                    True,
+                    "message.text_metadata.show_original_link",
+                ),
+                show_description=self._parse_bool(
+                    text_metadata.get("show_description", True),
+                    True,
+                    "message.text_metadata.show_description",
+                ),
+                quote_user_message=self._parse_bool(
+                    text_metadata.get("quote_user_message", False),
+                    False,
+                    "message.text_metadata.quote_user_message",
                 ),
             ),
             hot_comments=HotCommentConfig(
                 count=hot_count,
-                bilibili=bool(hot_comments.get("bilibili", True)),
-                weibo=bool(hot_comments.get("weibo", True)),
-                xiaohongshu=bool(
-                    hot_comments.get("xiaohongshu", True)
+                bilibili=self._parse_bool(
+                    hot_comments.get("bilibili", True),
+                    True,
+                    "message.hot_comments.bilibili",
+                ),
+                weibo=self._parse_bool(
+                    hot_comments.get("weibo", True),
+                    True,
+                    "message.hot_comments.weibo",
+                ),
+                xiaohongshu=self._parse_bool(
+                    hot_comments.get("xiaohongshu", True),
+                    True,
+                    "message.hot_comments.xiaohongshu",
                 ),
             ),
         )
         if not self.parser_output.has_any_output():
-            logger.warning(
-                "所有解析器输出均已关闭，插件将不会触发解析。"
-            )
+            logger.warning("所有解析器输出均已关闭，插件将不会触发解析。")
 
         # --- permissions ---
-        permissions_raw = config.get("permissions", {})
-        whitelist = permissions_raw.get("whitelist", {})
-        blacklist = permissions_raw.get("blacklist", {})
+        permission_config_valid = "permissions" not in config or isinstance(
+            config.get("permissions"), dict
+        )
+        permissions_raw = self._as_dict(config.get("permissions"))
+        for subsection_name in ("whitelist", "blacklist"):
+            if subsection_name in permissions_raw and not isinstance(
+                permissions_raw.get(subsection_name), dict
+            ):
+                permission_config_valid = False
+        whitelist = self._as_dict(permissions_raw.get("whitelist"))
+        blacklist = self._as_dict(permissions_raw.get("blacklist"))
+        for section in (whitelist, blacklist):
+            if "enable" in section and self._coerce_bool(section.get("enable")) is None:
+                permission_config_valid = False
+            for list_name in ("user", "group"):
+                if list_name in section and not isinstance(
+                    section.get(list_name), list
+                ):
+                    permission_config_valid = False
+        if not permission_config_valid:
+            logger.warning(
+                "permissions 配置结构或开关值无效，已拒绝所有消息；请修复配置后重载插件"
+            )
         admin_id = str(permissions_raw.get("admin_id", "") or "").strip()
         wl_user = self._normalize_id_list(whitelist.get("user", []))
         if admin_id and admin_id not in wl_user:
             wl_user.append(admin_id)
 
         self.permission = PermissionConfig(
+            configuration_valid=permission_config_valid,
             admin_id=admin_id,
-            whitelist_enable=whitelist.get("enable", False),
+            whitelist_enable=self._parse_bool(
+                whitelist.get("enable", False),
+                False,
+                "permissions.whitelist.enable",
+            ),
             whitelist_user=wl_user,
-            whitelist_group=self._normalize_id_list(
-                whitelist.get("group", [])
+            whitelist_group=self._normalize_id_list(whitelist.get("group", [])),
+            blacklist_enable=self._parse_bool(
+                blacklist.get("enable", False),
+                False,
+                "permissions.blacklist.enable",
             ),
-            blacklist_enable=blacklist.get("enable", False),
-            blacklist_user=self._normalize_id_list(
-                blacklist.get("user", [])
-            ),
-            blacklist_group=self._normalize_id_list(
-                blacklist.get("group", [])
-            ),
+            blacklist_user=self._normalize_id_list(blacklist.get("user", [])),
+            blacklist_group=self._normalize_id_list(blacklist.get("group", [])),
         )
 
         # --- download ---
-        download_raw = config.get("download", {})
+        download_raw = self._as_dict(config.get("download"))
 
         max_video_size_mb = self._parse_non_negative_float(
             download_raw.get("max_video_size_mb", 1000.0), 1000.0
         )
         large_video_threshold_mb = self._parse_non_negative_float(
             download_raw.get(
-                "large_video_threshold_mb",
-                Config.MAX_LARGE_VIDEO_THRESHOLD_MB
+                "large_video_threshold_mb", Config.MAX_LARGE_VIDEO_THRESHOLD_MB
             ),
-            Config.MAX_LARGE_VIDEO_THRESHOLD_MB
+            Config.MAX_LARGE_VIDEO_THRESHOLD_MB,
         )
         if large_video_threshold_mb > 0:
             large_video_threshold_mb = min(
-                large_video_threshold_mb,
-                Config.MAX_LARGE_VIDEO_THRESHOLD_MB
+                large_video_threshold_mb, Config.MAX_LARGE_VIDEO_THRESHOLD_MB
             )
 
         configured_cache_dir = str(download_raw.get("cache_dir", "") or "").strip()
@@ -601,31 +712,31 @@ class ConfigManager:
         max_concurrent = min(
             self._parse_positive_int(
                 download_raw.get(
-                    "max_concurrent",
-                    Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+                    "max_concurrent", Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
                 ),
-                Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+                Config.DOWNLOAD_MANAGER_MAX_CONCURRENT,
             ),
-            20
+            20,
         )
 
         # --- media_relay ---
-        relay_raw = config.get("media_relay", {})
+        relay_raw = self._as_dict(config.get("media_relay"))
         self.relay = MediaRelayConfig(
-            enabled=relay_raw.get("enable", False),
-            callback_api_base=str(
-                relay_raw.get("callback_url", "") or ""
-            ).strip().rstrip("/"),
+            enabled=self._parse_bool(
+                relay_raw.get("enable", False),
+                False,
+                "media_relay.enable",
+            ),
+            callback_api_base=str(relay_raw.get("callback_url", "") or "")
+            .strip()
+            .rstrip("/"),
             file_token_ttl=max(
-                30,
-                self._parse_positive_int(relay_raw.get("ttl", 300), 300)
+                30, self._parse_positive_int(relay_raw.get("ttl", 300), 300)
             ),
         )
 
         # --- translation ---
-        translation_raw = config.get("translation", {})
-        if not isinstance(translation_raw, dict):
-            translation_raw = {}
+        translation_raw = self._as_dict(config.get("translation"))
         translation_llm_raw = translation_raw.get("llm", {})
         if not isinstance(translation_llm_raw, dict):
             translation_llm_raw = {}
@@ -649,14 +760,20 @@ class ConfigManager:
             llm_provider,
             LLM_PROVIDER_DEFAULTS["openai_compatible"],
         )
-        base_url = str(
-            custom_provider_raw.get("base_url", "") or ""
-        ).strip().rstrip("/")
+        base_url = (
+            str(custom_provider_raw.get("base_url", "") or "").strip().rstrip("/")
+        )
         if not base_url:
-            base_url = str(provider_defaults.get("base_url", "") or "").strip().rstrip("/")
+            base_url = (
+                str(provider_defaults.get("base_url", "") or "").strip().rstrip("/")
+            )
 
         self.translation = TranslationConfig(
-            enabled=bool(translation_raw.get("enable", False)),
+            enabled=self._parse_bool(
+                translation_raw.get("enable", False),
+                False,
+                "translation.enable",
+            ),
             content_scope=self._parse_translation_content_scope(
                 translation_raw.get("content_scope", "正文和标题")
             ),
@@ -670,9 +787,7 @@ class ConfigManager:
             llm_provider=llm_provider,
             base_url=base_url,
             api_key=str(custom_provider_raw.get("api_key", "") or "").strip(),
-            model=str(
-                custom_provider_raw.get("model", "gpt-5.5") or "gpt-5.5"
-            ).strip(),
+            model=str(custom_provider_raw.get("model", "gpt-5.5") or "gpt-5.5").strip(),
         )
 
         cache_dir_available = check_cache_dir_available(cache_dir)
@@ -691,20 +806,16 @@ class ConfigManager:
         )
 
         # --- parse_rate_limit ---
-        rate_limit_raw = config.get("parse_rate_limit", {})
-        if not isinstance(rate_limit_raw, dict):
-            rate_limit_raw = {}
+        rate_limit_raw = self._as_dict(config.get("parse_rate_limit"))
         self.parse_rate_limit = ParseRateLimitConfig(
-            same_link=self._parse_rate_limit_rule(
-                rate_limit_raw.get("same_link", {})
-            ),
-            same_user=self._parse_rate_limit_rule(
-                rate_limit_raw.get("same_user", {})
-            ),
+            same_link=self._parse_rate_limit_rule(rate_limit_raw.get("same_link", {})),
+            same_user=self._parse_rate_limit_rule(rate_limit_raw.get("same_user", {})),
             record_file=os.path.join(
                 Config.build_runtime_dir(cache_dir, "parse_records"),
                 "records.json",
-            ) if cache_dir else "",
+            )
+            if cache_dir
+            else "",
         )
 
         # --- bilibili_enhanced ---
@@ -712,18 +823,31 @@ class ConfigManager:
         if not isinstance(bili, dict):
             bili = {}
 
-        use_cookie = bool(bili.get("use_cookie", False))
+        use_cookie = self._parse_bool(
+            bili.get("use_cookie", False),
+            False,
+            "bilibili_enhanced.use_cookie",
+        )
         if use_cookie:
             cookie = str(bili.get("cookie", "") or "").strip()
             max_quality_label = str(
                 bili.get("max_quality", "不限制") or "不限制"
             ).strip()
-            max_quality = BILIBILI_QUALITY_MAP.get(max_quality_label, 0)
+            if max_quality_label in BILIBILI_QUALITY_MAP:
+                max_quality = BILIBILI_QUALITY_MAP[max_quality_label]
+            else:
+                max_quality = BILIBILI_QUALITY_MAP["720P"]
+                logger.warning(
+                    f"无效的B站最大画质配置 {max_quality_label!r}，"
+                    "已按安全默认值720P处理"
+                )
             admin_assist_raw = bili.get("admin_assist", {})
             if not isinstance(admin_assist_raw, dict):
                 admin_assist_raw = {}
-            enable_admin_assist = bool(
-                admin_assist_raw.get("enable", False)
+            enable_admin_assist = self._parse_bool(
+                admin_assist_raw.get("enable", False),
+                False,
+                "bilibili_enhanced.admin_assist.enable",
             )
             admin_reply_timeout = self._parse_positive_int(
                 admin_assist_raw.get("reply_timeout_minutes", 1440), 1440
@@ -731,12 +855,16 @@ class ConfigManager:
             admin_request_cooldown = self._parse_positive_int(
                 admin_assist_raw.get("request_cooldown_minutes", 1440), 1440
             )
+            admin_cookie_update_command = str(
+                admin_assist_raw.get("command", "B站更新Cookie") or ""
+            ).strip()
         else:
             cookie = ""
             max_quality = 0
             enable_admin_assist = False
             admin_reply_timeout = 1440
             admin_request_cooldown = 1440
+            admin_cookie_update_command = "B站更新Cookie"
 
         cookie_feature_requested = use_cookie
         cookie_runtime_enabled = bool(use_cookie and cache_dir_available)
@@ -748,9 +876,7 @@ class ConfigManager:
             try:
                 os.makedirs(cookie_dir, exist_ok=True)
             except Exception as e:
-                logger.warning(
-                    f"B站Cookie运行时目录不可用，将旁路Cookie能力: {e}"
-                )
+                logger.warning(f"B站Cookie运行时目录不可用，将旁路Cookie能力: {e}")
                 cookie_runtime_file = ""
                 cookie_runtime_enabled = False
 
@@ -770,6 +896,7 @@ class ConfigManager:
             enable_admin_assist=enable_admin_assist,
             admin_reply_timeout_minutes=admin_reply_timeout,
             admin_request_cooldown_minutes=admin_request_cooldown,
+            admin_cookie_update_command=admin_cookie_update_command,
         )
 
         # --- pixiv ---
@@ -781,41 +908,75 @@ class ConfigManager:
         )
 
         # --- proxy ---
-        proxy_raw = config.get("proxy", {})
-        twitter_proxy = proxy_raw.get("twitter", {})
+        proxy_raw = self._as_dict(config.get("proxy"))
+        twitter_proxy = self._as_dict(proxy_raw.get("twitter"))
         self.proxy = ProxyConfig(
-            address=proxy_raw.get("address", ""),
-            xiaoheihe_use_video_proxy=proxy_raw.get("xiaoheihe_video", True),
-            twitter_use_parse_proxy=twitter_proxy.get("parse", False),
-            twitter_use_image_proxy=twitter_proxy.get("image", True),
-            twitter_use_video_proxy=twitter_proxy.get("video", True),
-            tiktok_use_proxy=proxy_raw.get("tiktok", False),
-            pixiv_use_proxy=proxy_raw.get("pixiv", False),
+            address=str(proxy_raw.get("address", "") or "").strip(),
+            xiaoheihe_use_video_proxy=self._parse_bool(
+                proxy_raw.get("xiaoheihe_video", True),
+                True,
+                "proxy.xiaoheihe_video",
+            ),
+            twitter_use_parse_proxy=self._parse_bool(
+                twitter_proxy.get("parse", False),
+                False,
+                "proxy.twitter.parse",
+            ),
+            twitter_use_image_proxy=self._parse_bool(
+                twitter_proxy.get("image", True),
+                True,
+                "proxy.twitter.image",
+            ),
+            twitter_use_video_proxy=self._parse_bool(
+                twitter_proxy.get("video", True),
+                True,
+                "proxy.twitter.video",
+            ),
+            tiktok_use_proxy=self._parse_bool(
+                proxy_raw.get("tiktok", False),
+                False,
+                "proxy.tiktok",
+            ),
+            pixiv_use_proxy=self._parse_bool(
+                proxy_raw.get("pixiv", False),
+                False,
+                "proxy.pixiv",
+            ),
         )
 
         # --- admin ---
-        admin_raw = config.get("admin", {})
+        admin_raw = self._as_dict(config.get("admin"))
         self.admin = AdminConfig(
             clean_cache_keyword=str(
                 admin_raw.get("clean_cache_keyword", "清理媒体") or "清理媒体"
             ).strip(),
-            debug_mode=admin_raw.get("debug", False),
+            debug_mode=self._parse_bool(
+                admin_raw.get("debug", False),
+                False,
+                "admin.debug",
+            ),
         )
+        import logging
+
+        logger.setLevel(logging.DEBUG if self.admin.debug_mode else logging.NOTSET)
         if self.admin.debug_mode:
-            import logging
-            logger.setLevel(logging.DEBUG)
             logger.debug("Debug模式已启用")
+
+        if (
+            self.message.archive.command
+            and self.message.archive.command == self.admin.clean_cache_keyword
+        ):
+            logger.warning(
+                "引用链接归档命令与清缓存命令冲突，已禁用归档命令；请配置两个不同命令"
+            )
+            self.message.archive.command = ""
 
     # ── 工厂方法 ────────────────────────────────────────
 
     def _parser_enabled(self, parser_name: str) -> bool:
         return self.parser_output.controller_has_any_output(parser_name)
 
-    def _effective_hot_comment_count(
-        self,
-        enabled: bool,
-        controller: str
-    ) -> int:
+    def _effective_hot_comment_count(self, enabled: bool, controller: str) -> int:
         text_enabled, _ = self.parser_output.output_for_controller(controller)
         if not text_enabled:
             return 0
@@ -824,11 +985,7 @@ class ConfigManager:
         return self.message.hot_comments.count
 
     def create_parsers(self) -> List:
-        """根据配置创建并返回解析器列表。
-
-        Raises:
-            ValueError: 没有启用任何解析器时
-        """
+        """根据配置创建并返回解析器列表。"""
         parsers = []
         bili_hc = self._effective_hot_comment_count(
             self.message.hot_comments.bilibili,
@@ -857,10 +1014,12 @@ class ConfigManager:
         if self._enable_douyin:
             parsers.append(DouyinParser())
         if self._enable_tiktok:
-            parsers.append(TikTokParser(
-                use_proxy=self.proxy.tiktok_use_proxy,
-                proxy_url=proxy_addr,
-            ))
+            parsers.append(
+                TikTokParser(
+                    use_proxy=self.proxy.tiktok_use_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
         if self._enable_kuaishou:
             parsers.append(KuaishouParser())
         if self._enable_weibo:
@@ -878,27 +1037,27 @@ class ConfigManager:
             else:
                 parsers.append(ToutiaoParser(article_image_refreshes=1))
         if self._enable_xiaoheihe:
-            parsers.append(XiaoheiheParser(
-                use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
-                proxy_url=proxy_addr,
-            ))
+            parsers.append(
+                XiaoheiheParser(
+                    use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
         if self._enable_twitter:
-            parsers.append(TwitterParser(
-                use_parse_proxy=self.proxy.twitter_use_parse_proxy,
-                use_image_proxy=self.proxy.twitter_use_image_proxy,
-                use_video_proxy=self.proxy.twitter_use_video_proxy,
-                proxy_url=proxy_addr,
-            ))
+            parsers.append(
+                TwitterParser(
+                    use_parse_proxy=self.proxy.twitter_use_parse_proxy,
+                    use_image_proxy=self.proxy.twitter_use_image_proxy,
+                    use_video_proxy=self.proxy.twitter_use_video_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
         if self._enable_pixiv:
-            parsers.append(PixivParser(
-                cookie=self.pixiv.cookie,
-                proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
-            ))
-
-        if not parsers:
-            raise ValueError(
-                "至少需要启用一个视频解析器。"
-                "请检查配置中的 parsers 设置。"
+            parsers.append(
+                PixivParser(
+                    cookie=self.pixiv.cookie,
+                    proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
+                )
             )
 
         return parsers
@@ -913,19 +1072,25 @@ class ConfigManager:
         normalized: Dict[str, str] = {}
         valid_modes = set(OUTPUT_MODE_FLAGS)
         for key in PARSER_OUTPUT_KEYS:
-            raw_mode = values.get(key, OUTPUT_MODE_ALL)
-            mode = str(raw_mode or OUTPUT_MODE_ALL).strip()
+            if key not in values:
+                normalized[key] = OUTPUT_MODE_ALL
+                continue
+            raw_mode = values.get(key)
+            mode = str(raw_mode).strip() if raw_mode is not None else ""
             if mode not in valid_modes:
-                mode = OUTPUT_MODE_ALL
+                logger.warning(f"解析器 {key} 的输出模式 {raw_mode!r} 无效，已安全关闭")
+                mode = OUTPUT_MODE_DISABLED
             normalized[key] = mode
         return normalized
 
     @staticmethod
-    def _parse_pack_mode(value) -> str:
+    def _parse_aggregation_mode(value) -> str:
         mode = str(value or "").strip()
-        if mode in PACK_MODES:
+        if mode in AGGREGATION_MODES:
             return mode
-        return PACK_MODE_NONE
+        if mode:
+            logger.warning(f"无效的消息聚合模式 {mode!r}，已禁用聚合")
+        return AGGREGATION_MODE_NONE
 
     @staticmethod
     def _parse_translation_target_language(value) -> str:
@@ -945,13 +1110,16 @@ class ConfigManager:
     def _parse_positive_int(value, default: int) -> int:
         try:
             return max(1, int(value))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             return max(1, int(default))
 
     @staticmethod
     def _parse_non_negative_float(value, default: float) -> float:
         try:
-            return max(0.0, float(value))
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise ValueError("数值必须有限")
+            return max(0.0, parsed)
         except (TypeError, ValueError):
             return max(0.0, float(default))
 
@@ -959,8 +1127,35 @@ class ConfigManager:
     def _parse_non_negative_int(value, default: int) -> int:
         try:
             return max(0, int(value))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             return max(0, int(default))
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> Optional[bool]:
+        """把明确的布尔表示归一化；无法识别时返回 ``None``。"""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+        return None
+
+    @classmethod
+    def _parse_bool(cls, value: Any, default: bool, field_name: str) -> bool:
+        """严格解析布尔配置，避免 ``bool("false")`` 被当成开启。"""
+        parsed = cls._coerce_bool(value)
+        if parsed is not None:
+            return parsed
+        logger.warning(
+            f"布尔配置 {field_name} 的值 {value!r} 无效，"
+            f"已安全按关闭处理（字段缺省值为 {default!r}）"
+        )
+        return False
 
     @classmethod
     def _parse_rate_limit_rule(cls, value) -> ParseRateLimitRuleConfig:
@@ -989,6 +1184,67 @@ class ConfigManager:
             seen.add(value_str)
             normalized.append(value_str)
         return normalized
+
+    @staticmethod
+    def _normalize_string_list(values: Any) -> List[str]:
+        """仅保留非空字符串，避免空关键词全量命中或类型异常。"""
+        if not isinstance(values, list):
+            return []
+        normalized: List[str] = []
+        seen = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            normalized.append(text)
+        return normalized
+
+    @staticmethod
+    def _as_dict(value: Any) -> Dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _migrate_message_config(cls, config: Dict[str, Any]) -> None:
+        """在保留持久化键的前提下迁移旧模式值和归档命令。"""
+        message = cls._as_dict(config.get("message"))
+        packing = cls._as_dict(message.get("packing"))
+        if not packing:
+            return
+
+        changed = False
+        legacy_mode_map = {
+            "不打包": AGGREGATION_MODE_NONE,
+            "全部打包": AGGREGATION_MODE_ALL,
+            "按条件打包": AGGREGATION_MODE_CONDITIONAL,
+        }
+        current_mode = str(packing.get("mode", "") or "").strip()
+        migrated_mode = legacy_mode_map.get(current_mode)
+        if migrated_mode:
+            packing["mode"] = migrated_mode
+            changed = True
+
+        archive = cls._as_dict(message.get("archive"))
+        legacy_command = str(packing.get("zip_command", "") or "").strip()
+        if legacy_command:
+            if not str(archive.get("command", "") or "").strip():
+                archive["command"] = legacy_command
+            packing["zip_command"] = ""
+            changed = True
+        message["packing"] = packing
+        message["archive"] = archive
+        config["message"] = message
+
+        if not changed:
+            return
+        save_config = getattr(config, "save_config", None)
+        if callable(save_config):
+            try:
+                save_config()
+            except Exception as exc:
+                logger.warning(f"保存归档配置迁移结果失败: {exc}")
 
     @staticmethod
     def _normalize_llm_provider_source(value: Any) -> str:

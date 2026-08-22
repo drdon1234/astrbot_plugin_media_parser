@@ -2,7 +2,7 @@
     "parsers": {
         "description": "解析器与输出模式",
         "type": "object",
-        "hint": "关闭=不解析该平台；仅文本=只发送标题/作者/简介等文本；仅富媒体=只发送图片/视频",
+        "hint": "关闭=不解析该平台；仅文本=只发送摘要文本；仅富媒体=只发送图片/视频。仅文本仍受“消息输出 → 文本元数据”开关控制。",
         "items": {
             "bilibili": {
                 "description": "B站",
@@ -139,13 +139,16 @@
             "reply_trigger": {
                 "description": "回复触发解析",
                 "type": "bool",
-                "hint": "引用含链接的消息并附关键词即可触发解析",
+                "hint": "引用含链接的消息并附关键词即可触发解析；与自动解析可同时开启。",
                 "default": false
             },
             "keywords": {
                 "description": "手动触发关键词",
                 "type": "list",
-                "hint": "关闭自动解析时，消息含关键词才触发",
+                "hint": "自动解析关闭时用于普通消息；启用“回复触发解析”时也用于引用消息。消息包含任一关键词才触发；每项填写一个关键词。",
+                "items": {
+                    "type": "string"
+                },
                 "default": [
                     "视频解析",
                     "解析视频"
@@ -156,10 +159,10 @@
     "parse_rate_limit": {
         "description": "解析频率限制",
         "type": "object",
-        "hint": "0 = 不限制；记录会持久化到插件运行时目录，并按启用限制中的最大时间窗自动裁剪，避免无限增长。",
+        "hint": "最多解析次数填 0 表示不限制；启用限制时，时间窗必须大于 0。记录会持久化到插件运行时目录并自动裁剪。",
         "items": {
             "same_link": {
-                "description": "同视频链接限制",
+                "description": "同链接限制",
                 "type": "object",
                 "hint": "链接会先清洗为标准链接，过滤分享者、来源和追踪参数后再计数。",
                 "items": {
@@ -172,7 +175,7 @@
                     "window_seconds": {
                         "description": "时间窗秒数",
                         "type": "int",
-                        "hint": "只统计该秒数内的解析记录；也用于自动裁剪持久化记录",
+                        "hint": "必须大于 0；填 0 会关闭此限制。只统计该秒数内的记录，也用于自动裁剪持久化记录。",
                         "default": 3600
                     }
                 }
@@ -191,7 +194,7 @@
                     "window_seconds": {
                         "description": "时间窗秒数",
                         "type": "int",
-                        "hint": "只统计该秒数内的解析记录；也用于自动裁剪持久化记录",
+                        "hint": "必须大于 0；填 0 会关闭此限制。只统计该秒数内的记录，也用于自动裁剪持久化记录。",
                         "default": 3600
                     }
                 }
@@ -238,7 +241,7 @@
                     "quote_user_message": {
                         "description": "引用用户消息",
                         "type": "bool",
-                        "hint": "仅不打包时生效；文本元数据节点会引用对应的用户消息，媒体节点不引用。",
+                        "hint": "仅普通逐条发送时生效；聚合和 ZIP 不引用。只让文本元数据节点引用对应用户消息，媒体节点不引用。",
                         "default": false
                     }
                 }
@@ -250,7 +253,7 @@
                     "video_cover_only": {
                         "description": "视频仅发送封面",
                         "type": "bool",
-                        "hint": "开启后不发送视频节点；每个视频会改为发送封面图片。解析结果有封面时直接使用封面，否则尝试截取视频第一帧。",
+                        "hint": "开启后不发送视频节点；每个视频会改为发送封面图片。解析结果有封面时直接使用封面，否则通过本地流式中继尝试截取视频第一帧；需要可用缓存目录和 ffmpeg，输入受下载大小硬限制。",
                         "default": false
                     }
                 }
@@ -258,12 +261,12 @@
             "hot_comments": {
                 "description": "附加内容：热评",
                 "type": "object",
-                "hint": "仅对输出模式包含文本的支持平台生效。",
+                "hint": "仅对输出模式包含文本的支持平台生效；先将条数设为大于 0，下面的平台开关才有作用。",
                 "items": {
                     "count": {
                         "description": "热评条数",
                         "type": "int",
-                        "hint": "0 = 不获取",
+                        "hint": "填 0 不获取热评；大于 0 后再按下面的平台开关选择来源。",
                         "default": 0
                     },
                     "bilibili": {
@@ -286,6 +289,7 @@
             "opening": {
                 "description": "发送行为：开场语",
                 "type": "object",
+                "hint": "普通解析仅在存在可发送的富媒体时发送；归档命令会使用单独的打包文本。",
                 "items": {
                     "enable": {
                         "description": "发送开场语",
@@ -295,55 +299,89 @@
                     "content": {
                         "description": "开场语内容",
                         "type": "string",
+                        "condition": {
+                            "enable": true
+                        },
                         "default": "流媒体解析bot为您服务 ٩( 'ω' )و"
+                    },
+                    "archive_content": {
+                        "description": "打包自定义文本回复",
+                        "type": "string",
+                        "condition": {
+                            "enable": true
+                        },
+                        "hint": "发送归档命令开始打包时发送；与普通解析共用上面的开场语开关。",
+                        "default": "正在为您打包，请稍候..."
                     }
                 }
             },
             "packing": {
-                "description": "发送行为：消息打包",
+                "description": "发送行为：消息聚合",
                 "type": "object",
-                "hint": "NapCat 存在兼容问题，请按需启用。",
+                "hint": "控制是否使用合并转发消息；ZIP 归档独立于此设置。NapCat 存在兼容问题，请按需启用。",
                 "items": {
                     "mode": {
-                        "description": "打包模式",
+                        "description": "聚合模式",
                         "type": "string",
                         "options": [
-                            "不打包",
-                            "全部打包",
-                            "按条件打包"
+                            "不聚合",
+                            "全部聚合",
+                            "按条件聚合"
                         ],
-                        "default": "不打包"
+                        "default": "不聚合"
                     },
                     "zip_command": {
-                        "description": "引用链接打包命令",
+                        "description": "旧归档命令（自动迁移）",
                         "type": "string",
-                        "hint": "引用含可解析链接的消息并单独发送此命令，将解析文本和已下载媒体打包为ZIP；留空关闭。",
-                        "default": ""
+                        "default": "",
+                        "invisible": true
                     },
                     "thresholds": {
-                        "description": "按条件打包阈值",
+                        "description": "按条件聚合阈值",
                         "type": "object",
-                        "hint": "仅在选择“按条件打包”时生效；0 = 不按该项触发。",
+                        "hint": "仅在选择“按条件聚合”时生效；0 = 不按该项触发。",
+                        "condition": {
+                            "mode": "按条件聚合"
+                        },
                         "items": {
                             "image_count": {
                                 "description": "图片数量",
                                 "type": "int",
-                                "hint": "图片总数达到该值时打包；0 = 不按图片数触发",
+                                "hint": "图片总数达到该值时聚合；0 = 不按图片数触发",
                                 "default": 3
                             },
                             "video_count": {
                                 "description": "视频数量",
                                 "type": "int",
-                                "hint": "视频总数达到该值时打包；0 = 不按视频数触发",
+                                "hint": "视频总数达到该值时聚合；0 = 不按视频数触发",
                                 "default": 2
                             },
                             "node_count": {
                                 "description": "节点数量",
                                 "type": "int",
-                                "hint": "文本、图片和视频节点总数达到该值时打包；0 = 不按节点数触发",
+                                "hint": "文本、图片和视频节点总数达到该值时聚合；0 = 不按节点数触发",
                                 "default": 5
                             }
                         }
+                    }
+                }
+            },
+            "archive": {
+                "description": "导出行为：ZIP 归档",
+                "type": "object",
+                "hint": "ZIP 归档与聊天消息聚合相互独立。",
+                "items": {
+                    "command": {
+                        "description": "引用链接归档命令",
+                        "type": "string",
+                        "hint": "引用含可解析链接的消息并单独发送此命令，将解析详情和可下载媒体导出为 ZIP；留空关闭。命令不能与清缓存命令相同。",
+                        "default": ""
+                    },
+                    "max_total_size_mb": {
+                        "description": "归档媒体总大小上限（MB）",
+                        "type": "float",
+                        "hint": "仅在填写归档命令后有作用。所有待归档媒体总大小超过该值时拒绝创建 ZIP；有效范围 1–4096 MB。",
+                        "default": 1024.0
                     }
                 }
             }
@@ -352,7 +390,7 @@
     "translation": {
         "description": "文本翻译",
         "type": "object",
-        "hint": "对正文和标题进行大模型翻译；默认关闭，翻译失败不会影响媒体解析",
+        "hint": "默认关闭。启用后翻译正文/标题；翻译失败不会影响媒体解析。未启用时下面的翻译参数会被忽略。",
         "items": {
             "enable": {
                 "description": "启用翻译",
@@ -362,16 +400,22 @@
             "content_scope": {
                 "description": "翻译范围",
                 "type": "string",
+                "condition": {
+                    "enable": true
+                },
                 "options": [
                     "仅正文",
                     "正文和标题"
                 ],
-                "hint": "仅正文只翻译简介/正文；正文和标题会同时翻译标题和简介/正文；热评不翻译",
+                "hint": "仅正文只翻译简介/正文；正文和标题会同时翻译标题和简介/正文；热评不翻译。仅启用翻译后生效。",
                 "default": "正文和标题"
             },
             "target_language": {
                 "description": "目标语言",
                 "type": "string",
+                "condition": {
+                    "enable": true
+                },
                 "options": [
                     "简体中文",
                     "繁体中文",
@@ -389,6 +433,9 @@
             "llm": {
                 "description": "大模型接口",
                 "type": "object",
+                "condition": {
+                    "enable": true
+                },
                 "items": {
                     "provider_source": {
                         "description": "大模型提供商",
@@ -397,13 +444,16 @@
                             "AstrBot 内置提供商",
                             "插件自定义提供商"
                         ],
-                        "hint": "选择使用 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口",
+                        "hint": "仅启用翻译后生效。选择 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口。",
                         "default": "AstrBot 内置提供商"
                     },
                     "astrbot_provider": {
                         "description": "AstrBot 内置提供商",
                         "type": "object",
                         "hint": "当“大模型提供商”选择 AstrBot 内置提供商时生效",
+                        "condition": {
+                            "provider_source": "AstrBot 内置提供商"
+                        },
                         "items": {
                             "provider_id": {
                                 "description": "选择 AstrBot AI",
@@ -418,6 +468,9 @@
                         "description": "自定义提供商",
                         "type": "object",
                         "hint": "当“大模型提供商”选择插件自定义提供商时生效",
+                        "condition": {
+                            "provider_source": "插件自定义提供商"
+                        },
                         "items": {
                             "provider": {
                                 "description": "厂商/接口类型",
@@ -439,17 +492,19 @@
                             "base_url": {
                                 "description": "Base URL",
                                 "type": "string",
-                                "hint": "预设厂商可留空；自定义 OpenAI 兼容、中转或私有部署请填写对应接口地址",
+                                "hint": "预设厂商可留空；自定义 OpenAI 兼容、中转或私有部署请填写对应接口地址。仅选择“插件自定义提供商”时生效。",
                                 "default": ""
                             },
                             "api_key": {
                                 "description": "API Key",
                                 "type": "string",
+                                "hint": "仅本地使用，不会写入运行日志；仅选择“插件自定义提供商”时生效。",
                                 "default": ""
                             },
                             "model": {
                                 "description": "模型",
                                 "type": "string",
+                                "hint": "填写所选厂商的模型名，例如 deepseek-chat、qwen-plus、gpt-4o-mini 或本地 Ollama 模型；切换厂商不会自动修改此值。",
                                 "default": "gpt-5.5"
                             }
                         }
@@ -459,31 +514,32 @@
         }
     },
     "download": {
-        "description": "媒体文件缓存目录",
+        "description": "下载与缓存",
         "type": "object",
+        "hint": "控制下载并发、大小限制和本地缓存。非 Docker 环境使用 AstrBot 插件数据目录。",
         "items": {
             "max_concurrent": {
                 "description": "最大并发下载数",
                 "type": "int",
-                "hint": "建议 3~5",
+                "hint": "建议 3–5；过大可能增加带宽和磁盘压力。",
                 "default": 5
             },
             "cache_dir": {
-                "description": "媒体文件缓存目录",
+                "description": "Docker 共享缓存目录（可选）",
                 "type": "string",
-                "hint": "非 Docker 环境自动使用 AstrBot 插件数据目录；Docker 环境可配置共享挂载目录",
-                "default": "/app/sharedFolder/video_parser/cache"
+                "hint": "仅 Docker 环境使用；填写容器内的共享挂载目录。非 Docker 请留空，自动使用 AstrBot 插件数据目录。",
+                "default": ""
             },
             "max_video_size_mb": {
-                "description": "视频大小上限(MB)",
+                "description": "视频大小上限（MB）",
                 "type": "float",
-                "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；0 = 不限制",
+                "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；填 0 不限制。",
                 "default": 1000.0
             },
             "large_video_threshold_mb": {
-                "description": "大视频阈值(MB)",
+                "description": "大视频阈值（MB）",
                 "type": "float",
-                "hint": "超过阈值单独发送，不放入消息集合，上限100MB，0 = 不限制",
+                "hint": "超过阈值的普通视频单独发送，不放入消息集合；有效上限 100 MB，填 0 不限制。",
                 "default": 100.0
             }
         }
@@ -491,18 +547,18 @@
     "permissions": {
         "description": "权限控制",
         "type": "object",
-        "hint": "优先级：个人白名单 > 个人黑名单 > 群组白名单 > 群组黑名单",
+        "hint": "优先级：管理员 > 个人白名单 > 个人黑名单 > 群组白名单 > 群组黑名单。名单每项填写一个 ID。",
         "items": {
             "admin_id": {
-                "description": "管理员ID",
+                "description": "管理员 ID",
                 "type": "string",
-                "hint": "最高权限，接收私聊通知，自动加入白名单",
+                "hint": "最高权限（白名单限制对管理员豁免），接收私聊通知并自动加入白名单。",
                 "default": ""
             },
             "whitelist": {
                 "description": "白名单",
                 "type": "object",
-                "hint": "启用但不配置名单会禁止所有用户",
+                "hint": "启用但不配置名单会禁止所有非管理员用户；用户和群组字段每项填写一个 ID。",
                 "items": {
                     "enable": {
                         "description": "启用",
@@ -512,11 +568,25 @@
                     "user": {
                         "description": "用户",
                         "type": "list",
+                        "hint": "用户 ID，每项一个字符串。",
+                        "condition": {
+                            "enable": true
+                        },
+                        "items": {
+                            "type": "string"
+                        },
                         "default": []
                     },
                     "group": {
                         "description": "群组",
                         "type": "list",
+                        "hint": "群组 ID，每项一个字符串。",
+                        "condition": {
+                            "enable": true
+                        },
+                        "items": {
+                            "type": "string"
+                        },
                         "default": []
                     }
                 }
@@ -524,6 +594,7 @@
             "blacklist": {
                 "description": "黑名单",
                 "type": "object",
+                "hint": "用户和群组字段每项填写一个 ID。",
                 "items": {
                     "enable": {
                         "description": "启用",
@@ -533,11 +604,25 @@
                     "user": {
                         "description": "用户",
                         "type": "list",
+                        "hint": "用户 ID，每项一个字符串。",
+                        "condition": {
+                            "enable": true
+                        },
+                        "items": {
+                            "type": "string"
+                        },
                         "default": []
                     },
                     "group": {
                         "description": "群组",
                         "type": "list",
+                        "hint": "群组 ID，每项一个字符串。",
+                        "condition": {
+                            "enable": true
+                        },
+                        "items": {
+                            "type": "string"
+                        },
                         "default": []
                     }
                 }
@@ -547,21 +632,29 @@
     "bilibili_enhanced": {
         "description": "B站增强",
         "type": "object",
+        "hint": "启用 Cookie 后才会使用 Cookie、画质和管理员协助设置；需要可用的媒体缓存目录。",
         "items": {
             "use_cookie": {
-                "description": "携带Cookie解析",
+                "description": "携带 Cookie 解析",
                 "type": "bool",
-                "hint": "缓存目录可用时，将 DASH 视频下载到缓存目录后发送",
+                "hint": "缓存目录可用时，将 DASH 视频下载到缓存目录后发送。",
                 "default": false
             },
             "cookie": {
                 "description": "Cookie",
                 "type": "string",
+                "hint": "仅本地使用，不要公开分享；“携带 Cookie 解析”关闭时忽略。",
+                "condition": {
+                    "use_cookie": true
+                },
                 "default": ""
             },
             "max_quality": {
                 "description": "最高画质",
                 "type": "string",
+                "condition": {
+                    "use_cookie": true
+                },
                 "options": [
                     "不限制",
                     "4K",
@@ -578,7 +671,10 @@
             "admin_assist": {
                 "description": "管理员协助登录",
                 "type": "object",
-                "hint": "Cookie失效时私聊管理员协助重新登录；媒体文件缓存目录不可用时自动旁路",
+                "hint": "仅在“携带 Cookie 解析”开启且媒体缓存可用时生效；Cookie 失效时私聊管理员协助重新登录。",
+                "condition": {
+                    "use_cookie": true
+                },
                 "items": {
                     "enable": {
                         "description": "启用",
@@ -586,14 +682,31 @@
                         "default": false
                     },
                     "reply_timeout_minutes": {
-                        "description": "回复超时(分钟)",
+                        "description": "回复超时（分钟）",
                         "type": "int",
+                        "hint": "等待管理员回复的最长时间，必须大于 0。",
+                        "condition": {
+                            "enable": true
+                        },
                         "default": 1440
                     },
                     "request_cooldown_minutes": {
-                        "description": "请求冷却(分钟)",
+                        "description": "请求冷却（分钟）",
                         "type": "int",
+                        "hint": "自动检测再次发起协助登录前的间隔，必须大于 0；管理员主动更新指令不受此冷却限制。",
+                        "condition": {
+                            "enable": true
+                        },
                         "default": 1440
+                    },
+                    "command": {
+                        "description": "主动更新 Cookie 指令",
+                        "type": "string",
+                        "hint": "管理员私聊发送此指令即可直接发送 B 站登录二维码；留空可关闭指令入口。",
+                        "condition": {
+                            "enable": true
+                        },
+                        "default": "B站更新Cookie"
                     }
                 }
             }
@@ -607,7 +720,7 @@
             "cookie": {
                 "description": "Pixiv Cookie",
                 "type": "string",
-                "hint": "包含 PHPSESSID 的完整 Cookie 字符串。登录 pixiv.net 后从浏览器开发者工具复制。",
+                "hint": "包含 PHPSESSID 的完整 Cookie 字符串；仅本地使用，不要公开分享。登录 pixiv.net 后从浏览器开发者工具复制。",
                 "default": ""
             }
         }
@@ -615,6 +728,7 @@
     "proxy": {
         "description": "代理设置",
         "type": "object",
+        "hint": "先填写代理地址；下面各平台开关只有在地址非空时才会生效。",
         "items": {
             "address": {
                 "description": "代理地址",
@@ -623,23 +737,27 @@
                 "default": ""
             },
             "tiktok": {
-                "description": "TikTok解析与下载使用代理",
+                "description": "TikTok 解析与下载使用代理",
                 "type": "bool",
+                "hint": "需要先填写“代理地址”。",
                 "default": false
             },
             "xiaoheihe_video": {
                 "description": "小黑盒视频下载使用代理",
                 "type": "bool",
+                "hint": "需要先填写“代理地址”。",
                 "default": true
             },
             "pixiv": {
-                "description": "Pixiv解析与图片下载使用代理",
+                "description": "Pixiv 解析与图片下载使用代理",
                 "type": "bool",
+                "hint": "需要先填写“代理地址”。",
                 "default": false
             },
             "twitter": {
-                "description": "Twitter代理",
+                "description": "Twitter 代理",
                 "type": "object",
+                "hint": "需要先填写“代理地址”。",
                 "items": {
                     "parse": {
                         "description": "解析",
@@ -663,24 +781,30 @@
     "media_relay": {
         "description": "媒体中转",
         "type": "object",
-        "hint": "仅增强已缓存到本地文件的媒体，不会强制下载所有媒体",
+        "hint": "仅增强已缓存到本地文件的媒体，不会强制下载所有媒体；关闭后下面的地址和有效期会被忽略。",
         "items": {
             "enable": {
                 "description": "启用",
                 "type": "bool",
-                "hint": "由AstrBot HTTP服务中转缓存中的本地媒体文件",
+                "hint": "由 AstrBot HTTP 服务中转缓存中的本地媒体文件。",
                 "default": false
             },
             "callback_url": {
-                "description": "AstrBot回调地址",
+                "description": "AstrBot 回调地址",
                 "type": "string",
-                "hint": "消息平台可达的地址，如 http://host:6185，跨服务器需公网可达",
+                "hint": "留空时使用 AstrBot 全局 callback_api_base；否则填写消息平台可达的地址，如 http://host:6185。跨服务器时需公网可达。",
+                "condition": {
+                    "enable": true
+                },
                 "default": ""
             },
             "ttl": {
-                "description": "中转缓存有效期(秒)",
+                "description": "中转缓存有效期（秒）",
                 "type": "int",
-                "hint": "到期后链接失效并清理缓存，建议 >= 60",
+                "hint": "最小 30 秒；到期后链接失效并清理缓存，建议至少 60 秒。",
+                "condition": {
+                    "enable": true
+                },
                 "default": 300
             }
         }
@@ -696,7 +820,7 @@
                 "default": "清理媒体"
             },
             "debug": {
-                "description": "Debug模式",
+                "description": "调试模式",
                 "type": "bool",
                 "hint": "输出完整工作流详细日志",
                 "default": false

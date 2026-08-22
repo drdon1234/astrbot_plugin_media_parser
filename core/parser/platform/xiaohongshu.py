@@ -1,10 +1,17 @@
 "core.parser.platform.xiaohongshu 模块。"
+
 import asyncio
 import json
 import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from urllib.parse import unquote, urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import (
+    parse_qsl,
+    urlencode,
+    unquote,
+    urlparse,
+    urlunparse,
+)
 
 import aiohttp
 
@@ -26,11 +33,11 @@ PC_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0"
 )
-
+XHS_DOMAINS = ("xiaohongshu.com", "xhslink.com", "xhslink.cn")
 
 class XiaohongshuParser(BaseVideoParser):
-
     "XiaohongshuParser 类。"
+
     def __init__(self, hot_comment_count: int = 0):
         """初始化小红书解析器"""
         super().__init__("xiaohongshu")
@@ -48,32 +55,46 @@ class XiaohongshuParser(BaseVideoParser):
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
-        
+
         Args:
             url: 视频链接
-            
+
         Returns:
             是否可以解析
         """
         if not url:
             return False
-        url_lower = url.lower()
-        if 'xhslink.com' in url_lower or 'xhslink.cn' in url_lower or 'xiaohongshu.com' in url_lower:
-            return True
-        return False
+        return self._is_trusted_xhs_url(url)
+
+    @staticmethod
+    def _host_matches(host: str, domain: str) -> bool:
+        normalized = str(host or "").lower().rstrip(".")
+        expected = domain.lower().rstrip(".")
+        return normalized == expected or normalized.endswith(f".{expected}")
+
+    @classmethod
+    def _is_trusted_xhs_url(cls, url: str) -> bool:
+        try:
+            parsed = urlparse(str(url or ""))
+        except (TypeError, ValueError):
+            return False
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return False
+        host = parsed.hostname or ""
+        return any(cls._host_matches(host, domain) for domain in XHS_DOMAINS)
 
     def extract_links(self, text: str) -> List[str]:
         """从文本中提取小红书链接
-        
+
         Args:
             text: 输入文本
-            
+
         Returns:
             小红书链接列表
         """
         result_links_set = set()
         seen_urls = set()
-        
+
         short_pattern = r'https?://xhslink\.(?:com|cn)/[^\s<>"\'()]+'
         short_links = re.findall(short_pattern, text, re.IGNORECASE)
         for link in short_links:
@@ -81,9 +102,9 @@ class XiaohongshuParser(BaseVideoParser):
             if normalized not in seen_urls:
                 seen_urls.add(normalized)
                 result_links_set.add(link)
-        
+
         long_pattern = (
-            r'https?://(?:www\.)?xiaohongshu\.com/'
+            r"https?://(?:www\.)?xiaohongshu\.com/"
             r'(?:explore|discovery/item)/[^\s<>"\'()]+'
         )
         long_links = re.findall(long_pattern, text, re.IGNORECASE)
@@ -92,37 +113,36 @@ class XiaohongshuParser(BaseVideoParser):
             if normalized not in seen_urls:
                 seen_urls.add(normalized)
                 result_links_set.add(link)
-        
+
         result = list(result_links_set)
         if result:
-            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+            logger.debug(
+                f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}"
+            )
         else:
             logger.debug(f"[{self.name}] extract_links: 未提取到链接")
         return result
 
     def _is_pc_url(self, url: str) -> bool:
         """检测是否为PC端链接
-        
+
         Args:
             url: 链接URL
-            
+
         Returns:
             是否为PC端链接
         """
         url_lower = url.lower()
-        return (
-            '/explore/' in url_lower or
-            'xsec_source=pc' in url_lower
-        )
+        return "/explore/" in url_lower or "xsec_source=pc" in url_lower
 
     def _clean_share_url(self, url: str) -> str:
         """清理分享长链URL，删除source和xhsshare参数
-        
+
         注意：PC端链接（包含/explore/或xsec_token）不删除参数，保留xsec_token等
-        
+
         Args:
             url: 原始URL
-            
+
         Returns:
             清理后的URL
         """
@@ -133,56 +153,77 @@ class XiaohongshuParser(BaseVideoParser):
             return url
 
         parsed = urlparse(url)
-        query_params = parse_qs(parsed.query, keep_blank_values=True)
-        query_params.pop('source', None)
-        query_params.pop('xhsshare', None)
-
-        flat_params = {}
-        for key, value_list in query_params.items():
-            flat_params[key] = value_list[0] if value_list and value_list[0] else ''
-
-        new_query = urlencode(flat_params)
+        query_params = [
+            (key, value)
+            for key, value in parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+            )
+            if key not in {"source", "xhsshare"}
+        ]
+        new_query = urlencode(query_params, doseq=True)
         new_parsed = parsed._replace(query=new_query)
         return urlunparse(new_parsed)
 
+    @classmethod
+    def _build_preferred_note_url(cls, url: str) -> str:
+        """将移动详情页改写为桌面详情页，完整保留查询参数。"""
+        try:
+            parsed = urlparse(url)
+        except (TypeError, ValueError):
+            return url
+        if not cls._is_trusted_xhs_url(url):
+            return url
+        match = re.fullmatch(r"/discovery/item/([^/]+?)/?", parsed.path or "")
+        if not match:
+            return url
+        return urlunparse(parsed._replace(path=f"/explore/{match.group(1)}"))
+
+    @classmethod
+    def _recover_original_note_url(cls, url: str) -> str:
+        """从小红书安全落地页恢复其携带的原作品 URL。"""
+        try:
+            query = parse_qsl(urlparse(url).query, keep_blank_values=True)
+        except (TypeError, ValueError):
+            return url
+        for key, value in query:
+            if key == "originalUrl" and cls._is_trusted_xhs_url(value):
+                return value
+        return url
+
     async def _get_redirect_url(
-        self,
-        session: aiohttp.ClientSession,
-        short_url: str
+        self, session: aiohttp.ClientSession, short_url: str
     ) -> str:
         """获取短链接重定向后的完整URL
-        
+
         Args:
             session: aiohttp会话
             short_url: 短链接URL
-            
+
         Returns:
             重定向后的完整URL
-            
+
         Raises:
             RuntimeError: 当无法获取重定向URL时
         """
         async with session.get(
             short_url,
             headers=self.headers,
-            allow_redirects=False
+            allow_redirects=False,
         ) as response:
             if response.status == 302:
                 redirect_url = response.headers.get("Location", "")
                 if not redirect_url:
                     raise RuntimeError("无法获取重定向URL")
                 return unquote(redirect_url)
-            else:
-                raise RuntimeError(
-                    f"无法获取重定向URL，状态码: {response.status}"
-                )
+            raise RuntimeError(f"无法获取重定向URL，状态码: {response.status}")
 
     def _get_headers_for_url(self, url: str) -> dict:
         """根据URL类型获取对应的请求头
-        
+
         Args:
             url: 页面URL
-            
+
         Returns:
             请求头字典
         """
@@ -198,20 +239,16 @@ class XiaohongshuParser(BaseVideoParser):
         else:
             return self.headers
 
-    async def _fetch_page(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
-    ) -> str:
+    async def _fetch_page(self, session: aiohttp.ClientSession, url: str) -> str:
         """获取页面HTML内容
-        
+
         Args:
             session: aiohttp会话
             url: 页面URL
-            
+
         Returns:
             HTML内容
-            
+
         Raises:
             RuntimeError: 当无法获取页面内容时
         """
@@ -219,43 +256,40 @@ class XiaohongshuParser(BaseVideoParser):
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
                 return await response.text()
-            else:
-                raise RuntimeError(
-                    f"无法获取页面内容，状态码: {response.status}"
-                )
+            raise RuntimeError(f"无法获取页面内容，状态码: {response.status}")
 
     def _extract_initial_state(self, html: str) -> dict:
         """从HTML中提取window.__INITIAL_STATE__的JSON数据
-        
+
         Args:
             html: HTML内容
-            
+
         Returns:
             JSON数据字典
-            
+
         Raises:
             RuntimeError: 当无法提取JSON数据时
         """
-        pattern = r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>'
+        pattern = r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>"
         match = re.search(pattern, html, re.DOTALL)
         if match:
             json_str = match.group(1)
-            json_str = re.sub(r'\bundefined\b', 'null', json_str)
+            json_str = re.sub(r"\bundefined\b", "null", json_str)
             try:
                 return json.loads(json_str)
             except json.JSONDecodeError:
                 pass
 
-        start_marker = 'window.__INITIAL_STATE__'
+        start_marker = "window.__INITIAL_STATE__"
         start_idx = html.find(start_marker)
         if start_idx == -1:
             raise RuntimeError("无法找到window.__INITIAL_STATE__数据")
 
-        json_start = html.find('{', start_idx)
+        json_start = html.find("{", start_idx)
         if json_start == -1:
             raise RuntimeError("无法找到JSON开始位置")
 
-        script_end = html.find('</script>', start_idx)
+        script_end = html.find("</script>", start_idx)
         if script_end == -1:
             script_end = len(html)
 
@@ -273,7 +307,7 @@ class XiaohongshuParser(BaseVideoParser):
                 escape_next = False
                 continue
 
-            if char == '\\':
+            if char == "\\":
                 escape_next = True
                 continue
 
@@ -286,9 +320,9 @@ class XiaohongshuParser(BaseVideoParser):
                 continue
 
             if not in_string and not in_single_quote:
-                if char == '{':
+                if char == "{":
                     brace_count += 1
-                elif char == '}':
+                elif char == "}":
                     brace_count -= 1
                     if brace_count == 0:
                         json_end = i + 1
@@ -298,12 +332,12 @@ class XiaohongshuParser(BaseVideoParser):
             raise RuntimeError("无法找到完整的JSON对象")
 
         json_str = html[json_start:json_end]
-        json_str = re.sub(r'\bundefined\b', 'null', json_str)
+        json_str = re.sub(r"\bundefined\b", "null", json_str)
 
         try:
             return json.loads(json_str)
         except json.JSONDecodeError as e:
-            error_pos = getattr(e, 'pos', 0)
+            error_pos = getattr(e, "pos", 0)
             start_debug = max(0, error_pos - 200)
             end_debug = min(len(json_str), error_pos + 200)
             error_msg = (
@@ -315,29 +349,66 @@ class XiaohongshuParser(BaseVideoParser):
 
     def _clean_topic_tags(self, text: str) -> str:
         """清理简介中的话题标签，将#标签[话题]#格式改为#标签
-        
+
         Args:
             text: 原始文本
-            
+
         Returns:
             清理后的文本
         """
         if not text:
             return text
-        pattern = r'#([^#\[]+)\[话题\]#'
-        return re.sub(pattern, r'#\1', text)
+        pattern = r"#([^#\[]+)\[话题\]#"
+        return re.sub(pattern, r"#\1", text)
+
+    @staticmethod
+    def _extract_compatible_video_url(stream: Any) -> str:
+        """优先选择 H.264，缺失时回退到其他编码的最高质量流。"""
+        if not isinstance(stream, dict):
+            return ""
+
+        for codec in ("h264", "h265", "av1", "h266"):
+            codec_streams = stream.get(codec) or []
+            if isinstance(codec_streams, dict):
+                codec_streams = [codec_streams]
+            if not isinstance(codec_streams, list):
+                continue
+
+            candidates = []
+            for item in codec_streams:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("masterUrl") or item.get("master_url") or "").strip()
+                if not url:
+                    continue
+                try:
+                    width = int(item.get("width") or 0)
+                    height = int(item.get("height") or 0)
+                    bitrate = int(
+                        item.get("avgBitrate")
+                        or item.get("videoBitrate")
+                        or item.get("bitrate")
+                        or 0
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    width = height = bitrate = 0
+                candidates.append((width * height, height, width, bitrate, url))
+            if candidates:
+                candidates.sort(key=lambda item: item[:-1], reverse=True)
+                return candidates[0][-1]
+        return ""
 
     def _parse_note_data(self, data: dict, url: str = "") -> dict:
         """从JSON数据中提取所需信息
-        
+
         支持移动端和PC端两种数据路径：
         - 移动端路径: noteData.data.noteData
         - PC端路径: note.noteDetailMap[noteId].note
-        
+
         Args:
             data: JSON数据字典
             url: 原始URL，用于判断数据路径
-            
+
         Returns:
             包含笔记信息的字典，包含以下字段：
             - type: 笔记类型（normal/video）
@@ -348,7 +419,7 @@ class XiaohongshuParser(BaseVideoParser):
             - publish_time: 发布时间
             - video_url: 视频URL（视频类型）
             - image_urls: 图片URL列表（图集类型）
-            
+
         Raises:
             RuntimeError: 当数据提取失败时
         """
@@ -373,7 +444,9 @@ class XiaohongshuParser(BaseVideoParser):
                 pass
 
         if not note_data:
-            raise RuntimeError("无法找到笔记数据，JSON结构可能不同（移动端和PC端路径都失败）")
+            raise RuntimeError(
+                "无法找到笔记数据，JSON结构可能不同（移动端和PC端路径都失败）"
+            )
 
         note_type = note_data.get("type", "normal")
         title = note_data.get("title", "")
@@ -400,10 +473,7 @@ class XiaohongshuParser(BaseVideoParser):
             if video_info and "media" in video_info:
                 media = video_info["media"]
                 if "stream" in media:
-                    stream = media["stream"]
-                    if "h264" in stream and len(stream["h264"]) > 0:
-                        h264 = stream["h264"][0]
-                        video_url = h264.get("masterUrl", "")
+                    video_url = self._extract_compatible_video_url(media["stream"])
 
             if video_url and video_url.startswith("http://"):
                 video_url = video_url.replace("http://", "https://", 1)
@@ -421,7 +491,10 @@ class XiaohongshuParser(BaseVideoParser):
                             url = img["url"]
                         elif "infoList" in img and isinstance(img["infoList"], list):
                             for info in img["infoList"]:
-                                if isinstance(info, dict) and info.get("imageScene") == "WB_DFT":
+                                if (
+                                    isinstance(info, dict)
+                                    and info.get("imageScene") == "WB_DFT"
+                                ):
                                     url = info.get("url")
                                     if url:
                                         break
@@ -456,7 +529,7 @@ class XiaohongshuParser(BaseVideoParser):
             value = int(timestamp)
         except Exception:
             return str(timestamp)
-        if value > 10 ** 12:
+        if value > 10**12:
             value = value // 1000
         if value > 0:
             return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
@@ -527,14 +600,8 @@ class XiaohongshuParser(BaseVideoParser):
     def _extract_primary_comments(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         "处理extract primary comments逻辑。"
         note_data_comments = (
-            (
-                (
-                    (state.get("noteData") or {}).get("data") or {}
-                ).get("commentData")
-                or {}
-            ).get("comments")
-            or []
-        )
+            ((state.get("noteData") or {}).get("data") or {}).get("commentData") or {}
+        ).get("comments") or []
         if isinstance(note_data_comments, list) and note_data_comments:
             return [x for x in note_data_comments if isinstance(x, dict)]
 
@@ -558,8 +625,7 @@ class XiaohongshuParser(BaseVideoParser):
         return []
 
     def _collect_hot_comments_from_state(
-        self,
-        state: Dict[str, Any]
+        self, state: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         "处理collect hot comments from state逻辑。"
         if self.hot_comment_count <= 0:
@@ -575,7 +641,9 @@ class XiaohongshuParser(BaseVideoParser):
                         key_lower = key.lower()
                         if key_lower in {"subcomments", "sub_comments"}:
                             continue
-                        if key_lower in {"comments", "commentlist"} and isinstance(value, list):
+                        if key_lower in {"comments", "commentlist"} and isinstance(
+                            value, list
+                        ):
                             for item in value:
                                 if isinstance(item, dict):
                                     collected.append(item)
@@ -605,19 +673,17 @@ class XiaohongshuParser(BaseVideoParser):
             seen.add(key)
             normalized.append(norm)
         normalized.sort(key=lambda x: x.get("likes", 0), reverse=True)
-        return normalized[:self.hot_comment_count]
+        return normalized[: self.hot_comment_count]
 
     async def parse(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Optional[Dict[str, Any]]:
         """解析单个小红书链接
-        
+
         Args:
             session: aiohttp会话
             url: 小红书链接
-            
+
         Returns:
             解析结果字典，包含标准化的元数据格式：
             - url: 原始URL
@@ -629,7 +695,7 @@ class XiaohongshuParser(BaseVideoParser):
             - image_urls: 图片URL列表（图集类型）
             - image_headers: 图片请求头
             - video_headers: 视频请求头
-            
+
         Raises:
             RuntimeError: 当解析失败时
         """
@@ -640,20 +706,62 @@ class XiaohongshuParser(BaseVideoParser):
                 logger.debug(f"[{self.name}] parse: 短链展开 {url} -> {full_url}")
             else:
                 full_url = url
-                if not full_url.startswith("http://") and not full_url.startswith("https://"):
+                if not full_url.startswith("http://") and not full_url.startswith(
+                    "https://"
+                ):
                     full_url = "https://" + full_url
 
             if is_live_url(full_url) or is_live_url(url):
-                logger.debug(f"[{self.name}] parse: 检测到直播域名链接，跳过解析 {url} -> {full_url}")
+                logger.debug(
+                    f"[{self.name}] parse: 检测到直播域名链接，跳过解析 {url} -> {full_url}"
+                )
                 raise SkipParse("直播域名链接不解析")
 
-            full_url = self._clean_share_url(full_url)
+            original_page_url = self._clean_share_url(full_url)
+            preferred_page_url = self._build_preferred_note_url(original_page_url)
+            candidate_urls = [preferred_page_url]
+            if original_page_url != preferred_page_url:
+                candidate_urls.append(original_page_url)
 
-            logger.debug(f"[{self.name}] parse: 获取页面内容")
-            html = await self._fetch_page(session, full_url)
-            initial_state = self._extract_initial_state(html)
-            note_data = self._parse_note_data(initial_state, full_url)
-            hot_comments = self._collect_hot_comments_from_state(initial_state)
+            last_error: Optional[Exception] = None
+            note_data = None
+            hot_comments: List[Dict[str, Any]] = []
+            selected_page_url = ""
+            for candidate_url in candidate_urls:
+                try:
+                    logger.debug(f"[{self.name}] parse: 获取页面内容 {candidate_url}")
+                    html = await self._fetch_page(session, candidate_url)
+                    initial_state = self._extract_initial_state(html)
+                    candidate_note = self._parse_note_data(
+                        initial_state,
+                        candidate_url,
+                    )
+                    if candidate_note.get("type") == "video" and not candidate_note.get(
+                        "video_url"
+                    ):
+                        raise RuntimeError("页面中缺少兼容的H.264视频地址")
+                    if candidate_note.get("type") != "video" and not candidate_note.get(
+                        "image_urls"
+                    ):
+                        raise RuntimeError("页面中缺少图片地址")
+                    note_data = candidate_note
+                    hot_comments = self._collect_hot_comments_from_state(initial_state)
+                    selected_page_url = candidate_url
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except SkipParse:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    logger.debug(
+                        f"[{self.name}] 页面解析失败，尝试回退: {candidate_url}: {exc}"
+                    )
+
+            if note_data is None:
+                raise RuntimeError(f"无法获取小红书作品信息: {url}") from last_error
+
+            full_url = selected_page_url
             logger.debug(f"[{self.name}] parse: 笔记数据提取成功")
 
             note_type = note_data.get("type", "normal")
@@ -676,14 +784,10 @@ class XiaohongshuParser(BaseVideoParser):
             referer = full_url
             user_agent = PC_UA if self._is_pc_url(full_url) else ANDROID_UA
             image_headers = build_request_headers(
-                is_video=False,
-                referer=referer,
-                user_agent=user_agent
+                is_video=False, referer=referer, user_agent=user_agent
             )
             video_headers = build_request_headers(
-                is_video=True,
-                referer=referer,
-                user_agent=user_agent
+                is_video=True, referer=referer, user_agent=user_agent
             )
 
             if note_type == "video":
@@ -704,7 +808,9 @@ class XiaohongshuParser(BaseVideoParser):
                 }
                 if hot_comments:
                     result_dict["hot_comments"] = hot_comments
-                logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}")
+                logger.debug(
+                    f"[{self.name}] parse: 解析完成(视频) {url}, title={title[:50]}"
+                )
                 return result_dict
             else:
                 if not image_urls:
@@ -724,5 +830,7 @@ class XiaohongshuParser(BaseVideoParser):
                 }
                 if hot_comments:
                     result_dict["hot_comments"] = hot_comments
-                logger.debug(f"[{self.name}] parse: 解析完成(图片) {url}, title={title[:50]}, image_count={len(image_urls)}")
+                logger.debug(
+                    f"[{self.name}] parse: 解析完成(图片) {url}, title={title[:50]}, image_count={len(image_urls)}"
+                )
                 return result_dict

@@ -11,6 +11,7 @@ import asyncio
 import re
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -24,11 +25,38 @@ from ..utils import build_request_headers
 # ── URL 正则 ──────────────────────────────────────────────
 
 PIXIV_URL_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_.-])(?:https?://)?(?:www\.)?pixiv\.net"
-    r"/(?:en/)?"
-    r"(?:artworks|i)/(?P<id>\d{5,12})",
+    r"(?<![A-Za-z0-9_.:/@-])(?:https?://)?(?:www\.)?pixiv\.net"
+    r"/[^\s<>\"'()]+",
     re.IGNORECASE,
 )
+
+
+def _parse_pixiv_identity(url: str) -> Optional[str]:
+    """严格解析 Pixiv 作品 URL 并返回作品 ID。"""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    normalized = url.strip()
+    if "://" not in normalized:
+        normalized = "https://" + normalized
+    try:
+        parsed = urlparse(normalized)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return None
+        if parsed.username or parsed.password:
+            return None
+        if parsed.port not in {None, 80, 443}:
+            return None
+    except (TypeError, ValueError):
+        return None
+    host = (parsed.hostname or "").lower().strip(".")
+    if host not in {"pixiv.net", "www.pixiv.net"}:
+        return None
+    match = re.fullmatch(
+        r"/(?:en/)?(?:artworks|i)/(\d{5,12})/?",
+        parsed.path or "",
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
 
 PIXIV_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -36,9 +64,7 @@ PIXIV_USER_AGENT = (
     "Chrome/136.0.7103.48 Safari/537.36"
 )
 
-PIXIV_ACCEPT_LANGUAGE = (
-    "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ja-JP;q=0.6,ja;q=0.5"
-)
+PIXIV_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7,ja-JP;q=0.6,ja;q=0.5"
 
 
 def _build_headers(illust_id: Optional[str] = None, cookie: str = "") -> Dict[str, str]:
@@ -97,7 +123,12 @@ async def _fetch_json(
         try:
             data = await resp.json()
         except Exception as e:
-            raise RuntimeError(f"Pixiv Ajax JSON 解析失败：{e} body={body_preview!r}") from e
+            raise RuntimeError(
+                f"Pixiv Ajax JSON 解析失败：{e} body={body_preview!r}"
+            ) from e
+
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Pixiv Ajax 返回的 JSON 不是对象：{stage}")
 
         if data.get("error"):
             err_msg = data.get("message") or "unknown error"
@@ -110,11 +141,12 @@ def _extract_pixiv_links(text: str) -> List[str]:
     """提取 Pixiv 作品链接，按作品 ID 去重并保留原始链接形态。"""
     links: List[str] = []
     seen: set[str] = set()
-    for match in PIXIV_URL_PATTERN.finditer(text):
-        illust_id = match.group("id")
+    for match in PIXIV_URL_PATTERN.finditer(text or ""):
+        link = match.group(0).rstrip(".,!?)]}>\"'，。！？；：）】》」")
+        illust_id = _parse_pixiv_identity(link)
         if illust_id and illust_id not in seen:
             seen.add(illust_id)
-            links.append(match.group(0))
+            links.append(link)
     return links
 
 
@@ -134,7 +166,7 @@ class PixivParser(BaseVideoParser):
     # ── URL 匹配 ──────────────────────────────────────────
 
     def can_parse(self, url: str) -> bool:
-        return bool(PIXIV_URL_PATTERN.search(url))
+        return _parse_pixiv_identity(url) is not None
 
     def extract_links(self, text: str) -> List[str]:
         return _extract_pixiv_links(text)
@@ -156,11 +188,10 @@ class PixivParser(BaseVideoParser):
     ) -> Optional[MediaMetadata]:
         t_start = time.time()
 
-        match = PIXIV_URL_PATTERN.search(url)
-        if not match:
+        illust_id = _parse_pixiv_identity(url)
+        if not illust_id:
             logger.debug(f"[Pixiv] URL 不匹配 pixiv 模式: {url}")
             return None
-        illust_id = match.group("id")
 
         logger.info(f"[Pixiv] 开始解析作品 → pid={illust_id}")
 
@@ -170,23 +201,48 @@ class PixivParser(BaseVideoParser):
         # 获取作品元信息
         info_url = f"https://www.pixiv.net/ajax/illust/{illust_id}"
         info_data = await _fetch_json(
-            session, info_url, illust_id, "元信息", self.cookie, proxy=self.proxy,
+            session,
+            info_url,
+            illust_id,
+            "元信息",
+            self.cookie,
+            proxy=self.proxy,
         )
         body = info_data.get("body") or {}
+        if not isinstance(body, dict):
+            raise RuntimeError("Pixiv 元信息 body 不是对象")
+        returned_id = body.get("illustId") or body.get("illust_id")
+        if returned_id not in (None, "") and str(returned_id) != illust_id:
+            raise RuntimeError("Pixiv API 返回了其他作品的数据")
 
         # 获取多页图片 URL
         pages_url = f"https://www.pixiv.net/ajax/illust/{illust_id}/pages?lang=zh"
         pages_data = await _fetch_json(
-            session, pages_url, illust_id, "pages", self.cookie, proxy=self.proxy,
+            session,
+            pages_url,
+            illust_id,
+            "pages",
+            self.cookie,
+            proxy=self.proxy,
         )
         raw_pages = pages_data.get("body") or []
+        if not isinstance(raw_pages, list):
+            raise RuntimeError("Pixiv pages body 不是列表")
+        if not raw_pages:
+            raise RuntimeError("Pixiv 作品未包含可下载图片")
 
         # ── 解析图片列表 ──
         image_urls: List[List[str]] = []
         page_count = len(raw_pages)
 
         for item in raw_pages:
+            if not isinstance(item, dict):
+                logger.warning(f"[Pixiv] pid={illust_id} 页面数据不是对象，跳过")
+                continue
             urls = item.get("urls") or {}
+            if not isinstance(urls, dict):
+                logger.warning(f"[Pixiv] pid={illust_id} 页面 URL 数据不是对象，跳过")
+                continue
             original = urls.get("original")
             regular = urls.get("regular") or urls.get("small") or original
 
@@ -203,16 +259,26 @@ class PixivParser(BaseVideoParser):
             if candidates:
                 image_urls.append(candidates)
 
+        if not image_urls:
+            raise RuntimeError("Pixiv 作品未包含有效图片 URL")
+
         # ── 标签处理 ──
-        tags_raw = body.get("tags", {}).get("tags", [])
+        tags_container = body.get("tags") or {}
+        tags_raw = (
+            tags_container.get("tags") or [] if isinstance(tags_container, dict) else []
+        )
         tags: List[str] = []
-        for item in tags_raw:
+        for item in tags_raw if isinstance(tags_raw, list) else []:
+            if not isinstance(item, dict):
+                continue
             tag_name = item.get("tag")
             if not tag_name:
                 continue
             if tag_name == "R-18":
                 tag_name = "R18"
             translation = item.get("translation") or {}
+            if not isinstance(translation, dict):
+                translation = {}
             if translation.get("en"):
                 tag_name = translation["en"]
             tags.append(str(tag_name).replace(" ", "_"))
@@ -221,9 +287,16 @@ class PixivParser(BaseVideoParser):
         title = str(body.get("illustTitle") or body.get("title") or "Untitled")
         user_name = str(body.get("userName") or "Unknown")
         user_id = str(body.get("userId") or "")
-        x_restrict = int(body.get("xRestrict") or 0)
-        ai_type = int(body.get("aiType") or 0)
-        sanity_level = int(body.get("sl") or 0)
+
+        def safe_int(value: Any) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        x_restrict = safe_int(body.get("xRestrict"))
+        ai_type = safe_int(body.get("aiType"))
+        sanity_level = safe_int(body.get("sl"))
 
         # 构建描述（包含标签 + 限制信息）
         desc_parts = []
@@ -235,7 +308,9 @@ class PixivParser(BaseVideoParser):
         elif x_restrict == 2:
             restriction_label = "R-18G"
         if ai_type == 2:
-            restriction_label = (restriction_label + " / " if restriction_label else "") + "AI生成"
+            restriction_label = (
+                restriction_label + " / " if restriction_label else ""
+            ) + "AI生成"
         if restriction_label:
             desc_parts.append(f"[{restriction_label}]")
         desc = "  ".join(desc_parts) if desc_parts else ""

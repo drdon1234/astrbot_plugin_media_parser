@@ -1,9 +1,11 @@
 """Twitter/X 解析器实现。"""
+
 import asyncio
 import json
 import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -28,14 +30,14 @@ def json_dumps_compact(value: Any) -> str:
 
 
 class TwitterParser(BaseVideoParser):
-
     """Twitter/X 解析器实现。"""
+
     def __init__(
         self,
         use_parse_proxy: bool = False,
         use_image_proxy: bool = False,
         use_video_proxy: bool = False,
-        proxy_url: str = None
+        proxy_url: str = None,
     ):
         """初始化Twitter解析器
 
@@ -52,15 +54,15 @@ class TwitterParser(BaseVideoParser):
         self.proxy_url = proxy_url
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
             ),
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip, deflate',
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip, deflate",
         }
-    
+
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析此URL
 
@@ -73,11 +75,22 @@ class TwitterParser(BaseVideoParser):
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
-        url_lower = url.lower()
-        if 'twitter.com' in url_lower or 'x.com' in url_lower:
-            if re.search(r'/status/(\d+)', url):
-                logger.debug(f"[{self.name}] can_parse: 匹配Twitter链接 {url}")
-                return True
+        try:
+            parsed = urlparse(url)
+        except (TypeError, ValueError):
+            return False
+        host = (parsed.hostname or "").lower().rstrip(".")
+        trusted_host = any(
+            host == domain or host.endswith(f".{domain}")
+            for domain in ("twitter.com", "x.com")
+        )
+        if (
+            parsed.scheme.lower() in {"http", "https"}
+            and trusted_host
+            and re.search(r"/status/(\d+)", parsed.path or "")
+        ):
+            logger.debug(f"[{self.name}] can_parse: 匹配Twitter链接 {url}")
+            return True
         logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
         return False
 
@@ -93,7 +106,7 @@ class TwitterParser(BaseVideoParser):
         result_links_set = set()
         seen_ids = set()
         pattern = (
-            r'https?://(?:twitter\.com|x\.com)/'
+            r"https?://(?:(?:www|mobile)\.)?(?:twitter\.com|x\.com)/"
             r'[^\s]*?status/(\d+)[^\s<>"\'()]*'
         )
         matches = re.finditer(pattern, text, re.IGNORECASE)
@@ -104,54 +117,61 @@ class TwitterParser(BaseVideoParser):
                 result_links_set.add(match.group(0))
         result = list(result_links_set)
         if result:
-            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+            logger.debug(
+                f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}"
+            )
         else:
             logger.debug(f"[{self.name}] extract_links: 未提取到链接")
         return result
 
-
     def _parse_fxtwitter_response(
         self,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
+        expected_tweet_id: str = "",
     ) -> Dict[str, Any]:
         """从 FxTwitter 响应中提取统一媒体结构。"""
-        if not isinstance(data, dict) or 'tweet' not in data:
+        if not isinstance(data, dict) or "tweet" not in data:
             raise FxTwitterTweetUnavailableError("FxTwitter响应缺少tweet字段")
 
-        tweet = data.get('tweet') or {}
+        tweet = data.get("tweet") or {}
+        if expected_tweet_id:
+            actual_id = str(tweet.get("id") or tweet.get("id_str") or "").strip()
+            if not actual_id:
+                url_match = re.search(r"/status/(\d+)", str(tweet.get("url") or ""))
+                actual_id = url_match.group(1) if url_match else ""
+            if actual_id != str(expected_tweet_id):
+                raise FxTwitterTweetUnavailableError("FxTwitter响应不是请求的目标推文")
         tweet_text = self._twitter_text(tweet)
-        author_info = tweet.get('author', {})
+        author_info = tweet.get("author", {})
         author = self._fxtwitter_author(author_info)
-        timestamp = self._parse_twitter_date(tweet.get('created_at'))
-        quote = self._extract_fxtwitter_quote(tweet.get('quote'))
+        timestamp = self._parse_twitter_date(tweet.get("created_at"))
+        quote = self._extract_fxtwitter_quote(tweet.get("quote"))
         desc = self._build_tweet_desc(tweet_text, quote)
 
         media_urls = {
-            'images': [],
-            'videos': [],
-            'title': f"{author} 的推文" if author else "Twitter 推文",
-            'text': desc,
-            'author': self._combine_parenthetical(
-                author,
-                quote.get("author", "")
-            ),
-            'timestamp': self._combine_parenthetical(
-                timestamp,
-                quote.get("timestamp", "")
+            "images": [],
+            "videos": [],
+            "title": f"{author} 的推文" if author else "Twitter 推文",
+            "text": desc,
+            "author": self._combine_parenthetical(author, quote.get("author", "")),
+            "timestamp": self._combine_parenthetical(
+                timestamp, quote.get("timestamp", "")
             ),
         }
 
-        media = tweet.get('media') or {}
-        for photo in media.get('photos') or []:
-            if isinstance(photo, dict) and photo.get('url'):
-                media_urls['images'].append(photo.get('url'))
-        for video in media.get('videos') or []:
-            if isinstance(video, dict) and video.get('url'):
-                media_urls['videos'].append({
-                    'url': video.get('url', ''),
-                    'thumbnail': video.get('thumbnail_url', ''),
-                    'duration': video.get('duration', 0)
-                })
+        media = tweet.get("media") or {}
+        for photo in media.get("photos") or []:
+            if isinstance(photo, dict) and photo.get("url"):
+                media_urls["images"].append(photo.get("url"))
+        for video in media.get("videos") or []:
+            if isinstance(video, dict) and video.get("url"):
+                media_urls["videos"].append(
+                    {
+                        "url": video.get("url", ""),
+                        "thumbnail": video.get("thumbnail_url", ""),
+                        "duration": video.get("duration", 0),
+                    }
+                )
         return media_urls
 
     @staticmethod
@@ -159,23 +179,22 @@ class TwitterParser(BaseVideoParser):
         """提取推文文本，优先使用 raw_text。"""
         if not isinstance(tweet, dict):
             return ""
-        raw_text = tweet.get('raw_text')
+        raw_text = tweet.get("raw_text")
         if isinstance(raw_text, dict):
-            text = raw_text.get('text')
+            text = raw_text.get("text")
             if text:
                 return TwitterParser._apply_display_text_range(
-                    str(text),
-                    raw_text.get('display_text_range')
+                    str(text), raw_text.get("display_text_range")
                 )
-        return str(tweet.get('text', '') or '')
+        return str(tweet.get("text", "") or "")
 
     @staticmethod
     def _fxtwitter_author(author_info: Dict[str, Any]) -> str:
         """格式化 FxTwitter 作者信息。"""
         if not isinstance(author_info, dict):
             return ""
-        author_name = author_info.get('name', '')
-        author_username = author_info.get('screen_name', '')
+        author_name = author_info.get("name", "")
+        author_username = author_info.get("screen_name", "")
         if author_name and author_username:
             return f"{author_name}(@{author_username})"
         return author_name or author_username
@@ -198,8 +217,8 @@ class TwitterParser(BaseVideoParser):
         if not created_at:
             return ""
         try:
-            dt = datetime.strptime(str(created_at), '%a %b %d %H:%M:%S %z %Y')
-            return dt.strftime('%Y-%m-%d')
+            dt = datetime.strptime(str(created_at), "%a %b %d %H:%M:%S %z %Y")
+            return dt.strftime("%Y-%m-%d")
         except Exception:
             return str(created_at)
 
@@ -212,8 +231,8 @@ class TwitterParser(BaseVideoParser):
             return {}
         return {
             "text": quote_text,
-            "author": self._fxtwitter_author(quote.get('author') or {}),
-            "timestamp": self._parse_twitter_date(quote.get('created_at')),
+            "author": self._fxtwitter_author(quote.get("author") or {}),
+            "timestamp": self._parse_twitter_date(quote.get("created_at")),
             "reply_to": str(quote.get("replying_to") or "").strip(),
         }
 
@@ -222,7 +241,7 @@ class TwitterParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         tweet_id: str,
         max_retries: int = 3,
-        retry_delay: float = 1.0
+        retry_delay: float = 1.0,
     ) -> Dict[str, Any]:
         """使用FxTwitter API获取推特媒体直链（带重试机制）
 
@@ -245,18 +264,22 @@ class TwitterParser(BaseVideoParser):
                     api_url,
                     headers=self.headers,
                     timeout=aiohttp.ClientTimeout(total=30),
-                    proxy=proxy
+                    proxy=proxy,
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-                    return self._parse_fxtwitter_response(data)
+                    return self._parse_fxtwitter_response(data, tweet_id)
             except aiohttp.ClientResponseError as e:
                 if e.status < 500:
                     raise FxTwitterTweetUnavailableError(
                         f"HTTP {e.status} {e.message}"
                     ) from e
                 last_exception = e
-            except (aiohttp.ClientError, asyncio.TimeoutError, aiohttp.ServerTimeoutError) as e:
+            except (
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                aiohttp.ServerTimeoutError,
+            ) as e:
                 last_exception = e
             except FxTwitterTweetUnavailableError:
                 raise
@@ -264,7 +287,7 @@ class TwitterParser(BaseVideoParser):
                 raise FxTwitterTweetUnavailableError(str(e)) from e
 
             if attempt < max_retries:
-                delay = retry_delay * (2 ** attempt)
+                delay = retry_delay * (2**attempt)
                 await asyncio.sleep(delay)
             else:
                 error_msg = str(last_exception) if last_exception else "未知错误"
@@ -320,7 +343,7 @@ class TwitterParser(BaseVideoParser):
             "https://api.twitter.com/1.1/guest/activate.json",
             headers=headers,
             proxy=proxy,
-            timeout=aiohttp.ClientTimeout(total=15)
+            timeout=aiohttp.ClientTimeout(total=15),
         ) as response:
             response.raise_for_status()
             data = await response.json(content_type=None)
@@ -341,9 +364,7 @@ class TwitterParser(BaseVideoParser):
                 yield from TwitterParser._walk_dicts(value)
 
     def _parse_graphql_response(
-        self,
-        data: Dict[str, Any],
-        tweet_id: str
+        self, data: Dict[str, Any], tweet_id: str
     ) -> Dict[str, Any]:
         """从 Guest GraphQL 响应中提取媒体。"""
         tweet = None
@@ -352,10 +373,9 @@ class TwitterParser(BaseVideoParser):
             if not isinstance(legacy, dict):
                 continue
             rest_id = str(candidate.get("rest_id") or legacy.get("id_str") or "")
-            if rest_id == tweet_id or legacy.get("full_text"):
+            if rest_id == tweet_id:
                 tweet = candidate
-                if rest_id == tweet_id:
-                    break
+                break
         if not tweet:
             raise RuntimeError("Twitter GraphQL响应中未找到tweet")
 
@@ -366,8 +386,8 @@ class TwitterParser(BaseVideoParser):
         created_at = legacy.get("created_at")
         if created_at:
             try:
-                dt = datetime.strptime(created_at, '%a %b %d %H:%M:%S %z %Y')
-                timestamp = dt.strftime('%Y-%m-%d')
+                dt = datetime.strptime(created_at, "%a %b %d %H:%M:%S %z %Y")
+                timestamp = dt.strftime("%Y-%m-%d")
             except Exception:
                 timestamp = str(created_at)
 
@@ -377,7 +397,7 @@ class TwitterParser(BaseVideoParser):
 
         images: List[str] = []
         videos: List[Dict[str, Any]] = []
-        media_items = ((legacy.get("extended_entities") or {}).get("media") or [])
+        media_items = (legacy.get("extended_entities") or {}).get("media") or []
         for media in media_items:
             if not isinstance(media, dict):
                 continue
@@ -396,13 +416,9 @@ class TwitterParser(BaseVideoParser):
             "videos": videos,
             "title": f"{author} 的推文" if author else "Twitter 推文",
             "text": desc,
-            "author": self._combine_parenthetical(
-                author,
-                quote.get("author", "")
-            ),
+            "author": self._combine_parenthetical(author, quote.get("author", "")),
             "timestamp": self._combine_parenthetical(
-                timestamp,
-                quote.get("timestamp", "")
+                timestamp, quote.get("timestamp", "")
             ),
         }
 
@@ -411,39 +427,36 @@ class TwitterParser(BaseVideoParser):
         user_core = tweet.get("core") or {}
         user_result = (
             ((user_core.get("user_results") or {}).get("result") or {})
-            if isinstance(user_core, dict) else {}
+            if isinstance(user_core, dict)
+            else {}
         )
         user_legacy = user_result.get("legacy") or {}
         name = user_legacy.get("name") or ""
         screen_name = user_legacy.get("screen_name") or ""
-        return f"{name}(@{screen_name})" if name and screen_name else (name or screen_name)
+        return (
+            f"{name}(@{screen_name})" if name and screen_name else (name or screen_name)
+        )
 
     @staticmethod
     def _graphql_tweet_text(tweet: Dict[str, Any]) -> str:
         """从 GraphQL tweet 节点提取完整文本。"""
         legacy = tweet.get("legacy") or {}
         note_tweet = (
-            ((tweet.get("note_tweet") or {}).get("note_tweet_results") or {})
-            .get("result") or {}
-        )
+            (tweet.get("note_tweet") or {}).get("note_tweet_results") or {}
+        ).get("result") or {}
         if isinstance(note_tweet, dict) and note_tweet.get("text"):
             return str(note_tweet.get("text") or "")
         text = str(legacy.get("full_text") or "")
         return TwitterParser._apply_display_text_range(
-            text,
-            legacy.get("display_text_range")
+            text, legacy.get("display_text_range")
         )
 
     def _extract_graphql_quote(
-        self,
-        data: Dict[str, Any],
-        legacy: Dict[str, Any]
+        self, data: Dict[str, Any], legacy: Dict[str, Any]
     ) -> Dict[str, str]:
         """从 GraphQL 响应中提取引用推文信息。"""
         quote_id = str(
-            legacy.get("quoted_status_id_str") or
-            legacy.get("quoted_status_id") or
-            ""
+            legacy.get("quoted_status_id_str") or legacy.get("quoted_status_id") or ""
         )
         if not quote_id:
             return {}
@@ -452,9 +465,7 @@ class TwitterParser(BaseVideoParser):
             if not isinstance(candidate_legacy, dict):
                 continue
             rest_id = str(
-                candidate.get("rest_id") or
-                candidate_legacy.get("id_str") or
-                ""
+                candidate.get("rest_id") or candidate_legacy.get("id_str") or ""
             )
             if rest_id != quote_id:
                 continue
@@ -505,9 +516,7 @@ class TwitterParser(BaseVideoParser):
         return quote_desc
 
     async def _fetch_graphql_info(
-        self,
-        session: aiohttp.ClientSession,
-        tweet_id: str
+        self, session: aiohttp.ClientSession, tweet_id: str
     ) -> Dict[str, Any]:
         """使用 Twitter Guest GraphQL 回退解析。"""
         bearer = (
@@ -563,16 +572,14 @@ class TwitterParser(BaseVideoParser):
                 "features": json_dumps_compact(features),
             },
             proxy=proxy,
-            timeout=aiohttp.ClientTimeout(total=20)
+            timeout=aiohttp.ClientTimeout(total=20),
         ) as response:
             response.raise_for_status()
             data = await response.json(content_type=None)
         return self._parse_graphql_response(data, tweet_id)
 
     async def _fetch_media_info(
-        self,
-        session: aiohttp.ClientSession,
-        tweet_id: str
+        self, session: aiohttp.ClientSession, tweet_id: str
     ) -> Dict[str, Any]:
         """优先 FxTwitter；仅服务不可达/服务端错误时回退 Guest GraphQL。"""
         try:
@@ -581,11 +588,8 @@ class TwitterParser(BaseVideoParser):
             logger.warning(f"FxTwitter不可用，尝试GraphQL回退: {e}")
             return await self._fetch_graphql_info(session, tweet_id)
 
-
     async def parse(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Optional[Dict[str, Any]]:
         """解析单个Twitter链接
 
@@ -600,42 +604,42 @@ class TwitterParser(BaseVideoParser):
             RuntimeError: 当解析失败时
         """
         async with self.semaphore:
-            tweet_id_match = re.search(r'/status/(\d+)', url)
+            tweet_id_match = re.search(r"/status/(\d+)", url)
             if not tweet_id_match:
                 raise RuntimeError(f"无法解析此URL: {url}")
             tweet_id = tweet_id_match.group(1)
             media_info = await self._fetch_media_info(session, tweet_id)
-            
-            images = media_info.get('images', [])
-            videos = media_info.get('videos', [])
-            text = media_info.get('text', '')
-            title = media_info.get('title', '')
-            author = media_info.get('author', '')
-            timestamp = media_info.get('timestamp', '')
-            
+
+            images = media_info.get("images", [])
+            videos = media_info.get("videos", [])
+            text = media_info.get("text", "")
+            title = media_info.get("title", "")
+            author = media_info.get("author", "")
+            timestamp = media_info.get("timestamp", "")
+
             video_urls = []
             video_cover_urls = []
             image_urls = []
-            
+
             for video_info in videos:
-                video_url = video_info.get('url')
+                video_url = video_info.get("url")
                 if video_url:
                     video_urls.append(video_url)
-                    thumbnail = video_info.get('thumbnail')
+                    thumbnail = video_info.get("thumbnail")
                     video_cover_urls.append([thumbnail] if thumbnail else [])
-            
+
             image_urls = [img for img in images if img]
-            
+
             has_videos = len(video_urls) > 0
             has_images = len(image_urls) > 0
             has_text = bool(str(text or "").strip())
 
             if not has_videos and not has_images and not has_text:
                 raise RuntimeError("推文不包含文本、图片或视频")
-            
+
             image_headers = build_request_headers(is_video=False)
             video_headers = build_request_headers(is_video=True)
-            
+
             metadata_base = {
                 "url": url,
                 "title": title or (f"{author} 的推文" if author else "Twitter 推文"),
@@ -646,30 +650,40 @@ class TwitterParser(BaseVideoParser):
                 "video_headers": video_headers,
                 "use_image_proxy": self.use_image_proxy,
                 "use_video_proxy": self.use_video_proxy,
-                "proxy_url": self.proxy_url if (self.use_image_proxy or self.use_video_proxy) else None,
+                "proxy_url": self.proxy_url
+                if (self.use_image_proxy or self.use_video_proxy)
+                else None,
             }
-            
+
             if has_videos and has_images:
                 result_dict = {
                     **metadata_base,
-                    "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
+                    "video_urls": self._add_range_prefix_to_video_urls(
+                        [[url] for url in video_urls]
+                    ),
                     "video_cover_urls": video_cover_urls,
                     "image_urls": [[url] for url in image_urls],
                     "is_twitter_video": True,
                     "video_force_download": True,
                 }
-                logger.debug(f"[{self.name}] parse: 解析完成(视频+图片) {url}, video_count={len(video_urls)}, image_count={len(image_urls)}")
+                logger.debug(
+                    f"[{self.name}] parse: 解析完成(视频+图片) {url}, video_count={len(video_urls)}, image_count={len(image_urls)}"
+                )
                 return result_dict
             elif has_videos:
                 result_dict = {
                     **metadata_base,
-                    "video_urls": self._add_range_prefix_to_video_urls([[url] for url in video_urls]),
+                    "video_urls": self._add_range_prefix_to_video_urls(
+                        [[url] for url in video_urls]
+                    ),
                     "video_cover_urls": video_cover_urls,
                     "image_urls": [],
                     "is_twitter_video": True,
                     "video_force_download": True,
                 }
-                logger.debug(f"[{self.name}] parse: 解析完成(视频) {url}, video_count={len(video_urls)}")
+                logger.debug(
+                    f"[{self.name}] parse: 解析完成(视频) {url}, video_count={len(video_urls)}"
+                )
                 return result_dict
             else:
                 result_dict = {
@@ -680,7 +694,9 @@ class TwitterParser(BaseVideoParser):
                     "is_twitter_video": False,
                 }
                 if image_urls:
-                    logger.debug(f"[{self.name}] parse: 解析完成(图片) {url}, image_count={len(image_urls)}")
+                    logger.debug(
+                        f"[{self.name}] parse: 解析完成(图片) {url}, image_count={len(image_urls)}"
+                    )
                 else:
                     logger.debug(f"[{self.name}] parse: 解析完成(纯文本) {url}")
                 return result_dict

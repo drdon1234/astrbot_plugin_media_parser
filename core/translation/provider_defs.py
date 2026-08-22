@@ -1,4 +1,5 @@
 """LLM provider labels and defaults for metadata translation."""
+
 from __future__ import annotations
 
 from typing import Dict
@@ -70,9 +71,4 @@ LLM_PROVIDER_DEFAULTS: Dict[str, Dict[str, object]] = {
         "requires_api_key": False,
         "protocol": "ollama",
     },
-}
-
-
-LLM_PROVIDER_LABELS = {
-    value: key for key, value in LLM_PROVIDER_OPTIONS.items()
 }

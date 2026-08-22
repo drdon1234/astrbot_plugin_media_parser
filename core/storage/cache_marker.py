@@ -1,4 +1,5 @@
 """媒体文件缓存目录标记与安全清理工具。"""
+
 import os
 import shutil
 import time
@@ -128,21 +129,22 @@ def cleanup_expired_marked_in(
     root_dir: str,
     ttl_seconds: Optional[int] = None,
     now: Optional[float] = None,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     """清理当前缓存根目录下已过期的插件媒体子目录。
 
     新版本缓存目录会写入持久化过期时间；旧版本遗留目录没有过期文件时，
     使用最近修改时间加 TTL 兜底，并至少保留一小时，避免误删当前下载。
 
     Returns:
-        (清理的子目录数, 清理的文件总数)
+        (清理的子目录数, 清理的文件总数, 清理失败的子目录数)
     """
     if not root_dir or not os.path.isdir(root_dir):
-        return 0, 0
+        return 0, 0, 0
 
     cutoff = time.time() if now is None else float(now)
     cleaned_subdirs = 0
     cleaned_files = 0
+    failed_subdirs = 0
 
     for entry in os.listdir(root_dir):
         subdir = os.path.join(root_dir, entry)
@@ -157,29 +159,33 @@ def cleanup_expired_marked_in(
 
         file_count = sum(len(files) for _, _, files in os.walk(subdir))
         try:
-            shutil.rmtree(subdir, ignore_errors=True)
+            shutil.rmtree(subdir)
+            if os.path.exists(subdir):
+                raise OSError("目录删除后仍然存在")
             cleaned_subdirs += 1
             cleaned_files += file_count
         except Exception as e:
+            failed_subdirs += 1
             logger.warning(f"清理过期缓存子目录失败: {subdir}, 错误: {e}")
 
-    return cleaned_subdirs, cleaned_files
+    return cleaned_subdirs, cleaned_files, failed_subdirs
 
 
-def cleanup_marked_in(root_dir: str) -> Tuple[int, int]:
+def cleanup_marked_in(root_dir: str) -> Tuple[int, int, int]:
     """清理当前媒体文件缓存目录下由本插件标记的媒体子目录。
 
     只删除 root_dir 的直接子目录中包含标记文件的条目，
     不删除 root_dir 本身，也不触碰没有标记的内容。
 
     Returns:
-        (清理的子目录数, 清理的文件总数)
+        (清理的子目录数, 清理的文件总数, 清理失败的子目录数)
     """
     if not root_dir or not os.path.isdir(root_dir):
-        return 0, 0
+        return 0, 0, 0
 
     cleaned_subdirs = 0
     cleaned_files = 0
+    failed_subdirs = 0
 
     for entry in os.listdir(root_dir):
         subdir = os.path.join(root_dir, entry)
@@ -188,10 +194,13 @@ def cleanup_marked_in(root_dir: str) -> Tuple[int, int]:
 
         file_count = sum(len(files) for _, _, files in os.walk(subdir))
         try:
-            shutil.rmtree(subdir, ignore_errors=True)
+            shutil.rmtree(subdir)
+            if os.path.exists(subdir):
+                raise OSError("目录删除后仍然存在")
             cleaned_subdirs += 1
             cleaned_files += file_count
         except Exception as e:
+            failed_subdirs += 1
             logger.warning(f"清理缓存子目录失败: {subdir}, 错误: {e}")
 
-    return cleaned_subdirs, cleaned_files
+    return cleaned_subdirs, cleaned_files, failed_subdirs

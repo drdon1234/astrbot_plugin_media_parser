@@ -1,4 +1,5 @@
 """文件清理工具，负责临时文件与空目录回收。"""
+
 import os
 import shutil
 from typing import List
@@ -18,7 +19,7 @@ def cleanup_file(file_path: str) -> bool:
     """
     if not file_path or not os.path.exists(file_path):
         return True
-    
+
     try:
         if os.path.isfile(file_path):
             os.unlink(file_path)
@@ -45,10 +46,12 @@ def _try_remove_empty_parent(file_path: str) -> None:
         remaining = os.listdir(parent)
         if not remaining:
             os.rmdir(parent)
-        elif remaining and set(remaining).issubset({
-            MARKER_FILE_NAME,
-            EXPIRY_FILE_NAME,
-        }):
+        elif remaining and set(remaining).issubset(
+            {
+                MARKER_FILE_NAME,
+                EXPIRY_FILE_NAME,
+            }
+        ):
             for name in remaining:
                 os.unlink(os.path.join(parent, name))
             os.rmdir(parent)
@@ -80,11 +83,14 @@ def cleanup_directory(dir_path: str, ignore_errors: bool = True) -> bool:
     """
     if not dir_path or not os.path.exists(dir_path):
         return True
-    
+
     try:
         if os.path.isdir(dir_path):
             shutil.rmtree(dir_path, ignore_errors=ignore_errors)
-            return True
+            if not os.path.exists(dir_path):
+                return True
+            logger.warning(f"清理目录后路径仍存在: {dir_path}")
+            return False
         else:
             logger.warning(f"路径不是目录: {dir_path}")
             return False
