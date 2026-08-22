@@ -31,6 +31,8 @@ class Config:
     CACHE_DIR_NAME = "cache"
     RUNTIME_DIR_NAME = "runtime_manager"
     DEFAULT_CACHE_DIR = "/app/sharedFolder/video_parser/cache"
+    DEFAULT_OPENING_CONTENT = "流媒体解析bot为您服务 ٩( 'ω' )و"
+    DEFAULT_ARCHIVE_OPENING_CONTENT = "正在为您打包，请稍候..."
 
     @staticmethod
     def build_cache_dir(prefix: str) -> str:

@@ -1,4 +1,5 @@
 "core.parser.platform.xiaoheihe 模块。"
+
 import base64
 import asyncio
 import gzip
@@ -27,6 +28,7 @@ try:
     from cryptography.hazmat.primitives.ciphers import Cipher
     from cryptography.hazmat.primitives.ciphers.algorithms import AES
     from cryptography.hazmat.primitives.ciphers.modes import CBC, ECB
+
     CRYPTOGRAPHY_AVAILABLE = True
 except Exception as _crypto_import_error:
     TripleDES = None
@@ -53,8 +55,17 @@ class XiaoheiheSign:
 
     CHAR_TABLE = "AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89"
     _OFFSET_MAP = {
-        "a": -1, "b": -2, "c": -3, "d": -4, "e": -5,
-        "f": 0, "g": 1, "h": 2, "i": 3, "j": 4, "k": 5,
+        "a": -1,
+        "b": -2,
+        "c": -3,
+        "d": -4,
+        "e": -5,
+        "f": 0,
+        "g": 1,
+        "h": 2,
+        "i": 3,
+        "j": 4,
+        "k": 5,
     }
 
     def __init__(self, method_key: str = "g"):
@@ -62,9 +73,11 @@ class XiaoheiheSign:
 
     def sign(self, path: str) -> Dict[str, Any]:
         current = int(time.time())
-        nonce = hashlib.md5(
-            (str(current) + str(random.random())).encode()
-        ).hexdigest().upper()
+        nonce = (
+            hashlib.md5((str(current) + str(random.random())).encode())
+            .hexdigest()
+            .upper()
+        )
         return {
             "hkey": self._ov(path, current + self._offset, nonce),
             "_time": current,
@@ -129,10 +142,22 @@ class XiaoheiheSign:
         while len(col) < 4:
             col.append(0)
         return [
-            cls._mul14(col[0]) ^ cls._mul12(col[1]) ^ cls._mul6(col[2]) ^ cls._mul3(col[3]),
-            cls._mul3(col[0]) ^ cls._mul14(col[1]) ^ cls._mul12(col[2]) ^ cls._mul6(col[3]),
-            cls._mul6(col[0]) ^ cls._mul3(col[1]) ^ cls._mul14(col[2]) ^ cls._mul12(col[3]),
-            cls._mul12(col[0]) ^ cls._mul6(col[1]) ^ cls._mul3(col[2]) ^ cls._mul14(col[3]),
+            cls._mul14(col[0])
+            ^ cls._mul12(col[1])
+            ^ cls._mul6(col[2])
+            ^ cls._mul3(col[3]),
+            cls._mul3(col[0])
+            ^ cls._mul14(col[1])
+            ^ cls._mul12(col[2])
+            ^ cls._mul6(col[3]),
+            cls._mul6(col[0])
+            ^ cls._mul3(col[1])
+            ^ cls._mul14(col[2])
+            ^ cls._mul12(col[3]),
+            cls._mul12(col[0])
+            ^ cls._mul6(col[1])
+            ^ cls._mul3(col[2])
+            ^ cls._mul14(col[3]),
             *col[4:],
         ]
 
@@ -151,31 +176,141 @@ class XiaoheiheDevice:
         ),
     }
     DES_RULE = {
-        "appId": {"cipher": "DES", "is_encrypt": 1, "key": "uy7mzc4h", "obfuscated_name": "xx"},
+        "appId": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "uy7mzc4h",
+            "obfuscated_name": "xx",
+        },
         "box": {"is_encrypt": 0, "obfuscated_name": "jf"},
-        "canvas": {"cipher": "DES", "is_encrypt": 1, "key": "snrn887t", "obfuscated_name": "yk"},
-        "clientSize": {"cipher": "DES", "is_encrypt": 1, "key": "cpmjjgsu", "obfuscated_name": "zx"},
-        "organization": {"cipher": "DES", "is_encrypt": 1, "key": "78moqjfc", "obfuscated_name": "dp"},
-        "os": {"cipher": "DES", "is_encrypt": 1, "key": "je6vk6t4", "obfuscated_name": "pj"},
-        "platform": {"cipher": "DES", "is_encrypt": 1, "key": "pakxhcd2", "obfuscated_name": "gm"},
-        "plugins": {"cipher": "DES", "is_encrypt": 1, "key": "v51m3pzl", "obfuscated_name": "kq"},
-        "pmf": {"cipher": "DES", "is_encrypt": 1, "key": "2mdeslu3", "obfuscated_name": "vw"},
+        "canvas": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "snrn887t",
+            "obfuscated_name": "yk",
+        },
+        "clientSize": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "cpmjjgsu",
+            "obfuscated_name": "zx",
+        },
+        "organization": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "78moqjfc",
+            "obfuscated_name": "dp",
+        },
+        "os": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "je6vk6t4",
+            "obfuscated_name": "pj",
+        },
+        "platform": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "pakxhcd2",
+            "obfuscated_name": "gm",
+        },
+        "plugins": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "v51m3pzl",
+            "obfuscated_name": "kq",
+        },
+        "pmf": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "2mdeslu3",
+            "obfuscated_name": "vw",
+        },
         "protocol": {"is_encrypt": 0, "obfuscated_name": "protocol"},
-        "referer": {"cipher": "DES", "is_encrypt": 1, "key": "y7bmrjlc", "obfuscated_name": "ab"},
-        "res": {"cipher": "DES", "is_encrypt": 1, "key": "whxqm2a7", "obfuscated_name": "hf"},
-        "rtype": {"cipher": "DES", "is_encrypt": 1, "key": "x8o2h2bl", "obfuscated_name": "lo"},
-        "sdkver": {"cipher": "DES", "is_encrypt": 1, "key": "9q3dcxp2", "obfuscated_name": "sc"},
-        "status": {"cipher": "DES", "is_encrypt": 1, "key": "2jbrxxw4", "obfuscated_name": "an"},
-        "subVersion": {"cipher": "DES", "is_encrypt": 1, "key": "eo3i2puh", "obfuscated_name": "ns"},
-        "svm": {"cipher": "DES", "is_encrypt": 1, "key": "fzj3kaeh", "obfuscated_name": "qr"},
-        "time": {"cipher": "DES", "is_encrypt": 1, "key": "q2t3odsk", "obfuscated_name": "nb"},
-        "timezone": {"cipher": "DES", "is_encrypt": 1, "key": "1uv05lj5", "obfuscated_name": "as"},
-        "tn": {"cipher": "DES", "is_encrypt": 1, "key": "x9nzj1bp", "obfuscated_name": "py"},
-        "trees": {"cipher": "DES", "is_encrypt": 1, "key": "acfs0xo4", "obfuscated_name": "pi"},
-        "ua": {"cipher": "DES", "is_encrypt": 1, "key": "k92crp1t", "obfuscated_name": "bj"},
-        "url": {"cipher": "DES", "is_encrypt": 1, "key": "y95hjkoo", "obfuscated_name": "cf"},
+        "referer": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "y7bmrjlc",
+            "obfuscated_name": "ab",
+        },
+        "res": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "whxqm2a7",
+            "obfuscated_name": "hf",
+        },
+        "rtype": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "x8o2h2bl",
+            "obfuscated_name": "lo",
+        },
+        "sdkver": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "9q3dcxp2",
+            "obfuscated_name": "sc",
+        },
+        "status": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "2jbrxxw4",
+            "obfuscated_name": "an",
+        },
+        "subVersion": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "eo3i2puh",
+            "obfuscated_name": "ns",
+        },
+        "svm": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "fzj3kaeh",
+            "obfuscated_name": "qr",
+        },
+        "time": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "q2t3odsk",
+            "obfuscated_name": "nb",
+        },
+        "timezone": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "1uv05lj5",
+            "obfuscated_name": "as",
+        },
+        "tn": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "x9nzj1bp",
+            "obfuscated_name": "py",
+        },
+        "trees": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "acfs0xo4",
+            "obfuscated_name": "pi",
+        },
+        "ua": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "k92crp1t",
+            "obfuscated_name": "bj",
+        },
+        "url": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "y95hjkoo",
+            "obfuscated_name": "cf",
+        },
         "version": {"is_encrypt": 0, "obfuscated_name": "version"},
-        "vpw": {"cipher": "DES", "is_encrypt": 1, "key": "r9924ab5", "obfuscated_name": "ca"},
+        "vpw": {
+            "cipher": "DES",
+            "is_encrypt": 1,
+            "key": "r9924ab5",
+            "obfuscated_name": "ca",
+        },
     }
     BROWSER_ENV = {
         "plugins": (
@@ -201,6 +336,18 @@ class XiaoheiheDevice:
                 f"中的 cryptography。原始错误: {CRYPTOGRAPHY_IMPORT_ERROR}"
             )
 
+    @staticmethod
+    def _des_key(value: str) -> bytes:
+        key = value.encode("utf-8")
+        if len(key) == 8:
+            # The upstream rules use single-key DES; represent K1=K2=K3 explicitly.
+            return key * 3
+        if len(key) in {16, 24}:
+            return key
+        raise ValueError(
+            f"小黑盒 DES key 长度必须为 8、16 或 24 字节，实际为 {len(key)}"
+        )
+
     @classmethod
     def _des(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         cls._ensure_crypto()
@@ -212,7 +359,7 @@ class XiaoheiheDevice:
                 continue
             out = value
             if rule["is_encrypt"] == 1:
-                cipher = Cipher(TripleDES(rule["key"].encode("utf-8")), ECB())
+                cipher = Cipher(TripleDES(cls._des_key(rule["key"])), ECB())
                 raw = str(value).encode("utf-8") + b"\x00" * 8
                 out = base64.b64encode(cipher.encryptor().update(raw)).decode("utf-8")
             result[rule["obfuscated_name"]] = out
@@ -258,9 +405,7 @@ class XiaoheiheDevice:
 
     @classmethod
     async def get_token_id(
-        cls,
-        session: aiohttp.ClientSession,
-        proxy: Optional[str] = None
+        cls, session: aiohttp.ClientSession, proxy: Optional[str] = None
     ) -> str:
         cls._ensure_crypto()
         uid = str(uuid.uuid4()).encode("utf-8")
@@ -268,15 +413,19 @@ class XiaoheiheDevice:
         public_key = serialization.load_der_public_key(
             base64.b64decode(cls.SM_CONFIG["publicKey"])
         )
-        ep = base64.b64encode(public_key.encrypt(uid, padding.PKCS1v15())).decode("utf-8")
+        ep = base64.b64encode(public_key.encrypt(uid, padding.PKCS1v15())).decode(
+            "utf-8"
+        )
         current_ms = int(time.time() * 1000)
         browser = dict(cls.BROWSER_ENV)
-        browser.update({
-            "vpw": str(uuid.uuid4()),
-            "svm": current_ms,
-            "trees": str(uuid.uuid4()),
-            "pmf": current_ms,
-        })
+        browser.update(
+            {
+                "vpw": str(uuid.uuid4()),
+                "svm": current_ms,
+                "trees": str(uuid.uuid4()),
+                "pmf": current_ms,
+            }
+        )
         payload = {
             **browser,
             "protocol": 102,
@@ -305,7 +454,7 @@ class XiaoheiheDevice:
                 "os": "web",
             },
             proxy=proxy,
-            timeout=aiohttp.ClientTimeout(total=15)
+            timeout=aiohttp.ClientTimeout(total=15),
         ) as response:
             data = await response.json(content_type=None)
         if data.get("code") != 1100:
@@ -314,13 +463,9 @@ class XiaoheiheDevice:
 
 
 class XiaoheiheParser(BaseVideoParser):
-
     "XiaoheiheParser 类。"
-    def __init__(
-        self,
-        use_video_proxy: bool = False,
-        proxy_url: str = None
-    ):
+
+    def __init__(self, use_video_proxy: bool = False, proxy_url: str = None):
         """初始化解析器并设置并发限制与默认请求头。
 
         Args:
@@ -337,30 +482,30 @@ class XiaoheiheParser(BaseVideoParser):
             "Accept-Language": "zh-CN,zh;q=0.9",
             "Accept-Encoding": "gzip, deflate",
         }
-    
+
     def _add_m3u8_prefix_to_urls(self, urls: List[str]) -> List[str]:
         """为 m3u8 URL 列表添加 m3u8: 前缀
-        
+
         Args:
             urls: URL 列表
-            
+
         Returns:
             添加了 m3u8: 前缀的 URL 列表（仅对 m3u8 URL 添加）
         """
         if not urls:
             return urls
-        
+
         result = []
         for url in urls:
             if url and isinstance(url, str):
                 url_lower = url.lower()
-                if '.m3u8' in url_lower and not url.startswith('m3u8:'):
-                    result.append(f'm3u8:{url}')
+                if ".m3u8" in url_lower and not url.startswith("m3u8:"):
+                    result.append(f"m3u8:{url}")
                 else:
                     result.append(url)
             else:
                 result.append(url)
-        
+
         return result
 
     def can_parse(self, url: str) -> bool:
@@ -395,25 +540,19 @@ class XiaoheiheParser(BaseVideoParser):
         Returns:
             可解析的小黑盒链接列表（已过滤掉无法提取 appid/game_type 的候选）。
         """
-        candidates = set()
-
-        app_pattern = r"https?://api\.xiaoheihe\.cn/game/share_game_detail[^\s<>\"'()]+"
-        candidates.update(re.findall(app_pattern, text, re.IGNORECASE))
-
-        bbs_pattern = r"https?://(?:www\.)?xiaoheihe\.cn/(?:app|v3)/bbs/(?:link|app)/[^\s<>\"'()]+"
-        candidates.update(re.findall(bbs_pattern, text, re.IGNORECASE))
-
-        bbs_api_pattern = r"https?://api\.xiaoheihe\.cn/v3/bbs/app/api/web/share[^\s<>\"'()]+"
-        candidates.update(re.findall(bbs_api_pattern, text, re.IGNORECASE))
-
-        web_pattern = r"https?://(?:www\.)?xiaoheihe\.cn/[^\s<>\"'()]+"
-        candidates.update(re.findall(web_pattern, text, re.IGNORECASE))
-
         result: List[str] = []
-        for u in candidates:
-            appid, game_type = self._extract_appid_game_type(u)
-            if (appid and game_type) or self._extract_bbs_link_id(u):
-                result.append(u)
+        seen = set()
+        candidate_pattern = re.compile(
+            r"https?://(?:(?:api|www)\.)?xiaoheihe\.cn/[^\s<>\"'()]+",
+            re.IGNORECASE,
+        )
+        for match in candidate_pattern.finditer(text or ""):
+            url = match.group(0).rstrip(".,!?)]}>\"'，。！？；：）】》」")
+            key = url.lower()
+            if key in seen or not self.can_parse(url):
+                continue
+            seen.add(key)
+            result.append(url)
 
         if result:
             logger.debug(
@@ -425,25 +564,57 @@ class XiaoheiheParser(BaseVideoParser):
         return result
 
     @staticmethod
-    def _extract_bbs_link_id(url: str) -> Optional[str]:
-        """从小黑盒 BBS 分享链接中提取 link_id。"""
-        if not url:
+    def _parse_http_url(url: str):
+        if not isinstance(url, str) or not url.strip():
             return None
         try:
-            parsed = urlparse(url)
-        except Exception:
+            parsed = urlparse(url.strip())
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return None
+            if parsed.username or parsed.password:
+                return None
+            if parsed.port not in {None, 80, 443}:
+                return None
+        except (TypeError, ValueError):
             return None
-        host = (parsed.netloc or "").lower()
+        return parsed
+
+    @staticmethod
+    def _normalize_bbs_link_id(value: Any) -> Optional[str]:
+        normalized = str(value or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", normalized):
+            return normalized
+        return None
+
+    @classmethod
+    def _extract_bbs_link_id(cls, url: str) -> Optional[str]:
+        """从小黑盒 BBS 分享链接中提取 link_id。"""
+        parsed = cls._parse_http_url(url)
+        if not parsed:
+            return None
+        host = (parsed.hostname or "").lower().strip(".")
         path = parsed.path or ""
         qs = parse_qs(parsed.query or "")
+
+        if host == "api.xiaoheihe.cn":
+            if path.rstrip("/") != "/v3/bbs/app/api/web/share":
+                return None
+        elif host in {"xiaoheihe.cn", "www.xiaoheihe.cn"}:
+            match = re.fullmatch(r"/(?:app|v3)/bbs/link/([^/]+)/?", path, re.IGNORECASE)
+            if match:
+                return cls._normalize_bbs_link_id(match.group(1))
+            if not re.fullmatch(
+                r"/(?:app|v3)/bbs/app(?:/[^/]*)?/?", path, re.IGNORECASE
+            ):
+                return None
+        else:
+            return None
+
         for key in ("link_id", "linkid", "id"):
             value = (qs.get(key) or [None])[0]
-            if value:
-                return str(value)
-        if "xiaoheihe.cn" in host:
-            match = re.search(r"/bbs/link/([^/?#]+)", path, re.I)
-            if match:
-                return match.group(1)
+            normalized = cls._normalize_bbs_link_id(value)
+            if normalized:
+                return normalized
         return None
 
     def _extract_appid_game_type(self, url: str) -> Tuple[Optional[int], Optional[str]]:
@@ -457,32 +628,34 @@ class XiaoheiheParser(BaseVideoParser):
             - appid: 成功时为 int，否则为 None
             - game_type: 成功时为字符串（例如 pc），否则为 None
         """
-        if not url:
-            return None, None
-        try:
-            u = urlparse(url)
-        except Exception:
+        u = self._parse_http_url(url)
+        if not u:
             return None, None
 
-        host = (u.netloc or "").lower()
+        host = (u.hostname or "").lower().strip(".")
         path = u.path or ""
 
-        if "api.xiaoheihe.cn" in host and "/game/share_game_detail" in path:
+        if host == "api.xiaoheihe.cn" and path.rstrip("/") == "/game/share_game_detail":
             qs = parse_qs(u.query or "")
             raw_appid = (qs.get("appid") or [None])[0]
             raw_game_type = (qs.get("game_type") or ["pc"])[0] or "pc"
-            try:
-                return int(raw_appid), raw_game_type
-            except Exception:
-                return None, raw_game_type
+            if not re.fullmatch(r"\d{1,12}", str(raw_appid or "")):
+                return None, None
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(raw_game_type)):
+                return None, None
+            appid = int(raw_appid)
+            return (appid, str(raw_game_type)) if appid > 0 else (None, None)
 
-        if "xiaoheihe.cn" in host:
-            m = re.search(r"/app/topic/game/(?P<gt>[^/]+)/(?P<appid>\d+)", path, re.I)
+        if host in {"xiaoheihe.cn", "www.xiaoheihe.cn"}:
+            m = re.fullmatch(
+                r"/app/topic/game/(?P<gt>[A-Za-z0-9_-]{1,32})/"
+                r"(?P<appid>\d{1,12})/?",
+                path,
+                re.IGNORECASE,
+            )
             if m:
-                try:
-                    return int(m.group("appid")), m.group("gt")
-                except Exception:
-                    return None, m.group("gt")
+                appid = int(m.group("appid"))
+                return (appid, m.group("gt")) if appid > 0 else (None, None)
 
         return None, None
 
@@ -589,7 +762,16 @@ class XiaoheiheParser(BaseVideoParser):
         if data.get("status") != "ok":
             return None
         result = data.get("result")
-        return result if isinstance(result, dict) else None
+        if not isinstance(result, dict):
+            return None
+        returned_ids = {
+            str(result.get(key)).strip()
+            for key in ("steam_appid", "appid")
+            if result.get(key) not in (None, "")
+        }
+        if returned_ids and str(steam_appid) not in returned_ids:
+            raise RuntimeError("小黑盒游戏简介接口返回了其他游戏的数据")
+        return result
 
     @staticmethod
     def _format_cn_ymd_to_dotted(text: str) -> str:
@@ -688,7 +870,8 @@ class XiaoheiheParser(BaseVideoParser):
                 if (
                     len(v) == 2
                     and isinstance(v[0], str)
-                    and v[0] in {
+                    and v[0]
+                    in {
                         "ShallowReactive",
                         "Reactive",
                         "Ref",
@@ -733,10 +916,19 @@ class XiaoheiheParser(BaseVideoParser):
         best: Optional[Dict[str, Any]] = None
         best_score = -1
         stack = [root]
+        expected_appid = str(appid)
+
+        def matches_appid(value: Any) -> bool:
+            if isinstance(value, bool) or value in (None, ""):
+                return False
+            return str(value).strip() == expected_appid
+
         while stack:
             cur = stack.pop()
             if isinstance(cur, dict):
-                if cur.get("appid") == appid or cur.get("steam_appid") == appid:
+                if matches_appid(cur.get("appid")) or matches_appid(
+                    cur.get("steam_appid")
+                ):
                     score = 0
                     for k in (
                         "about_the_game",
@@ -751,7 +943,7 @@ class XiaoheiheParser(BaseVideoParser):
                             score += 3
                     if "comment_stats" in cur:
                         score += 2
-                    if cur.get("steam_appid") == appid:
+                    if matches_appid(cur.get("steam_appid")):
                         score += 2
                     if score > best_score:
                         best = cur
@@ -861,10 +1053,16 @@ class XiaoheiheParser(BaseVideoParser):
         group1 = ""
         group2_tags: List[str] = []
 
-        m = re.search(r'<div class="row-2">.*?<div class="tags">(.*?)</div></div>', html, re.S | re.I)
+        m = re.search(
+            r'<div class="row-2">.*?<div class="tags">(.*?)</div></div>',
+            html,
+            re.S | re.I,
+        )
         tags_html = m.group(1) if m else ""
         if tags_html:
-            m2 = re.search(r'<div class="tag common"[^>]*>(.*?)</div>', tags_html, re.S | re.I)
+            m2 = re.search(
+                r'<div class="tag common"[^>]*>(.*?)</div>', tags_html, re.S | re.I
+            )
             if m2:
                 spans = re.findall(r"<span[^>]*>(.*?)</span>", m2.group(1), re.S | re.I)
                 toks = [self._strip_tags(x) for x in spans]
@@ -873,7 +1071,9 @@ class XiaoheiheParser(BaseVideoParser):
                 if toks:
                     group1 = " ".join(toks)
 
-            raw_tags = re.findall(r'<p class="tag"[^>]*>(.*?)</p>', tags_html, re.S | re.I)
+            raw_tags = re.findall(
+                r'<p class="tag"[^>]*>(.*?)</p>', tags_html, re.S | re.I
+            )
             group2_tags = [self._strip_tags(t) for t in raw_tags]
             group2_tags = [t for t in group2_tags if t]
 
@@ -885,10 +1085,7 @@ class XiaoheiheParser(BaseVideoParser):
         return " ".join(parts).strip()
 
     async def _fetch_signed_api(
-        self,
-        session: aiohttp.ClientSession,
-        path: str,
-        params: Dict[str, Any]
+        self, session: aiohttp.ClientSession, path: str, params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """请求小黑盒签名 API，并对 token/captcha 状态做有限重试。"""
         base_params = {
@@ -916,7 +1113,7 @@ class XiaoheiheParser(BaseVideoParser):
                     cookies={"x_xhh_tokenid": token},
                     headers={**self._default_headers, "Accept": "application/json"},
                     proxy=proxy,
-                    timeout=aiohttp.ClientTimeout(total=20)
+                    timeout=aiohttp.ClientTimeout(total=20),
                 ) as response:
                     response.raise_for_status()
                     data = await response.json(content_type=None)
@@ -926,6 +1123,9 @@ class XiaoheiheParser(BaseVideoParser):
                 last_error = e
                 continue
 
+            if not isinstance(data, dict):
+                last_error = RuntimeError("小黑盒API返回的 JSON 不是对象")
+                continue
             status = data.get("status")
             if status == "ok":
                 result = data.get("result")
@@ -937,8 +1137,7 @@ class XiaoheiheParser(BaseVideoParser):
         raise RuntimeError(f"小黑盒API请求失败: {last_error}")
 
     def _extract_bbs_text_and_media(
-        self,
-        link: Dict[str, Any]
+        self, link: Dict[str, Any]
     ) -> Tuple[str, List[List[str]], List[List[str]]]:
         """解析 BBS link 的正文、视频和图片。"""
         text = str(link.get("text") or "")
@@ -975,7 +1174,9 @@ class XiaoheiheParser(BaseVideoParser):
                     media_url = str(item.get("url") or item.get("video_url") or "")
                     if not media_url:
                         continue
-                    if ".m3u8" in media_url.lower() and not media_url.startswith("m3u8:"):
+                    if ".m3u8" in media_url.lower() and not media_url.startswith(
+                        "m3u8:"
+                    ):
                         media_url = f"m3u8:{media_url}"
                     if item_type == "gif" and ".gif" in media_url.lower():
                         image_urls.append([media_url])
@@ -986,10 +1187,7 @@ class XiaoheiheParser(BaseVideoParser):
         return desc, video_urls, image_urls
 
     async def _parse_bbs_link(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        link_id: str
+        self, session: aiohttp.ClientSession, url: str, link_id: str
     ) -> Dict[str, Any]:
         """解析小黑盒 BBS/link 分享。"""
         data = await self._fetch_signed_api(
@@ -998,11 +1196,33 @@ class XiaoheiheParser(BaseVideoParser):
             {
                 "link_id": str(link_id),
                 "owner_only": "1",
-            }
+            },
         )
         link = data.get("link") or {}
         if not isinstance(link, dict):
             raise RuntimeError("小黑盒BBS响应缺少link字段")
+        returned_ids = {
+            normalized
+            for key in ("link_id", "linkid", "id")
+            if (normalized := self._normalize_bbs_link_id(link.get(key)))
+        }
+        canonical_share_id = self._extract_bbs_link_id(
+            str(link.get("share_url") or "")
+        )
+        numeric_alias_mapping = bool(returned_ids) and all(
+            value.isdigit() for value in returned_ids
+        )
+        if returned_ids and str(link_id) not in returned_ids and (
+            str(link_id).isdigit()
+            or (
+                canonical_share_id is not None
+                and canonical_share_id != str(link_id)
+            )
+            or (
+                canonical_share_id is None and not numeric_alias_mapping
+            )
+        ):
+            raise RuntimeError("小黑盒BBS接口返回了其他帖子的数据")
         title = str(link.get("title") or "小黑盒帖子")
         author = ""
         user = link.get("user") or link.get("author") or {}
@@ -1036,9 +1256,7 @@ class XiaoheiheParser(BaseVideoParser):
         return result
 
     async def parse(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Optional[Dict[str, Any]]:
         """解析小黑盒链接并返回统一结构的结果字典。
 
@@ -1074,20 +1292,23 @@ class XiaoheiheParser(BaseVideoParser):
 
             html = await self._fetch_html(web_url, session)
 
-            videos = self._unique_keep_order(re.findall(
-                r"https?://[^\"'\s<>]+\.m3u8(?:\?[^\"'\s<>]*)?",
-                html, re.I
-            ))
+            videos = self._unique_keep_order(
+                re.findall(r"https?://[^\"'\s<>]+\.m3u8(?:\?[^\"'\s<>]*)?", html, re.I)
+            )
             all_images = re.findall(
                 r"https?://[^\"'\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^\"'\s<>]*)?",
-                html, re.I
+                html,
+                re.I,
             )
             images: List[str] = []
             for img in self._unique_keep_order(all_images):
                 img_lower = img.lower()
                 if "/thumbnail/" in img_lower:
                     continue
-                if any(kw in img_lower for kw in ["gameimg", "steam_item_assets", "screenshot", "game"]):
+                if any(
+                    kw in img_lower
+                    for kw in ["gameimg", "steam_item_assets", "screenshot", "game"]
+                ):
                     images.append(img)
 
             types = self._parse_types_from_html(html)
@@ -1101,14 +1322,24 @@ class XiaoheiheParser(BaseVideoParser):
                 raise RuntimeError("未找到游戏详情数据（Nuxt 解析失败）")
 
             name = game.get("name") if isinstance(game.get("name"), str) else ""
-            name_en = game.get("name_en") if isinstance(game.get("name_en"), str) else ""
+            name_en = (
+                game.get("name_en") if isinstance(game.get("name_en"), str) else ""
+            )
             title = f"{name}（{name_en}）" if (name and name_en) else (name or name_en)
             if not title:
                 raise RuntimeError("未解析到游戏标题")
 
-            score = str(game.get("score")).strip() if isinstance(game.get("score"), str) else ""
+            score = (
+                str(game.get("score")).strip()
+                if isinstance(game.get("score"), str)
+                else ""
+            )
             score_count = ""
-            comment_stats = game.get("comment_stats") if isinstance(game.get("comment_stats"), dict) else {}
+            comment_stats = (
+                game.get("comment_stats")
+                if isinstance(game.get("comment_stats"), dict)
+                else {}
+            )
             score_comment = comment_stats.get("score_comment")
             if isinstance(score_comment, int):
                 score_count = self._format_people_count(score_comment)
@@ -1129,7 +1360,9 @@ class XiaoheiheParser(BaseVideoParser):
                 raise RuntimeError("未获取到简介（game_introduction 接口失败）")
 
             intro = self._format_intro_text(intro_api.get("about_the_game"))
-            release_date = self._format_cn_ymd_to_dotted(str(intro_api.get("release_date") or "").strip())
+            release_date = self._format_cn_ymd_to_dotted(
+                str(intro_api.get("release_date") or "").strip()
+            )
             developers = intro_api.get("developers")
             publishers = intro_api.get("publishers")
             developer = ""
@@ -1137,13 +1370,21 @@ class XiaoheiheParser(BaseVideoParser):
             if isinstance(developers, list):
                 vals = []
                 for d in developers:
-                    if isinstance(d, dict) and isinstance(d.get("value"), str) and d.get("value"):
+                    if (
+                        isinstance(d, dict)
+                        and isinstance(d.get("value"), str)
+                        and d.get("value")
+                    ):
                         vals.append(d.get("value"))
                 developer = ",".join(vals)
             if isinstance(publishers, list):
                 vals = []
                 for p in publishers:
-                    if isinstance(p, dict) and isinstance(p.get("value"), str) and p.get("value"):
+                    if (
+                        isinstance(p, dict)
+                        and isinstance(p.get("value"), str)
+                        and p.get("value")
+                    ):
                         vals.append(p.get("value"))
                 publisher = ",".join(vals)
 
@@ -1155,7 +1396,9 @@ class XiaoheiheParser(BaseVideoParser):
                         if isinstance(it, dict) and isinstance(it.get("desc"), str):
                             stats_map[it["desc"]] = it
 
-            def stat_line(desc_key: str, out_label: str, include_rank: bool = False) -> str:
+            def stat_line(
+                desc_key: str, out_label: str, include_rank: bool = False
+            ) -> str:
                 """按指标键生成单行展示文本。"""
                 it = stats_map.get(desc_key)
                 if not it:
@@ -1175,9 +1418,13 @@ class XiaoheiheParser(BaseVideoParser):
             good_rate_line = stat_line("全语言好评率", "全语言好评率")
             avg_time_line = stat_line("平均游戏时间", "平均游戏时间", include_rank=True)
             online_now_line = stat_line("当前在线", "当前在线")
-            yesterday_peak_line = stat_line("昨日峰值在线", "昨日峰值在线", include_rank=True)
+            yesterday_peak_line = stat_line(
+                "昨日峰值在线", "昨日峰值在线", include_rank=True
+            )
             sale_rank_line = stat_line("全球销量排行", "全球销量排行")
-            month_avg_line = stat_line("本月平均在线", "本月平均在线", include_rank=True)
+            month_avg_line = stat_line(
+                "本月平均在线", "本月平均在线", include_rank=True
+            )
 
             price_line = ""
             current_price_line = ""
@@ -1189,9 +1436,7 @@ class XiaoheiheParser(BaseVideoParser):
                     price_line = f"价格：¥ {self._normalize_value_text(initial).replace('¥ ', '').replace('¥', '').strip()}"
                 lp = p.get("lowest_price")
                 if lp:
-                    lowest_price_line = (
-                        f"史低价格：¥ {self._normalize_value_text(lp).replace('¥ ', '').replace('¥', '').strip()}"
-                    )
+                    lowest_price_line = f"史低价格：¥ {self._normalize_value_text(lp).replace('¥ ', '').replace('¥', '').strip()}"
             if isinstance(game.get("heybox_price"), dict):
                 hp = game["heybox_price"]
                 cost_coin = hp.get("cost_coin")
@@ -1213,7 +1458,12 @@ class XiaoheiheParser(BaseVideoParser):
                     if isinstance(it, dict):
                         desc = self._clean_award_text(it.get("desc"))
                         detail = self._clean_award_text(it.get("detail_name"))
-                        if isinstance(desc, str) and isinstance(detail, str) and desc and detail:
+                        if (
+                            isinstance(desc, str)
+                            and isinstance(detail, str)
+                            and desc
+                            and detail
+                        ):
                             awards.append(f"{desc}：{detail}")
             awards = self._unique_keep_order(awards)
 
@@ -1247,7 +1497,9 @@ class XiaoheiheParser(BaseVideoParser):
 
             if sale_rank_line:
                 if month_avg_line:
-                    desc_lines.append(f"{sale_rank_line}（注意：部分游戏在这里是：{month_avg_line}）")
+                    desc_lines.append(
+                        f"{sale_rank_line}（注意：部分游戏在这里是：{month_avg_line}）"
+                    )
                 else:
                     desc_lines.append(sale_rank_line)
             elif month_avg_line:

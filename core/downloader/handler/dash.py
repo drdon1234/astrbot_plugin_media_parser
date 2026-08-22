@@ -1,4 +1,5 @@
 """DASH 下载处理器，负责音视频流下载与合并。"""
+
 import asyncio
 import os
 from typing import Dict, Any, Optional
@@ -8,6 +9,8 @@ import aiohttp
 from ...logger import logger
 from ...constants import Config
 from ...storage import cleanup_file, stamp_subdir
+from ..budget import ByteBudget, resolve_max_bytes
+from ..fileio import gather_cancel_on_error, run_blocking
 from .base import download_media_from_url
 
 
@@ -16,7 +19,9 @@ async def _download_stream_normal(
     media_url: str,
     output_path: str,
     headers: dict = None,
-    proxy: str = None
+    proxy: str = None,
+    max_bytes: Optional[int] = None,
+    budget: Optional[ByteBudget] = None,
 ) -> Optional[Dict[str, Any]]:
     """普通流式下载。"""
 
@@ -30,14 +35,16 @@ async def _download_stream_normal(
         file_path_generator=file_path_generator,
         is_video=True,
         headers=headers,
-        proxy=proxy
+        proxy=proxy,
+        max_bytes=max_bytes,
+        budget=budget,
     )
     if not file_path:
         return {
             "file_path": None,
             "size_mb": None,
             "status_code": status_code,
-            "error": error or "下载失败"
+            "error": error or "下载失败",
         }
 
     if size_mb is None:
@@ -49,7 +56,7 @@ async def _download_stream_normal(
     return {
         "file_path": os.path.normpath(file_path),
         "size_mb": size_mb,
-        "status_code": status_code
+        "status_code": status_code,
     }
 
 
@@ -58,7 +65,9 @@ async def _download_stream(
     media_url: str,
     output_path: str,
     headers: dict = None,
-    proxy: str = None
+    proxy: str = None,
+    max_bytes: Optional[int] = None,
+    budget: Optional[ByteBudget] = None,
 ) -> Optional[Dict[str, Any]]:
     """根据 range: 前缀决定是否走 Range 下载。"""
     actual_url = media_url
@@ -70,58 +79,77 @@ async def _download_stream(
     if use_range:
         try:
             from .base import range_download_file
+
             range_result = await range_download_file(
                 session=session,
                 url=actual_url,
                 output_path=output_path,
                 headers=headers,
-                proxy=proxy
+                proxy=proxy,
+                max_bytes=max_bytes,
+                budget=budget,
             )
             if range_result:
                 return range_result
             logger.debug(f"DASH子流Range下载失败，降级普通下载: {actual_url}")
         except Exception as e:
-            logger.warning(f"DASH子流Range下载异常，降级普通下载: {actual_url}, 错误: {e}")
+            logger.warning(
+                f"DASH子流Range下载异常，降级普通下载: {actual_url}, 错误: {e}"
+            )
 
     return await _download_stream_normal(
         session=session,
         media_url=actual_url,
         output_path=output_path,
         headers=headers,
-        proxy=proxy
+        proxy=proxy,
+        max_bytes=max_bytes,
+        budget=budget,
     )
 
 
 async def _merge_dash_streams(
     video_path: str,
     audio_path: str,
-    output_path: str
+    output_path: str,
+    max_bytes: Optional[int] = None,
 ) -> bool:
     """使用 ffmpeg 异步合并 DASH 音视频。"""
     process = None
     try:
+        temp_output = f"{output_path}.part.mp4"
         process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
-            "-c", "copy", "-map", "0:v:0", "-map", "1:a:0",
-            output_path,
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            audio_path,
+            "-c",
+            "copy",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            temp_output,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=Config.VIDEO_DOWNLOAD_TIMEOUT
+            process.communicate(), timeout=Config.VIDEO_DOWNLOAD_TIMEOUT
         )
         if process.returncode == 0:
+            output_size = await run_blocking(os.path.getsize, temp_output)
+            if output_size > resolve_max_bytes(max_bytes, is_video=True):
+                cleanup_file(temp_output)
+                logger.warning("DASH合并输出超过下载硬限制")
+                return False
+            os.replace(temp_output, output_path)
             return True
 
-        error_output = (
-            stderr.decode("utf-8", errors="ignore").strip()
-            if stderr else
-            ""
-        )
+        error_output = stderr.decode("utf-8", errors="ignore").strip() if stderr else ""
         logger.warning(
-            f"DASH ffmpeg 合并失败(退出码 {process.returncode}): "
-            f"{error_output[:200]}"
+            f"DASH ffmpeg 合并失败(退出码 {process.returncode}): {error_output[:200]}"
         )
         return False
     except asyncio.TimeoutError:
@@ -137,6 +165,8 @@ async def _merge_dash_streams(
     except Exception as e:
         logger.warning(f"DASH ffmpeg 合并异常: {e}")
         return False
+    finally:
+        cleanup_file(f"{output_path}.part.mp4")
 
 
 async def _terminate_ffmpeg_process(process, label: str) -> None:
@@ -180,7 +210,8 @@ async def download_dash_to_cache(
     media_id: str,
     index: int = 0,
     headers: dict = None,
-    proxy: str = None
+    proxy: str = None,
+    max_bytes: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """下载 DASH 视频并合并到缓存目录。"""
     if not cache_dir or not video_url:
@@ -198,20 +229,13 @@ async def download_dash_to_cache(
         os.path.join(cache_subdir, f"video_{index}_video.m4s")
     )
     audio_temp_path = os.path.normpath(
-        os.path.join(
-            cache_subdir,
-            f"video_{index}_audio.m4s"
-        )
+        os.path.join(cache_subdir, f"video_{index}_audio.m4s")
     )
-    output_path = os.path.normpath(
-        os.path.join(
-            cache_subdir,
-            f"video_{index}.mp4"
-        )
-    )
+    output_path = os.path.normpath(os.path.join(cache_subdir, f"video_{index}.mp4"))
 
     video_result = None
     audio_result = None
+    budget = ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
     try:
         if audio_url:
             video_task = _download_stream(
@@ -219,23 +243,31 @@ async def download_dash_to_cache(
                 media_url=video_url,
                 output_path=video_temp_path,
                 headers=headers,
-                proxy=proxy
+                proxy=proxy,
+                max_bytes=max_bytes,
+                budget=budget,
             )
             audio_task = _download_stream(
                 session=session,
                 media_url=audio_url,
                 output_path=audio_temp_path,
                 headers=headers,
-                proxy=proxy
+                proxy=proxy,
+                max_bytes=max_bytes,
+                budget=budget,
             )
-            video_result, audio_result = await asyncio.gather(video_task, audio_task)
+            video_result, audio_result = await gather_cancel_on_error(
+                video_task, audio_task
+            )
         else:
             video_result = await _download_stream(
                 session=session,
                 media_url=video_url,
                 output_path=video_temp_path,
                 headers=headers,
-                proxy=proxy
+                proxy=proxy,
+                max_bytes=max_bytes,
+                budget=budget,
             )
 
         if not video_result or not video_result.get("file_path"):
@@ -244,28 +276,19 @@ async def download_dash_to_cache(
             return {
                 "file_path": None,
                 "size_mb": None,
-                "status_code": (
-                    video_result or {}
-                ).get("status_code"),
-                "error": (video_result or {}).get("error") or "DASH视频流下载失败"
+                "status_code": (video_result or {}).get("status_code"),
+                "error": (video_result or {}).get("error") or "DASH视频流下载失败",
             }
 
-        if audio_url and (
-            not audio_result or not audio_result.get("file_path")
-        ):
+        if audio_url and (not audio_result or not audio_result.get("file_path")):
             cleanup_file(video_result.get("file_path"))
             cleanup_file(video_temp_path)
             cleanup_file(audio_temp_path)
             return {
                 "file_path": None,
                 "size_mb": None,
-                "status_code": (
-                    audio_result or {}
-                ).get("status_code"),
-                "error": (
-                    (audio_result or {}).get("error") or
-                    "DASH音频流下载失败"
-                )
+                "status_code": (audio_result or {}).get("status_code"),
+                "error": ((audio_result or {}).get("error") or "DASH音频流下载失败"),
             }
 
         video_file_path = video_result["file_path"]
@@ -275,7 +298,8 @@ async def download_dash_to_cache(
             merge_ok = await _merge_dash_streams(
                 video_path=video_file_path,
                 audio_path=audio_file_path,
-                output_path=output_path
+                output_path=output_path,
+                max_bytes=max_bytes,
             )
             if merge_ok and os.path.exists(output_path):
                 cleanup_file(video_file_path)
@@ -290,10 +314,10 @@ async def download_dash_to_cache(
                     "file_path": None,
                     "size_mb": None,
                     "status_code": (
-                        video_result.get("status_code") or
-                        audio_result.get("status_code")
+                        video_result.get("status_code")
+                        or audio_result.get("status_code")
                     ),
-                    "error": "DASH音视频合并失败"
+                    "error": "DASH音视频合并失败",
                 }
         else:
             if not _replace_as_output(video_file_path, output_path):
@@ -301,7 +325,7 @@ async def download_dash_to_cache(
                     "file_path": None,
                     "size_mb": None,
                     "status_code": video_result.get("status_code"),
-                    "error": "DASH视频输出移动失败"
+                    "error": "DASH视频输出移动失败",
                 }
             final_path = output_path
 
@@ -310,7 +334,7 @@ async def download_dash_to_cache(
                 "file_path": None,
                 "size_mb": None,
                 "status_code": video_result.get("status_code"),
-                "error": "DASH视频输出文件不存在"
+                "error": "DASH视频输出文件不存在",
             }
 
         try:
@@ -325,12 +349,16 @@ async def download_dash_to_cache(
         return {
             "file_path": os.path.normpath(final_path),
             "size_mb": size_mb,
-            "status_code": status_code
+            "status_code": status_code,
         }
+    except asyncio.CancelledError:
+        cleanup_file(video_temp_path)
+        cleanup_file(audio_temp_path)
+        cleanup_file(output_path)
+        raise
     except Exception as e:
         logger.warning(f"DASH 下载失败: video={video_url}, 错误: {e}")
         cleanup_file(video_temp_path)
         cleanup_file(audio_temp_path)
         cleanup_file(output_path)
         return None
-

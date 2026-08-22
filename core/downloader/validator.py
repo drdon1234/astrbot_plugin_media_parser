@@ -1,4 +1,5 @@
 """下载前校验逻辑，确保元数据与链接可用。"""
+
 import asyncio
 from typing import Optional, Tuple
 
@@ -10,9 +11,15 @@ from .utils import (
     validate_content_type,
     check_json_error_response,
     extract_size_from_headers,
-    strip_media_prefixes
+    strip_media_prefixes,
 )
 from ..constants import Config
+from .image_format import (
+    detect_supported_image_format,
+    image_content_type_requires_probe,
+    image_format_from_content_type,
+    is_supported_image_content_type,
+)
 
 _CONTENT_PREVIEW_CHECK_SIZE = 512
 _GENERIC_VIDEO_CONTENT_TYPES = (
@@ -25,7 +32,7 @@ _GENERIC_VIDEO_CONTENT_TYPES = (
 def _with_range_header(headers: dict = None, range_value: str = "bytes=0-511") -> dict:
     """复制请求头并补充 Range，避免验证阶段拉取完整媒体。"""
     request_headers = (headers or {}).copy()
-    request_headers.setdefault("Range", range_value)
+    request_headers["Range"] = range_value
     return request_headers
 
 
@@ -45,22 +52,19 @@ def _has_known_video_signature(content_preview: bytes) -> bool:
         return False
     head = content_preview[:64]
     return (
-        b"ftyp" in head[:16] or
-        head.startswith(b"\x1a\x45\xdf\xa3") or
-        head.startswith(b"FLV") or
-        (head.startswith(b"RIFF") and b"AVI" in head[:16]) or
-        (
-            len(content_preview) > 188 and
-            content_preview[0] == 0x47 and
-            content_preview[188] == 0x47
+        b"ftyp" in head[:16]
+        or head.startswith(b"\x1a\x45\xdf\xa3")
+        or head.startswith(b"FLV")
+        or (head.startswith(b"RIFF") and b"AVI" in head[:16])
+        or (
+            len(content_preview) > 188
+            and content_preview[0] == 0x47
+            and content_preview[188] == 0x47
         )
     )
 
 
-def _is_obvious_non_media_preview(
-    content_preview: bytes,
-    media_url: str
-) -> bool:
+def _is_obvious_non_media_preview(content_preview: bytes, media_url: str) -> bool:
     """识别泛型响应里明显不是媒体的 HTML/JSON/纯文本内容。"""
     if not content_preview:
         return True
@@ -81,10 +85,7 @@ def _is_obvious_non_media_preview(
         logger.warning(f"媒体URL包含HTML响应（非媒体内容）: {media_url}")
         return True
 
-    text_like = all(
-        byte in b"\r\n\t" or 32 <= byte <= 126
-        for byte in stripped
-    )
+    text_like = all(byte in b"\r\n\t" or 32 <= byte <= 126 for byte in stripped)
     if text_like and any(
         marker in lowered
         for marker in (
@@ -108,7 +109,7 @@ async def validate_media_response(
     response: aiohttp.ClientResponse,
     media_url: str,
     is_video: bool = False,
-    allow_read_content: bool = True
+    allow_read_content: bool = True,
 ) -> Tuple[bool, Optional[bytes]]:
     """验证响应是否为有效的媒体响应
 
@@ -127,12 +128,39 @@ async def validate_media_response(
             logger.warning(f"媒体URL访问被拒绝(403 Forbidden): {media_url}")
         return False, None
 
-    content_type = response.headers.get('Content-Type', '').lower()
+    content_type = response.headers.get("Content-Type", "").lower()
 
-    if 'application/json' in content_type or 'text/' in content_type:
+    if "application/json" in content_type or "text/" in content_type:
         logger.warning(f"媒体URL包含错误响应（非媒体Content-Type）: {media_url}")
         return False, None
-    
+
+    if not is_video:
+        if not is_supported_image_content_type(content_type):
+            logger.warning(
+                f"图片URL返回了不支持的Content-Type: {media_url}, "
+                f"content_type={content_type or '<empty>'}"
+            )
+            return False, None
+
+        if not allow_read_content:
+            if image_content_type_requires_probe(content_type):
+                raise aiohttp.ClientError("图片Content-Type需要GET请求验证")
+            return True, None
+
+        content_preview = await response.content.read(_CONTENT_PREVIEW_CHECK_SIZE)
+        actual_format = detect_supported_image_format(content_preview)
+        if not actual_format:
+            logger.warning(f"图片URL内容不是受支持的栅格格式: {media_url}")
+            return False, None
+
+        declared_format = image_format_from_content_type(content_type)
+        if declared_format and declared_format != actual_format:
+            logger.warning(
+                f"图片Content-Type与文件签名不一致: {media_url}, "
+                f"declared={declared_format}, actual={actual_format}"
+            )
+        return True, content_preview
+
     if not content_type:
         if not allow_read_content:
             raise aiohttp.ClientError("Content-Type为空，需要GET请求验证")
@@ -141,15 +169,14 @@ async def validate_media_response(
         if not content_preview:
             return False, None
 
-        if (
-            check_json_error_response(content_preview, media_url) or
-            _is_obvious_non_media_preview(content_preview, media_url)
-        ):
+        if check_json_error_response(
+            content_preview, media_url
+        ) or _is_obvious_non_media_preview(content_preview, media_url):
             return False, None
 
         return True, content_preview
 
-    if not validate_content_type(content_type, is_video):
+    if not validate_content_type(content_type, is_video=True):
         return False, None
 
     if is_video and _is_generic_video_content_type(content_type):
@@ -172,7 +199,7 @@ async def get_video_size(
     session: aiohttp.ClientSession,
     video_url: str,
     headers: dict = None,
-    proxy: str = None
+    proxy: str = None,
 ) -> Tuple[Optional[float], Optional[int]]:
     """获取视频文件大小
 
@@ -194,13 +221,14 @@ async def get_video_size(
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
 
         try:
-            async with session.head(
+            response = await session.head(
                 video_url,
                 headers=request_headers,
                 timeout=timeout,
                 proxy=proxy,
-                allow_redirects=True
-            ) as response:
+                allow_redirects=True,
+            )
+            async with response:
                 if response.status >= 400:
                     raise aiohttp.ClientError(
                         f"HEAD不支持媒体探测: HTTP {response.status}"
@@ -217,13 +245,14 @@ async def get_video_size(
                 return size, response.status
         except (aiohttp.ClientError, asyncio.TimeoutError):
             get_headers = _with_range_header(request_headers)
-            async with session.get(
+            response = await session.get(
                 video_url,
                 headers=get_headers,
                 timeout=timeout,
                 proxy=proxy,
-                allow_redirects=True
-            ) as response:
+                allow_redirects=True,
+            )
+            async with response:
                 if response.status == 403:
                     logger.warning(f"视频URL访问被拒绝(403 Forbidden): {video_url}")
                     return None, 403
@@ -239,7 +268,7 @@ async def get_video_size(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        if '403' in str(e) or 'Forbidden' in str(e):
+        if "403" in str(e) or "Forbidden" in str(e):
             return None, 403
         return None, None
 
@@ -249,7 +278,7 @@ async def validate_media_url(
     media_url: str,
     headers: dict = None,
     proxy: str = None,
-    is_video: bool = True
+    is_video: bool = True,
 ) -> Tuple[bool, Optional[int]]:
     """验证媒体URL是否有效
 
@@ -272,13 +301,14 @@ async def validate_media_url(
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
 
         try:
-            async with session.head(
+            response = await session.head(
                 media_url,
                 headers=request_headers,
                 timeout=timeout,
                 proxy=proxy,
-                allow_redirects=True
-            ) as response:
+                allow_redirects=True,
+            )
+            async with response:
                 if response.status >= 400:
                     raise aiohttp.ClientError(
                         f"HEAD不支持媒体探测: HTTP {response.status}"
@@ -290,13 +320,14 @@ async def validate_media_url(
                 return is_valid, response.status
         except (aiohttp.ClientError, asyncio.TimeoutError):
             get_headers = _with_range_header(request_headers)
-            async with session.get(
+            response = await session.get(
                 media_url,
                 headers=get_headers,
                 timeout=timeout,
                 proxy=proxy,
-                allow_redirects=True
-            ) as response:
+                allow_redirects=True,
+            )
+            async with response:
                 if response.status == 403:
                     return False, 403
                 is_valid, _ = await validate_media_response(
@@ -306,7 +337,6 @@ async def validate_media_url(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        if '403' in str(e) or 'Forbidden' in str(e):
+        if "403" in str(e) or "Forbidden" in str(e):
             return False, 403
         return False, None
-

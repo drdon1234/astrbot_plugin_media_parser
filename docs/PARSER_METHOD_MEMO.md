@@ -107,7 +107,7 @@ opus_id
 
 ### Cookie 与评论
 
-Cookie 在 B站是增强条件，不是解析前提。Cookie 可用时，播放接口可能返回更完整的清晰度、时长或可访问内容；不可用时仍然走无 Cookie 解析。
+Cookie 在 B站是增强条件，不是解析前提。Cookie 可用时，Web 播放接口可能返回更完整的清晰度、时长或可访问内容；不可用时仍然走无 Cookie 解析。UGC 播放使用 `/x/player/wbi/playurl` 并按导航接口动态生成 WBI 签名，DASH 请求使用 `fnval=4048`，MP4 兼容回退使用 `fnval=1`；不再使用旧的 `/x/player/playurl`、HTML5 平台或 `fnval=0` FLV 回退。
 
 评论和热评接口依赖 WBI 签名。解析思路是先从导航接口拿到签名材料，再按 B站前端的规则生成请求参数，而不是硬编码一个固定签名。
 
@@ -124,14 +124,15 @@ HEAD 展开，失败再 GET 展开
   ↓
 判断 video、note 或 slides
   ↓
-请求 iesdouyin.com/share/video/{id}/
-或 iesdouyin.com/share/note/{id}/
-或 iesdouyin.com/web/api/v2/aweme/slidesinfo/
-  ↓
-读取 window._ROUTER_DATA
+优先请求 douyin.com/aweme/v1/web/aweme/detail/
+（a_bogus 签名 + 有界 ttwid 会话）
+  ├─ 成功 -> 使用目标作品详情
+  └─ 失败 -> slidesinfo 或 iesdouyin.com/share/{type}/{id}/
+                         ↓
+                    读取 window._ROUTER_DATA
 ```
 
-抖音移动分享页是主要数据源。它相对轻量，并且通常保留 `window._ROUTER_DATA`，这正是前端渲染分享页时使用的状态。
+当前抖音解析优先使用 Web 详情接口：请求只携带作品 ID 等稳定参数，并用 `a_bogus` 签名和短生命周期 `ttwid` 会话完成访问；目标作品 ID 会再次校验，遇到会话失效、非 JSON 或目标不匹配时最多刷新一次会话。详情接口不可用时，再回退到 slidesinfo 或抖音分享页。移动分享页相对轻量，并且通常保留 `window._ROUTER_DATA`，仍是重要的兜底数据源。
 
 视频和图文的结构不同：
 
@@ -271,11 +272,11 @@ xhslink.com / xhslink.cn / xiaohongshu.com
   └─ PC 端: note.noteDetailMap[*].note
 ```
 
-参数清理要谨慎。移动端分享链接可以去掉部分来源参数，但 PC 链接中的访问参数可能影响页面能否返回完整状态，不能盲目删除。
+参数清理要谨慎。移动端 `discovery/item` 分享链接只去掉 `source` 和 `xhsshare` 参数；随后优先改写为对应的 PC `explore` 页面，并完整保留其余查询参数。PC 链接中的访问参数可能影响页面能否返回完整状态，不能盲目删除。
 
 拿到笔记数据后，按类型处理：
 
-- 视频笔记：从 `video.media.stream.h264` 等结构里取播放地址，并统一协议。
+- 视频笔记：优先从 `video.media.stream.h264` 的 `masterUrl` 中选择最高质量、兼容性更好的 H.264 地址；没有 H.264 时再回退 H.265、AV1 或 H.266，并统一协议。PC `explore` 页面通常能提供无水印播放地址。
 - 图文笔记：从 `imageList`、`urlDefault`、`url`、`infoList` 中选择可用图片地址。
 
 正文里的话题标签带有前端标记，解析时会清理成可读文本。评论信息如果已经随页面状态下发，可以从状态树中收集并按点赞数排序；如果状态里没有，就不额外强行请求高风险接口。
@@ -422,6 +423,8 @@ Result.Data.PlayInfoList
 ```
 
 帖子正文可能是富文本 JSON 数组，里面混有 HTML、纯文本、图片、视频和 GIF。解析时要逐项解释：文本拼成正文，图片进入图片候选，视频和 M3U8 保留为视频线索，GIF 根据资源形态判断是图片还是视频。
+
+接口返回的 `link_id`、`linkid` 或 `id` 不一定是分享 URL 中的字符串 ID，部分响应会返回数字内部别名。解析器会优先用返回的 `share_url` 校验规范分享 ID；规范 ID 与请求一致时接受该数字别名，无法建立对应关系或明确指向其他帖子时拒绝响应，避免把其他帖子的媒体归到当前链接。
 
 ### 游戏详情页
 

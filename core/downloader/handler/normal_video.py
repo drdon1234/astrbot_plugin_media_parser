@@ -1,6 +1,6 @@
 """普通视频直链下载处理器。"""
+
 import asyncio
-import os
 from typing import Dict, Any, List, Optional
 
 import aiohttp
@@ -19,7 +19,9 @@ async def download_video_to_cache(
     media_id: str,
     index: int = 0,
     headers: dict = None,
-    proxy: str = None
+    proxy: str = None,
+    max_bytes: Optional[int] = None,
+    budget=None,
 ) -> Optional[Dict[str, Any]]:
     """下载视频到缓存目录
 
@@ -44,34 +46,32 @@ async def download_video_to_cache(
         return generate_cache_file_path(
             cache_dir=cache_dir,
             media_id=media_id,
-            media_type='video',
+            media_type="video",
             index=index,
             content_type=content_type,
-            url=url
+            url=url,
         )
-    
+
     file_path, size_mb, status_code, error = await download_media_from_url(
         session=session,
         media_url=video_url,
         file_path_generator=file_path_generator,
         is_video=True,
         headers=headers,
-        proxy=proxy
+        proxy=proxy,
+        max_bytes=max_bytes,
+        budget=budget,
     )
-    
+
     if file_path:
         logger.debug(f"视频下载完成: {video_url} -> {file_path}, {size_mb}MB")
-        return {
-            'file_path': file_path,
-            'size_mb': size_mb,
-            'status_code': status_code
-        }
+        return {"file_path": file_path, "size_mb": size_mb, "status_code": status_code}
     logger.debug(f"视频下载失败: {video_url}")
     return {
-        'file_path': None,
-        'size_mb': None,
-        'status_code': status_code,
-        'error': error or '下载失败'
+        "file_path": None,
+        "size_mb": None,
+        "status_code": status_code,
+        "error": error or "下载失败",
     }
 
 
@@ -79,7 +79,8 @@ async def batch_download_videos(
     session: aiohttp.ClientSession,
     video_items: List[Dict[str, Any]],
     cache_dir: str,
-    max_concurrent: int = None
+    max_concurrent: int = None,
+    max_bytes: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """批量下载普通视频到缓存目录
 
@@ -104,18 +105,18 @@ async def batch_download_videos(
         """下载单条普通视频并返回处理后的元数据。"""
         async with semaphore:
             try:
-                url_list = item.get('url_list', [])
-                media_id = item.get('media_id', 'media')
-                index = item.get('index', 0)
-                item_headers = item.get('headers', {})
-                item_proxy = item.get('proxy')
+                url_list = item.get("url_list", [])
+                media_id = item.get("media_id", "media")
+                index = item.get("index", 0)
+                item_headers = item.get("headers", {})
+                item_proxy = item.get("proxy")
 
                 if not url_list or not isinstance(url_list, list):
                     return {
-                        'url': url_list[0] if url_list else None,
-                        'file_path': None,
-                        'success': False,
-                        'index': index
+                        "url": url_list[0] if url_list else None,
+                        "file_path": None,
+                        "success": False,
+                        "index": index,
                     }
 
                 for url in url_list:
@@ -126,34 +127,37 @@ async def batch_download_videos(
                         media_id,
                         index,
                         item_headers,
-                        item_proxy
+                        item_proxy,
+                        max_bytes,
                     )
-                    if result and result.get('file_path'):
+                    if result and result.get("file_path"):
                         return {
-                            'url': url_list[0],
-                            'file_path': result.get('file_path'),
-                            'size_mb': result.get('size_mb'),
-                            'success': True,
-                            'index': index
+                            "url": url_list[0],
+                            "file_path": result.get("file_path"),
+                            "size_mb": result.get("size_mb"),
+                            "success": True,
+                            "index": index,
                         }
-                
+
                 return {
-                    'url': url_list[0] if url_list else None,
-                    'file_path': None,
-                    'size_mb': None,
-                    'success': False,
-                    'index': index
+                    "url": url_list[0] if url_list else None,
+                    "file_path": None,
+                    "size_mb": None,
+                    "success": False,
+                    "index": index,
                 }
             except Exception as e:
-                url_list = item.get('url_list', [])
-                index = item.get('index', 0)
-                logger.warning(f"批量下载视频失败: {url_list[0] if url_list else 'unknown'}, 错误: {e}")
+                url_list = item.get("url_list", [])
+                index = item.get("index", 0)
+                logger.warning(
+                    f"批量下载视频失败: {url_list[0] if url_list else 'unknown'}, 错误: {e}"
+                )
                 return {
-                    'url': url_list[0] if url_list else None,
-                    'file_path': None,
-                    'success': False,
-                    'index': index,
-                    'error': str(e)
+                    "url": url_list[0] if url_list else None,
+                    "file_path": None,
+                    "success": False,
+                    "index": index,
+                    "error": str(e),
                 }
 
     tasks = [download_one(item) for item in video_items]

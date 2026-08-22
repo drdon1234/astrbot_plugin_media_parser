@@ -63,7 +63,7 @@ async def register_files_with_token_service(
                 )
                 url = f"{callback_api_base}/api/file/{token}"
                 file_token_urls.append(url)
-                logger.debug(f"已注册文件到Token服务: {fp} -> {url}")
+                logger.debug(f"已注册文件到Token服务: {fp}")
             except Exception as e:
                 logger.warning(f"注册文件到Token服务失败: {fp}, 错误: {e}")
                 file_token_urls.append(None)

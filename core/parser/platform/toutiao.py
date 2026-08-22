@@ -1,4 +1,5 @@
 """今日头条解析器。"""
+
 import asyncio
 import base64
 import binascii
@@ -29,7 +30,6 @@ URL_TAIL_RE = r"[^\s<>\"'()，。！？；：）】》」]*"
 
 
 class ToutiaoParser(BaseVideoParser):
-
     """今日头条文章/视频解析器。"""
 
     ARTICLE_LINK_RE = re.compile(
@@ -57,10 +57,6 @@ class ToutiaoParser(BaseVideoParser):
         re.IGNORECASE,
     )
     PAGE_ID_RE = re.compile(r"/(article|video|w)/(\d+)", re.IGNORECASE)
-    CANONICAL_PAGE_RE = re.compile(
-        r"https?://m\.toutiao\.com/(article|video|w)/(\d+)/?",
-        re.IGNORECASE,
-    )
     SCRIPT_RE = re.compile(
         r"<script[^>]*>\s*(%7B.*?%7D)\s*</script>",
         re.IGNORECASE | re.DOTALL,
@@ -80,21 +76,9 @@ class ToutiaoParser(BaseVideoParser):
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析今日头条链接。"""
-        if not url:
-            return False
-        host = (urlparse(url).hostname or "").lower().strip(".")
-        if host not in {"www.toutiao.com", "m.toutiao.com"}:
-            return False
-        return any(
-            pattern.search(url)
-            for pattern in (
-                self.ARTICLE_LINK_RE,
-                self.MOBILE_ARTICLE_LINK_RE,
-                self.VIDEO_LINK_RE,
-                self.MOBILE_VIDEO_LINK_RE,
-                self.W_LINK_RE,
-                self.SHORT_LINK_RE,
-            )
+        return bool(
+            self._extract_content_identity(url) != ("", "")
+            or self._is_short_link(url)
         )
 
     def extract_links(self, text: str) -> List[str]:
@@ -111,6 +95,8 @@ class ToutiaoParser(BaseVideoParser):
         ):
             for match in pattern.finditer(text):
                 link = match.group(0).rstrip(".,!?)]}>\"'，。！？；：）】》」")
+                if not self.can_parse(link):
+                    continue
                 key = link.lower()
                 if key in seen:
                     continue
@@ -145,10 +131,41 @@ class ToutiaoParser(BaseVideoParser):
 
     @classmethod
     def _extract_content_identity(cls, url: str) -> Tuple[str, str]:
-        match = cls.PAGE_ID_RE.search(url or "")
+        parsed = cls._parse_trusted_url(url)
+        if not parsed:
+            return "", ""
+        match = re.fullmatch(
+            r"/(article|video|w)/(\d+)/?",
+            parsed.path or "",
+            re.IGNORECASE,
+        )
         if not match:
             return "", ""
         return match.group(1).lower(), match.group(2)
+
+    @staticmethod
+    def _parse_trusted_url(url: str):
+        if not isinstance(url, str) or not url.strip():
+            return None
+        try:
+            parsed = urlparse(url.strip())
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return None
+            if parsed.username or parsed.password:
+                return None
+            if parsed.port not in {None, 80, 443}:
+                return None
+        except (TypeError, ValueError):
+            return None
+        host = (parsed.hostname or "").lower().strip(".")
+        return parsed if host in {"toutiao.com", "www.toutiao.com", "m.toutiao.com"} else None
+
+    @classmethod
+    def _is_short_link(cls, url: str) -> bool:
+        parsed = cls._parse_trusted_url(url)
+        if not parsed or (parsed.hostname or "").lower().strip(".") != "m.toutiao.com":
+            return False
+        return bool(re.fullmatch(r"/is/[^/]+/?", parsed.path or ""))
 
     @staticmethod
     def _build_canonical_page_url(content_type: str, content_id: str) -> str:
@@ -158,10 +175,30 @@ class ToutiaoParser(BaseVideoParser):
 
     @classmethod
     def _extract_canonical_page_url_from_html(cls, html_text: str) -> str:
-        match = cls.CANONICAL_PAGE_RE.search(html_text or "")
-        if not match:
-            return ""
-        return cls._build_canonical_page_url(match.group(1).lower(), match.group(2))
+        for tag_match in re.finditer(
+            r"<(?:link|meta)\b[^>]*>", html_text or "", re.IGNORECASE
+        ):
+            tag = tag_match.group(0)
+            attributes = {
+                key.lower(): html.unescape(value)
+                for key, _, value in re.findall(
+                    r"([:\w-]+)\s*=\s*(['\"])(.*?)\2",
+                    tag,
+                    re.IGNORECASE | re.DOTALL,
+                )
+            }
+            tag_lower = tag.lower()
+            candidate = ""
+            if tag_lower.startswith("<link"):
+                rel_tokens = str(attributes.get("rel") or "").lower().split()
+                if "canonical" in rel_tokens:
+                    candidate = str(attributes.get("href") or "")
+            elif str(attributes.get("property") or "").lower() == "og:url":
+                candidate = str(attributes.get("content") or "")
+            content_type, content_id = cls._extract_content_identity(candidate)
+            if content_type and content_id:
+                return cls._build_canonical_page_url(content_type, content_id)
+        return ""
 
     async def _resolve_content_context(
         self,
@@ -183,7 +220,7 @@ class ToutiaoParser(BaseVideoParser):
                 "page_url": page_url,
             }
 
-        if not self.SHORT_LINK_RE.search(url or ""):
+        if not self._is_short_link(url):
             raise SkipParse("不是支持的今日头条链接")
 
         async with session.get(
@@ -231,7 +268,7 @@ class ToutiaoParser(BaseVideoParser):
         for match in self.SCRIPT_RE.finditer(html_text or ""):
             encoded = match.group(1).strip()
             decoded = unquote(encoded)
-            if "\"articleInfo\"" not in decoded:
+            if '"articleInfo"' not in decoded:
                 continue
             json.loads(decoded)
             return decoded
@@ -243,11 +280,38 @@ class ToutiaoParser(BaseVideoParser):
         )
         if fallback_match:
             decoded = unquote(fallback_match.group(1))
-            if "\"articleInfo\"" in decoded:
+            if '"articleInfo"' in decoded:
                 json.loads(decoded)
                 return decoded
 
         raise RuntimeError("无法从今日头条页面中提取状态数据")
+
+    @classmethod
+    def _validate_state_identity(
+        cls, state: Dict[str, Any], expected_content_id: str
+    ) -> None:
+        """校验页面状态中显式提供的内容 ID。"""
+        if not isinstance(state, dict):
+            raise RuntimeError("今日头条页面状态不是对象")
+        article_info = state.get("articleInfo") or {}
+        if not isinstance(article_info, dict):
+            raise RuntimeError("今日头条 articleInfo 不是对象")
+        thread_base = cls._get_thread_base(article_info)
+        candidates = set()
+        for container in (article_info, thread_base):
+            for key in (
+                "articleId",
+                "article_id",
+                "groupId",
+                "group_id",
+                "itemId",
+                "item_id",
+            ):
+                value = container.get(key)
+                if value not in (None, ""):
+                    candidates.add(str(value).strip())
+        if candidates and str(expected_content_id) not in candidates:
+            raise RuntimeError("今日头条页面返回了其他作品的数据")
 
     @staticmethod
     def _format_timestamp(timestamp_value: Any) -> str:
@@ -255,7 +319,7 @@ class ToutiaoParser(BaseVideoParser):
             return ""
         try:
             timestamp = int(timestamp_value)
-            if timestamp > 10 ** 12:
+            if timestamp > 10**12:
                 timestamp //= 1000
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
         except (TypeError, ValueError, OSError):
@@ -271,8 +335,15 @@ class ToutiaoParser(BaseVideoParser):
 
     def _format_author(self, article_info: Dict[str, Any]) -> str:
         media_user = article_info.get("mediaUser") or {}
+        if not isinstance(media_user, dict):
+            media_user = {}
         thread_base = self._get_thread_base(article_info)
-        thread_user_info = ((thread_base.get("user") or {}).get("info") or {})
+        thread_user = thread_base.get("user") or {}
+        if not isinstance(thread_user, dict):
+            thread_user = {}
+        thread_user_info = thread_user.get("info") or {}
+        if not isinstance(thread_user_info, dict):
+            thread_user_info = {}
         screen_name = self._first_non_empty(
             media_user.get("screenName"),
             article_info.get("detailSource"),
@@ -289,7 +360,13 @@ class ToutiaoParser(BaseVideoParser):
 
     @staticmethod
     def _get_thread_base(article_info: Dict[str, Any]) -> Dict[str, Any]:
-        return ((article_info.get("thread") or {}).get("threadBase") or {})
+        if not isinstance(article_info, dict):
+            return {}
+        thread = article_info.get("thread") or {}
+        if not isinstance(thread, dict):
+            return {}
+        thread_base = thread.get("threadBase") or {}
+        return thread_base if isinstance(thread_base, dict) else {}
 
     def _extract_article_content_html(
         self,
@@ -307,14 +384,13 @@ class ToutiaoParser(BaseVideoParser):
         if not content_html:
             return ""
         text = re.sub(r"<br\s*/?>", "\n", content_html, flags=re.IGNORECASE)
-        text = re.sub(r"</(p|div|section|article|li|h[1-6])>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"</(p|div|section|article|li|h[1-6])>", "\n", text, flags=re.IGNORECASE
+        )
         text = re.sub(r"<img[^>]*>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"<[^>]+>", "", text)
         text = html.unescape(text)
-        lines = [
-            re.sub(r"\s+", " ", line).strip()
-            for line in text.splitlines()
-        ]
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
         return "\n".join(line for line in lines if line)
 
     def _extract_image_urls_from_content(self, content_html: str) -> List[List[str]]:
@@ -372,9 +448,7 @@ class ToutiaoParser(BaseVideoParser):
         ):
             merged = self._merge_image_candidate_lists(
                 merged,
-                self._extract_image_urls_from_image_list_items(
-                    thread_base.get(key)
-                ),
+                self._extract_image_urls_from_image_list_items(thread_base.get(key)),
             )
         return merged
 
@@ -409,6 +483,7 @@ class ToutiaoParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         page_url: str,
         state: Dict[str, Any],
+        content_id: str,
     ) -> List[List[str]]:
         article_info = state.get("articleInfo") or {}
         merged_lists = self._extract_article_image_urls(article_info)
@@ -417,13 +492,10 @@ class ToutiaoParser(BaseVideoParser):
 
         for _ in range(1, self.article_image_refreshes):
             refreshed_html = await self._fetch_page_html(session, page_url)
-            refreshed_state = json.loads(
-                self._extract_state_json_text(refreshed_html)
-            )
+            refreshed_state = json.loads(self._extract_state_json_text(refreshed_html))
+            self._validate_state_identity(refreshed_state, content_id)
             refreshed_article_info = refreshed_state.get("articleInfo") or {}
-            refreshed_lists = self._extract_article_image_urls(
-                refreshed_article_info
-            )
+            refreshed_lists = self._extract_article_image_urls(refreshed_article_info)
             merged_lists = self._merge_image_candidate_lists(
                 merged_lists,
                 refreshed_lists,
@@ -493,6 +565,8 @@ class ToutiaoParser(BaseVideoParser):
 
     def _extract_vod_query_from_token(self, token: str) -> str:
         token_json = json.loads(self._decode_base64_text(token))
+        if not isinstance(token_json, dict):
+            raise RuntimeError("今日头条视频播放令牌不是对象")
         query = self._first_non_empty(token_json.get("GetPlayInfoToken"))
         if not query:
             raise RuntimeError("今日头条视频播放令牌中缺少 GetPlayInfoToken")
@@ -514,14 +588,16 @@ class ToutiaoParser(BaseVideoParser):
                 raise RuntimeError(
                     f"获取今日头条视频信息失败: HTTP {response.status}, {body[:200]}"
                 )
-            return await response.json(content_type=None)
+            payload = await response.json(content_type=None)
+            if not isinstance(payload, dict):
+                raise RuntimeError("今日头条视频接口返回的 JSON 不是对象")
+            return payload
 
     @staticmethod
     def _collect_video_urls(vod_payload: Dict[str, Any]) -> List[List[str]]:
         play_info_list = (
-            (((vod_payload.get("Result") or {}).get("Data") or {}).get("PlayInfoList"))
-            or []
-        )
+            ((vod_payload.get("Result") or {}).get("Data") or {}).get("PlayInfoList")
+        ) or []
         ranked_urls: List[Tuple[int, str]] = []
         seen = set()
         for item in play_info_list:
@@ -588,6 +664,8 @@ class ToutiaoParser(BaseVideoParser):
             state_json_text = self._extract_state_json_text(html_text)
             state = json.loads(state_json_text)
             content_type = context["content_type"]
+            content_id = context["content_id"]
+            self._validate_state_identity(state, content_id)
             article_info = state.get("articleInfo") or {}
 
             if content_type == "w":
@@ -601,12 +679,11 @@ class ToutiaoParser(BaseVideoParser):
                     state=state,
                     image_urls=[],
                 )
-                metadata["image_urls"] = (
-                    await self._collect_article_image_candidates(
-                        session,
-                        page_url,
-                        state,
-                    )
+                metadata["image_urls"] = await self._collect_article_image_candidates(
+                    session,
+                    page_url,
+                    state,
+                    content_id,
                 )
             elif content_type == "video":
                 token = self._first_non_empty(article_info.get("playAuthTokenV2"))

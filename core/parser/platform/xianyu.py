@@ -1,4 +1,5 @@
 """闲鱼商品页解析器。"""
+
 import asyncio
 import hashlib
 import html
@@ -29,10 +30,10 @@ XIANYU_MTOP_BASE = "https://h5api.m.goofish.com"
 XIANYU_DETAIL_API = "mtop.taobao.idle.awesome.detail"
 XIANYU_DETAIL_API_VERSION = "1.0"
 HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+XIANYU_ITEM_HOSTS = frozenset({"www.goofish.com", "h5.m.goofish.com"})
 
 
 class XianyuParser(BaseVideoParser):
-
     """闲鱼商品页解析器。"""
 
     def __init__(self):
@@ -41,19 +42,34 @@ class XianyuParser(BaseVideoParser):
 
     @staticmethod
     def _get_host(url: str) -> str:
+        if not isinstance(url, str) or not url.strip():
+            return ""
         try:
-            return (urlparse(url).hostname or "").lower().strip(".")
-        except Exception:
+            parsed = urlparse(url.strip())
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return ""
+            if parsed.username or parsed.password:
+                return ""
+            if parsed.port not in {None, 80, 443}:
+                return ""
+            return (parsed.hostname or "").lower().strip(".")
+        except (TypeError, ValueError):
             return ""
 
     @classmethod
     def _is_short_share_url(cls, url: str) -> bool:
-        return cls._get_host(url) == "m.tb.cn"
+        if cls._get_host(url) != "m.tb.cn":
+            return False
+        try:
+            path = urlparse(url).path or ""
+        except (TypeError, ValueError):
+            return False
+        return bool(re.fullmatch(r"/h\.[A-Za-z0-9_-]{3,}/?", path))
 
     @classmethod
     def _is_goofish_item_url(cls, url: str) -> bool:
         host = cls._get_host(url)
-        if host not in {"www.goofish.com", "h5.m.goofish.com"}:
+        if host not in XIANYU_ITEM_HOSTS:
             return False
         try:
             return (urlparse(url).path or "").rstrip("/") == "/item"
@@ -63,7 +79,9 @@ class XianyuParser(BaseVideoParser):
     def can_parse(self, url: str) -> bool:
         if not url:
             return False
-        return self._is_short_share_url(url) or self._is_goofish_item_url(url)
+        return self._is_short_share_url(url) or bool(
+            self._is_goofish_item_url(url) and self._extract_item_id_from_url(url)
+        )
 
     def extract_links(self, text: str) -> List[str]:
         result_links: List[str] = []
@@ -77,6 +95,8 @@ class XianyuParser(BaseVideoParser):
         for pattern in patterns:
             for match in re.finditer(pattern, text, re.IGNORECASE):
                 link = match.group(0).rstrip(".,!?)]}>\"'，。！？；：）】》」")
+                if not self.can_parse(link):
+                    continue
                 key = link.lower()
                 if key in seen:
                     continue
@@ -114,21 +134,25 @@ class XianyuParser(BaseVideoParser):
 
     def _extract_redirect_url_from_short_page(self, html_text: str) -> str:
         patterns = [
+            r"window\.location(?:\.replace)?\((['\"])(https?://[^'\"]+)\1\)",
             r"var\s+url\s*=\s*'([^']+)'",
             r'var\s+url\s*=\s*"([^"]+)"',
-            r"window\.location(?:\.replace)?\((['\"])(https?://[^'\"]+)\1\)",
         ]
         for pattern in patterns:
-            match = re.search(pattern, html_text, re.IGNORECASE)
-            if not match:
-                continue
-            raw_url = match.group(1 if match.lastindex == 1 else 2)
-            decoded = html.unescape(raw_url)
-            decoded = decoded.replace("\\u002F", "/").replace("\\/", "/")
-            return unquote(decoded)
+            for match in re.finditer(pattern, html_text, re.IGNORECASE):
+                raw_url = match.group(1 if match.lastindex == 1 else 2)
+                decoded = html.unescape(raw_url)
+                decoded = decoded.replace("\\u002F", "/").replace("\\/", "/")
+                decoded = unquote(decoded)
+                if decoded.startswith("//"):
+                    decoded = "https:" + decoded
+                if self._is_goofish_item_url(decoded) and self._extract_item_id_from_url(decoded):
+                    return decoded
         return ""
 
     def _extract_item_id_from_url(self, url: str) -> str:
+        if not self._is_goofish_item_url(url):
+            return ""
         try:
             parsed = urlparse(url)
         except Exception:
@@ -148,9 +172,7 @@ class XianyuParser(BaseVideoParser):
         return ""
 
     async def _resolve_source_context(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Dict[str, str]:
         source_url = url
         mobile_url = ""
@@ -173,17 +195,21 @@ class XianyuParser(BaseVideoParser):
 
             source_url = url
             mobile_url = (
-                candidate_url if self._get_host(candidate_url) == "h5.m.goofish.com"
+                candidate_url
+                if self._get_host(candidate_url) == "h5.m.goofish.com"
                 else ""
             )
             item_id = self._extract_item_id_from_url(candidate_url) or item_id
 
         elif self._is_goofish_item_url(url):
+            item_id = self._extract_item_id_from_url(url)
             host = self._get_host(url)
             if host == "h5.m.goofish.com":
                 mobile_url = url
             else:
                 pc_url = url
+        else:
+            raise SkipParse("不是支持的闲鱼商品链接")
 
         if not item_id:
             raise RuntimeError("无法从闲鱼链接中提取商品 id")
@@ -233,9 +259,7 @@ class XianyuParser(BaseVideoParser):
         }
 
     @staticmethod
-    def _extract_token_from_cookie_jar(
-        session: aiohttp.ClientSession
-    ) -> str:
+    def _extract_token_from_cookie_jar(session: aiohttp.ClientSession) -> str:
         cookies = session.cookie_jar.filter_cookies(XIANYU_MTOP_BASE)
         raw_token = ""
         cookie = cookies.get("_m_h5_tk")
@@ -295,7 +319,9 @@ class XianyuParser(BaseVideoParser):
         for attempt in range(2):
             timestamp_ms = str(int(datetime.now().timestamp() * 1000))
             sign = hashlib.md5(
-                f"{token}&{timestamp_ms}&{XIANYU_MTOP_APP_KEY}&{data_str}".encode("utf-8")
+                f"{token}&{timestamp_ms}&{XIANYU_MTOP_APP_KEY}&{data_str}".encode(
+                    "utf-8"
+                )
             ).hexdigest()
             params = self._build_mtop_params(
                 api=api,
@@ -311,11 +337,11 @@ class XianyuParser(BaseVideoParser):
             ) as response:
                 payload = await response.json(content_type=None)
 
+            if not isinstance(payload, dict):
+                raise RuntimeError("闲鱼详情接口返回的 JSON 不是对象")
+
             ret_list = payload.get("ret") or []
-            if any(
-                "FAIL_SYS_TOKEN" in str(item or "")
-                for item in ret_list
-            ):
+            if any("FAIL_SYS_TOKEN" in str(item or "") for item in ret_list):
                 if attempt == 0:
                     await self._prime_mtop_token(
                         session,
@@ -330,15 +356,17 @@ class XianyuParser(BaseVideoParser):
                 raise RuntimeError(f"闲鱼接口令牌失效: {ret_list}")
 
             if ret_list and not all(
-                str(item or "").startswith("SUCCESS")
-                for item in ret_list
+                str(item or "").startswith("SUCCESS") for item in ret_list
             ):
                 raise RuntimeError(
                     "闲鱼详情接口返回失败: "
                     + " | ".join(str(item or "") for item in ret_list)
                 )
 
-            return payload.get("data") or {}
+            response_data = payload.get("data") or {}
+            if not isinstance(response_data, dict):
+                raise RuntimeError("闲鱼详情接口 data 不是对象")
+            return response_data
 
         raise RuntimeError("闲鱼详情接口请求失败")
 
@@ -347,7 +375,7 @@ class XianyuParser(BaseVideoParser):
             return ""
         try:
             timestamp = int(timestamp_value)
-            if timestamp > 10 ** 12:
+            if timestamp > 10**12:
                 timestamp //= 1000
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
         except (TypeError, ValueError, OSError):
@@ -373,10 +401,9 @@ class XianyuParser(BaseVideoParser):
         return ""
 
     def _extract_seller_name(self, detail_data: Dict[str, Any]) -> str:
-        floating = (
-            ((detail_data.get("flowData") or {}).get("floating") or {})
-            .get("components") or []
-        )
+        floating = ((detail_data.get("flowData") or {}).get("floating") or {}).get(
+            "components"
+        ) or []
         for component in floating:
             data = component.get("data") or {}
             nickname = self._first_non_empty(
@@ -386,15 +413,15 @@ class XianyuParser(BaseVideoParser):
             if nickname and "***" not in nickname:
                 return nickname
 
-        share_data = ((detail_data.get("itemDO") or {}).get("shareData") or {})
+        share_data = (detail_data.get("itemDO") or {}).get("shareData") or {}
         share_info_raw = share_data.get("shareInfoJsonString") or ""
         if share_info_raw:
             try:
                 share_info = json.loads(share_info_raw)
                 nickname = self._first_non_empty(
                     (
-                        (share_info.get("contentParams") or {})
-                        .get("headerParams") or {}
+                        (share_info.get("contentParams") or {}).get("headerParams")
+                        or {}
                     ).get("title")
                 )
                 if nickname:
@@ -414,10 +441,9 @@ class XianyuParser(BaseVideoParser):
         if seller_id not in (None, ""):
             return str(seller_id)
 
-        floating = (
-            ((detail_data.get("flowData") or {}).get("floating") or {})
-            .get("components") or []
-        )
+        floating = ((detail_data.get("flowData") or {}).get("floating") or {}).get(
+            "components"
+        ) or []
         for component in floating:
             data = component.get("data") or {}
             seller_id = data.get("sellerId")
@@ -432,9 +458,8 @@ class XianyuParser(BaseVideoParser):
             return desc
 
         sections = (
-            (((detail_data.get("flowData") or {}).get("body") or {}).get("sections"))
-            or []
-        )
+            ((detail_data.get("flowData") or {}).get("body") or {}).get("sections")
+        ) or []
         for section in sections:
             for component in section.get("components") or []:
                 data = component.get("data") or {}
@@ -472,9 +497,8 @@ class XianyuParser(BaseVideoParser):
                 push(image.get("url") or "")
 
         sections = (
-            (((detail_data.get("flowData") or {}).get("body") or {}).get("sections"))
-            or []
-        )
+            ((detail_data.get("flowData") or {}).get("body") or {}).get("sections")
+        ) or []
         for section in sections:
             for component in section.get("components") or []:
                 data = component.get("data") or {}
@@ -482,14 +506,15 @@ class XianyuParser(BaseVideoParser):
                     if isinstance(image, dict):
                         push(image.get("url") or "")
 
-        share_data = ((item_do.get("shareData") or {}).get("shareInfoJsonString") or "")
+        share_data = (item_do.get("shareData") or {}).get("shareInfoJsonString") or ""
         if share_data:
             try:
                 share_info = json.loads(share_data)
                 images = (
-                    (((share_info.get("contentParams") or {}).get("mainParams") or {})
-                     .get("images")) or []
-                )
+                    (
+                        (share_info.get("contentParams") or {}).get("mainParams") or {}
+                    ).get("images")
+                ) or []
                 for image in images:
                     if isinstance(image, dict):
                         push(image.get("image") or "")
@@ -630,10 +655,34 @@ class XianyuParser(BaseVideoParser):
             ),
         }
 
+    @staticmethod
+    def _validate_detail_item_identity(
+        detail_data: Dict[str, Any], expected_item_id: str
+    ) -> None:
+        """要求闲鱼详情响应明确对应请求的商品。"""
+        if not isinstance(detail_data, dict):
+            raise RuntimeError("闲鱼详情数据不是对象")
+        item_do = detail_data.get("itemDO") or {}
+        if not isinstance(item_do, dict):
+            raise RuntimeError("闲鱼详情 itemDO 不是对象")
+        candidates = set()
+        for container, keys in (
+            (detail_data, ("itemId", "item_id")),
+            (item_do, ("itemId", "item_id", "id")),
+        ):
+            for key in keys:
+                value = container.get(key)
+                if value not in (None, ""):
+                    value_text = str(value).strip()
+                    if re.fullmatch(r"\d{8,20}", value_text):
+                        candidates.add(value_text)
+        if not candidates:
+            raise RuntimeError("闲鱼详情响应缺少商品 id")
+        if str(expected_item_id) not in candidates:
+            raise RuntimeError("闲鱼详情接口返回了其他商品的数据")
+
     async def parse(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Optional[Dict[str, Any]]:
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
@@ -653,6 +702,7 @@ class XianyuParser(BaseVideoParser):
             )
             if not detail_data:
                 raise RuntimeError("闲鱼详情接口返回空数据")
+            self._validate_detail_item_identity(detail_data, item_id)
 
             metadata = self._build_metadata_from_detail_data(
                 source_url=context["source_url"],

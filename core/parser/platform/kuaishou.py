@@ -1,10 +1,11 @@
 """快手解析器实现。"""
+
 import asyncio
 import json
 import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 
@@ -15,22 +16,20 @@ from ..utils import build_request_headers, is_live_url, SkipParse
 from ...constants import Config
 
 MOBILE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) '
-                  'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
-KUAISHOU_DOMAINS = ('kuaishou.com', 'gifshow.com', 'chenzhongtech.com', 'kspkg.com')
-GIFSHOW_BASE = 'https://m.gifshow.com'
-
-
+KUAISHOU_DOMAINS = ("kuaishou.com", "gifshow.com", "chenzhongtech.com", "kspkg.com")
+GIFSHOW_BASE = "https://m.gifshow.com"
 class KuaishouParser(BaseVideoParser):
-
     """快手解析器实现。"""
+
     def __init__(self):
         """初始化快手解析器"""
         super().__init__("kuaishou")
@@ -49,8 +48,7 @@ class KuaishouParser(BaseVideoParser):
         if not url:
             logger.debug(f"[{self.name}] can_parse: URL为空")
             return False
-        url_lower = url.lower()
-        if any(d in url_lower for d in KUAISHOU_DOMAINS):
+        if self._is_trusted_url(url):
             logger.debug(f"[{self.name}] can_parse: 匹配快手链接 {url}")
             return True
         logger.debug(f"[{self.name}] can_parse: 无法解析 {url}")
@@ -67,21 +65,23 @@ class KuaishouParser(BaseVideoParser):
         """
         result_links_set = set()
 
-        short_pattern = r'https?://v\.kuaishou\.com/[^\s]+'
+        short_pattern = r"https?://v\.kuaishou\.com/[^\s]+"
         result_links_set.update(re.findall(short_pattern, text))
 
-        long_pattern = r'https?://(?:www\.)?kuaishou\.com/[^\s]+'
+        long_pattern = r"https?://(?:www\.)?kuaishou\.com/[^\s]+"
         result_links_set.update(re.findall(long_pattern, text))
 
-        gifshow_pattern = r'https?://[a-zA-Z0-9.-]*\.?gifshow\.com/[^\s]+'
+        gifshow_pattern = r"https?://[a-zA-Z0-9.-]*\.?gifshow\.com/[^\s]+"
         result_links_set.update(re.findall(gifshow_pattern, text))
 
-        chenzhongtech_pattern = r'https?://[a-zA-Z0-9.-]*\.?chenzhongtech\.com/[^\s]+'
+        chenzhongtech_pattern = r"https?://[a-zA-Z0-9.-]*\.?chenzhongtech\.com/[^\s]+"
         result_links_set.update(re.findall(chenzhongtech_pattern, text))
 
-        result = list(result_links_set)
+        result = [url for url in result_links_set if self._is_trusted_url(url)]
         if result:
-            logger.debug(f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}")
+            logger.debug(
+                f"[{self.name}] extract_links: 提取到 {len(result)} 个链接: {result[:3]}{'...' if len(result) > 3 else ''}"
+            )
         else:
             logger.debug(f"[{self.name}] extract_links: 未提取到链接")
         return result
@@ -95,11 +95,29 @@ class KuaishouParser(BaseVideoParser):
         Returns:
             处理后的URL
         """
-        pu = urlparse(url)
-        domain = pu.netloc
-        filename = pu.path.split('/')[-1].split('?')[0]
-        path_wo_file = '/'.join(pu.path.split('/')[1:-1])
-        return f"https://{domain}/{path_wo_file}/{filename}"
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return url
+        # CDN 查询参数通常包含防盗链签名，不能为了“清理”URL而删除。
+        return urlunparse(parsed._replace(scheme="https", fragment=""))
+
+    @staticmethod
+    def _host_matches(host: str, domain: str) -> bool:
+        normalized = str(host or "").lower().rstrip(".")
+        expected = domain.lower().rstrip(".")
+        return normalized == expected or normalized.endswith(f".{expected}")
+
+    @classmethod
+    def _is_trusted_url(cls, url: str) -> bool:
+        """仅允许 HTTP(S) 的快手自有域名作为解析输入。"""
+        try:
+            parsed = urlparse(str(url or ""))
+        except (TypeError, ValueError):
+            return False
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return False
+        host = parsed.hostname or ""
+        return any(cls._host_matches(host, domain) for domain in KUAISHOU_DOMAINS)
 
     def _extract_upload_time(self, url: str) -> Optional[str]:
         """从URL中提取上传时间
@@ -111,17 +129,17 @@ class KuaishouParser(BaseVideoParser):
             上传时间字符串（YYYY-MM-DD格式），无法提取时为None
         """
         try:
-            match = re.search(r'/(\d{4})/(\d{2})/(\d{2})/', url)
+            match = re.search(r"/(\d{4})/(\d{2})/(\d{2})/", url)
             if match:
                 year, month, day = match.groups()
                 return f"{year}-{month}-{day}"
-            match = re.search(r'_(\d{11,13})_', url)
+            match = re.search(r"_(\d{11,13})_", url)
             if match:
                 timestamp = int(match.group(1))
                 if len(match.group(1)) == 13:
                     timestamp = timestamp // 1000
                 dt = datetime.fromtimestamp(timestamp)
-                return dt.strftime('%Y-%m-%d')
+                return dt.strftime("%Y-%m-%d")
         except Exception:
             pass
         return None
@@ -133,17 +151,17 @@ class KuaishouParser(BaseVideoParser):
         限定在 <script> 标签内匹配，避免跨标签捕获无效 JSON。
         """
         m = re.search(
-            r'<script>\s*window\.INIT_STATE\s*=\s*(.*?)\s*</script>',
-            html, re.DOTALL
+            r"<script>\s*window\.INIT_STATE\s*=\s*(.*?)\s*</script>", html, re.DOTALL
         )
         if not m:
             m = re.search(
-                r'<script>\s*window\.__APOLLO_STATE__\s*=\s*(.*?)\s*</script>',
-                html, re.DOTALL
+                r"<script>\s*window\.__APOLLO_STATE__\s*=\s*(.*?)\s*</script>",
+                html,
+                re.DOTALL,
             )
         if not m:
             return None
-        raw = m.group(1).rstrip(';').strip()
+        raw = m.group(1).rstrip(";").strip()
         try:
             return json.loads(raw)
         except (json.JSONDecodeError, ValueError):
@@ -159,7 +177,9 @@ class KuaishouParser(BaseVideoParser):
             包含userName、userId、caption的字典
         """
         metadata: Dict[str, Optional[str]] = {
-            'userName': None, 'userId': None, 'caption': None
+            "userName": None,
+            "userId": None,
+            "caption": None,
         }
 
         init_state = self._get_init_state(html)
@@ -167,7 +187,7 @@ class KuaishouParser(BaseVideoParser):
             for val in init_state.values():
                 if not isinstance(val, dict):
                     continue
-                photo = val.get('photo')
+                photo = val.get("photo")
                 if photo:
                     if isinstance(photo, str):
                         try:
@@ -175,27 +195,23 @@ class KuaishouParser(BaseVideoParser):
                         except (json.JSONDecodeError, ValueError):
                             photo = None
                 if isinstance(photo, dict):
-                    metadata['userName'] = metadata['userName'] or photo.get('userName')
-                    metadata['caption'] = metadata['caption'] or photo.get('caption')
-                    uid = photo.get('userId')
+                    metadata["userName"] = metadata["userName"] or photo.get("userName")
+                    metadata["caption"] = metadata["caption"] or photo.get("caption")
+                    uid = photo.get("userId")
                     if uid is not None:
-                        metadata['userId'] = str(uid)
+                        metadata["userId"] = str(uid)
 
-        if not metadata['userName'] or not metadata['caption']:
+        if not metadata["userName"] or not metadata["caption"]:
             json_str = html
-            if not metadata['userName']:
-                user_match = re.search(
-                    r'"userName"\s*:\s*"([^"]+)"', json_str
-                )
+            if not metadata["userName"]:
+                user_match = re.search(r'"userName"\s*:\s*"([^"]+)"', json_str)
                 if user_match:
-                    metadata['userName'] = user_match.group(1)
-            if not metadata['userId']:
-                uid_match = re.search(
-                    r'"userId"\s*:\s*["\']?(\d+)["\']?', json_str
-                )
+                    metadata["userName"] = user_match.group(1)
+            if not metadata["userId"]:
+                uid_match = re.search(r'"userId"\s*:\s*["\']?(\d+)["\']?', json_str)
                 if uid_match:
-                    metadata['userId'] = uid_match.group(1)
-            if not metadata['caption']:
+                    metadata["userId"] = uid_match.group(1)
+            if not metadata["caption"]:
                 caption_match = re.search(
                     r'"caption"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', json_str
                 )
@@ -204,18 +220,16 @@ class KuaishouParser(BaseVideoParser):
                     try:
                         probe_json = f'{{"text":"{raw_caption}"}}'
                         parsed = json.loads(probe_json)
-                        metadata['caption'] = parsed['text']
+                        metadata["caption"] = parsed["text"]
                     except Exception:
-                        metadata['caption'] = raw_caption
+                        metadata["caption"] = raw_caption
 
-        if not metadata['caption']:
-            title_match = re.search(
-                r'<title[^>]*>(.*?)</title>', html, re.IGNORECASE
-            )
+        if not metadata["caption"]:
+            title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE)
             if title_match:
                 raw_title = title_match.group(1).strip()
-                if raw_title and raw_title not in ('快手', '快手视频'):
-                    metadata['caption'] = raw_title
+                if raw_title and raw_title not in ("快手", "快手视频"):
+                    metadata["caption"] = raw_title
         return metadata
 
     def _extract_album_image_url(self, html: str) -> Optional[str]:
@@ -229,20 +243,14 @@ class KuaishouParser(BaseVideoParser):
         """
         match = re.search(r'<img\s+class="image"\s+src="([^"]+)"', html)
         if match:
-            return match.group(1).split('?')[0]
-        match = re.search(
-            r'src="(https?://[^"]*?/upic/[^"]*?\.jpg)',
-            html
-        )
+            return match.group(1)
+        match = re.search(r'src="(https?://[^"]*?/upic/[^"]*?\.jpg)', html)
         if match:
             return match.group(1)
         return None
 
     def _build_album(
-        self,
-        cdns: List[str],
-        music_path: Optional[str],
-        img_paths: List[str]
+        self, cdns: List[str], music_path: Optional[str], img_paths: List[str]
     ) -> Dict[str, Any]:
         """构建图集数据，支持多个CDN
 
@@ -254,14 +262,10 @@ class KuaishouParser(BaseVideoParser):
         Returns:
             包含images和image_url_lists的字典，构建失败时为None
         """
-        cleaned_cdns = [
-            re.sub(r'https?://', '', cdn) for cdn in cdns if cdn
-        ]
+        cleaned_cdns = [re.sub(r"https?://", "", cdn) for cdn in cdns if cdn]
         if not cleaned_cdns:
             return None
-        cleaned_paths = [
-            p.strip('"') for p in img_paths if p.strip('"')
-        ]
+        cleaned_paths = [p.strip('"') for p in img_paths if p.strip('"')]
         if not cleaned_paths:
             return None
         images = []
@@ -281,11 +285,7 @@ class KuaishouParser(BaseVideoParser):
             if img_url not in seen:
                 seen.add(img_url)
                 uniq_images.append(img_url)
-                url_list = (
-                    image_url_lists[idx].copy()
-                    if image_url_lists[idx]
-                    else []
-                )
+                url_list = image_url_lists[idx].copy() if image_url_lists[idx] else []
                 if url_list and url_list[0] != img_url:
                     if img_url in url_list:
                         url_list.remove(img_url)
@@ -296,10 +296,10 @@ class KuaishouParser(BaseVideoParser):
             cleaned_music = music_path.strip('"')
             bgm = f"https://{cleaned_cdns[0]}{cleaned_music}"
         return {
-            'type': 'album',
-            'bgm': bgm,
-            'images': uniq_images,
-            'image_url_lists': uniq_image_url_lists
+            "type": "album",
+            "bgm": bgm,
+            "images": uniq_images,
+            "image_url_lists": uniq_image_url_lists,
         }
 
     def _parse_album(self, html: str) -> Optional[Dict[str, Any]]:
@@ -312,9 +312,7 @@ class KuaishouParser(BaseVideoParser):
             包含images和image_url_lists的字典，解析失败时为None
         """
         cdn_matches = re.findall(
-            r'"cdnList"\s*:\s*\[.*?"cdn"\s*:\s*"([^"]+)"',
-            html,
-            re.DOTALL
+            r'"cdnList"\s*:\s*\[.*?"cdn"\s*:\s*"([^"]+)"', html, re.DOTALL
         )
         if not cdn_matches:
             cdn_matches = re.findall(r'"cdn"\s*:\s*\["([^"]+)"', html)
@@ -326,10 +324,7 @@ class KuaishouParser(BaseVideoParser):
         img_paths = re.findall(r'"/ufile/atlas/[^"]+?\.jpg"', html)
         if not img_paths:
             return None
-        m = re.search(
-            r'"music"\s*:\s*"(/ufile/atlas/[^"]+?\.m4a)"',
-            html
-        )
+        m = re.search(r'"music"\s*:\s*"(/ufile/atlas/[^"]+?\.m4a)"', html)
         music_path = m.group(1) if m else None
         return self._build_album(cdns, music_path, img_paths)
 
@@ -345,17 +340,14 @@ class KuaishouParser(BaseVideoParser):
         m = re.search(
             r'"(url|srcNoMark|photoUrl|videoUrl)"\s*:\s*"'
             r'(https?://[^"]+?\.mp4[^"]*)"',
-            html
+            html,
         )
         if not m:
-            m = re.search(
-                r'"url"\s*:\s*"(https?://[^"]+?\.mp4[^"]*)"',
-                html
-            )
+            m = re.search(r'"url"\s*:\s*"(https?://[^"]+?\.mp4[^"]*)"', html)
         if m:
-            return self._min_mp4(m.group(2))
+            media_url = m.group(2) if m.lastindex == 2 else m.group(1)
+            return self._min_mp4(media_url)
         return None
-
 
     @staticmethod
     def _to_gifshow_url(loc: str) -> str:
@@ -366,16 +358,15 @@ class KuaishouParser(BaseVideoParser):
         """
         parsed = urlparse(loc)
         path = parsed.path
-        photo_match = re.search(r'/fw/photo/([^/?]+)', path)
+        suffix = f"?{parsed.query}" if parsed.query else ""
+        photo_match = re.search(r"/fw/photo/([^/?]+)", path)
         if photo_match:
             photo_id = photo_match.group(1)
-            return f"{GIFSHOW_BASE}/fw/photo/{photo_id}"
-        return f"{GIFSHOW_BASE}{path}"
+            return f"{GIFSHOW_BASE}/fw/photo/{photo_id}{suffix}"
+        return f"{GIFSHOW_BASE}{path}{suffix}"
 
     async def _fetch_html(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Optional[str]:
         """获取HTML内容（处理短链）
 
@@ -386,23 +377,25 @@ class KuaishouParser(BaseVideoParser):
         Returns:
             HTML内容，获取失败时为None
         """
-        is_short = 'v.kuaishou.com' in urlparse(url).netloc
+        is_short = "v.kuaishou.com" in urlparse(url).netloc
         if is_short:
             async with session.get(
                 url,
                 headers=self.headers,
-                allow_redirects=False
+                allow_redirects=False,
             ) as r1:
                 if r1.status != 302:
                     return None
-                loc = r1.headers.get('Location')
+                loc = r1.headers.get("Location")
                 if not loc:
                     return None
             if is_live_url(loc):
-                logger.debug(f"[{self.name}] _fetch_html: 短链重定向到直播域名，跳过解析 {url} -> {loc}")
+                logger.debug(
+                    f"[{self.name}] _fetch_html: 短链重定向到直播域名，跳过解析 {url} -> {loc}"
+                )
                 raise SkipParse("直播域名链接不解析")
             loc_host = urlparse(loc).netloc.lower()
-            if 'kuaishou.com' not in loc_host:
+            if "kuaishou.com" not in loc_host:
                 loc = self._to_gifshow_url(loc)
                 logger.debug(f"[{self.name}] _fetch_html: 重定向到非快手域名，改用 {loc}")
             async with session.get(loc, headers=self.headers) as r2:
@@ -411,22 +404,23 @@ class KuaishouParser(BaseVideoParser):
                 return await r2.text()
         else:
             if is_live_url(url):
-                logger.debug(f"[{self.name}] _fetch_html: 检测到直播域名链接，跳过解析 {url}")
+                logger.debug(
+                    f"[{self.name}] _fetch_html: 检测到直播域名链接，跳过解析 {url}"
+                )
                 raise SkipParse("直播域名链接不解析")
             target = url
             parsed_host = urlparse(url).netloc.lower()
-            if 'chenzhongtech.com' in parsed_host:
+            if "chenzhongtech.com" in parsed_host:
                 target = self._to_gifshow_url(url)
-                logger.debug(f"[{self.name}] _fetch_html: chenzhongtech URL 转换为 {target}")
+                logger.debug(
+                    f"[{self.name}] _fetch_html: chenzhongtech URL 转换为 {target}"
+                )
             async with session.get(target, headers=self.headers) as r:
                 if r.status != 200:
                     return None
                 return await r.text()
 
-    def _build_author_info(
-        self,
-        metadata: Dict[str, Optional[str]]
-    ) -> str:
+    def _build_author_info(self, metadata: Dict[str, Optional[str]]) -> str:
         """构建作者信息
 
         Args:
@@ -435,8 +429,8 @@ class KuaishouParser(BaseVideoParser):
         Returns:
             作者信息字符串
         """
-        userName = metadata.get('userName', '')
-        userId = metadata.get('userId', '')
+        userName = metadata.get("userName", "")
+        userId = metadata.get("userId", "")
         if userName and userId:
             return f"{userName}(uid:{userId})"
         elif userName:
@@ -446,9 +440,7 @@ class KuaishouParser(BaseVideoParser):
         else:
             return ""
 
-    def _parse_init_state_data(
-        self, html: str
-    ) -> Optional[Dict[str, Any]]:
+    def _parse_init_state_data(self, html: str) -> Optional[Dict[str, Any]]:
         """从 INIT_STATE SSR 数据中提取视频/图集信息。
 
         新版快手分享页(gifshow.com/chenzhongtech.com) 的数据结构：
@@ -468,9 +460,9 @@ class KuaishouParser(BaseVideoParser):
         for val in init_state.values():
             if not isinstance(val, dict):
                 continue
-            if 'photo' not in val:
+            if "photo" not in val:
                 continue
-            photo_raw = val['photo']
+            photo_raw = val["photo"]
             if isinstance(photo_raw, str):
                 try:
                     photo_raw = json.loads(photo_raw)
@@ -478,7 +470,7 @@ class KuaishouParser(BaseVideoParser):
                     continue
             if isinstance(photo_raw, dict):
                 photo_data = photo_raw
-                single_raw = val.get('single')
+                single_raw = val.get("single")
                 if isinstance(single_raw, str):
                     try:
                         single_data = json.loads(single_raw)
@@ -491,28 +483,29 @@ class KuaishouParser(BaseVideoParser):
         if not photo_data:
             return None
 
-        mv_urls = photo_data.get('mainMvUrls') or []
+        mv_urls = photo_data.get("mainMvUrls") or []
         video_urls = [
-            item.get('url') for item in mv_urls
-            if isinstance(item, dict) and item.get('url')
-            and '.mp4' in item['url']
+            item.get("url")
+            for item in mv_urls
+            if isinstance(item, dict) and item.get("url") and ".mp4" in item["url"]
         ]
-        cover_urls = photo_data.get('coverUrls') or []
+        cover_urls = photo_data.get("coverUrls") or []
         cover_url_list = [
-            item.get('url') for item in cover_urls
-            if isinstance(item, dict) and item.get('url')
+            item.get("url")
+            for item in cover_urls
+            if isinstance(item, dict) and item.get("url")
         ]
 
         if video_urls:
             video_url = self._min_mp4(video_urls[0])
             return {
-                'type': 'video',
-                'video_url': video_url,
-                'video_cover_urls': [cover_url_list] if cover_url_list else [],
-                'photo': photo_data,
+                "type": "video",
+                "video_url": video_url,
+                "video_cover_urls": [cover_url_list] if cover_url_list else [],
+                "photo": photo_data,
             }
 
-        ext_params = photo_data.get('ext_params')
+        ext_params = photo_data.get("ext_params")
         if isinstance(ext_params, str):
             try:
                 ext_params = json.loads(ext_params)
@@ -521,7 +514,7 @@ class KuaishouParser(BaseVideoParser):
 
         atlas_data = None
         if isinstance(ext_params, dict):
-            atlas_data = ext_params.get('atlas')
+            atlas_data = ext_params.get("atlas")
             if isinstance(atlas_data, str):
                 try:
                     atlas_data = json.loads(atlas_data)
@@ -529,54 +522,55 @@ class KuaishouParser(BaseVideoParser):
                     atlas_data = None
 
         if single_data:
-            cdn_list = single_data.get('cdnList') or []
+            cdn_list = single_data.get("cdnList") or []
             cdns = [
-                item.get('cdn') for item in cdn_list
-                if isinstance(item, dict) and item.get('cdn')
+                item.get("cdn")
+                for item in cdn_list
+                if isinstance(item, dict) and item.get("cdn")
             ]
-            music_path = single_data.get('music')
+            music_path = single_data.get("music")
         else:
             cdns = []
             music_path = None
 
-        if photo_data.get('type') == 1 and isinstance(atlas_data, dict):
-            atlas_cdn_list = atlas_data.get('cdnList') or []
+        if photo_data.get("type") == 1 and isinstance(atlas_data, dict):
+            atlas_cdn_list = atlas_data.get("cdnList") or []
             atlas_cdns = [
-                item.get('cdn') for item in atlas_cdn_list
-                if isinstance(item, dict) and item.get('cdn')
+                item.get("cdn")
+                for item in atlas_cdn_list
+                if isinstance(item, dict) and item.get("cdn")
             ]
             if not atlas_cdns:
-                atlas_cdn_raw = atlas_data.get('cdn') or []
+                atlas_cdn_raw = atlas_data.get("cdn") or []
                 if isinstance(atlas_cdn_raw, str):
                     atlas_cdns = [atlas_cdn_raw]
                 elif isinstance(atlas_cdn_raw, list):
                     atlas_cdns = [
-                        item for item in atlas_cdn_raw
-                        if isinstance(item, str) and item
+                        item for item in atlas_cdn_raw if isinstance(item, str) and item
                     ]
-            atlas_music = atlas_data.get('music') or music_path
-            atlas_list = atlas_data.get('list') or []
+            atlas_music = atlas_data.get("music") or music_path
+            atlas_list = atlas_data.get("list") or []
             if isinstance(atlas_list, str):
                 atlas_list = [atlas_list]
             album = self._build_album(atlas_cdns, atlas_music, atlas_list)
             if album:
-                album['photo'] = photo_data
+                album["photo"] = photo_data
                 return album
 
-        if photo_data.get('type') == 1:
+        if photo_data.get("type") == 1:
             return None
 
         if cover_url_list:
             image_url_lists = [cover_url_list]
             bgm = None
             if music_path and cdns:
-                cdn = re.sub(r'https?://', '', cdns[0])
+                cdn = re.sub(r"https?://", "", cdns[0])
                 bgm = f"https://{cdn}{music_path}"
             return {
-                'type': 'album',
-                'image_url_lists': image_url_lists,
-                'bgm': bgm,
-                'photo': photo_data,
+                "type": "album",
+                "image_url_lists": image_url_lists,
+                "bgm": bgm,
+                "photo": photo_data,
             }
 
         return None
@@ -591,9 +585,7 @@ class KuaishouParser(BaseVideoParser):
             解析后的数据，解析失败时为None
         """
         json_match = re.search(
-            r'<script[^>]*>window\.rawData\s*=\s*({.*?});?</script>',
-            html,
-            re.DOTALL
+            r"<script[^>]*>window\.rawData\s*=\s*({.*?});?</script>", html, re.DOTALL
         )
         if json_match:
             try:
@@ -602,14 +594,13 @@ class KuaishouParser(BaseVideoParser):
                 return None
         return None
 
-
     @staticmethod
     def _make_headers() -> tuple:
         """构建下载用的 image/video headers。"""
         ua = (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/120.0.0.0 Safari/537.36'
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
         )
         ref = "https://www.kuaishou.com/"
         return (
@@ -622,12 +613,12 @@ class KuaishouParser(BaseVideoParser):
     ) -> str:
         """从 photo 数据或 URL 中提取时间戳。"""
         if photo_data:
-            ts = photo_data.get('timestamp')
+            ts = photo_data.get("timestamp")
             if ts and isinstance(ts, (int, float)):
                 try:
                     if ts > 1e12:
                         ts = int(ts) // 1000
-                    return datetime.fromtimestamp(int(ts)).strftime('%Y-%m-%d')
+                    return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
                 except (ValueError, OSError):
                     pass
         if fallback_url:
@@ -635,9 +626,7 @@ class KuaishouParser(BaseVideoParser):
         return ""
 
     async def parse(
-        self,
-        session: aiohttp.ClientSession,
-        url: str
+        self, session: aiohttp.ClientSession, url: str
     ) -> Optional[Dict[str, Any]]:
         """解析单个快手链接
 
@@ -661,7 +650,7 @@ class KuaishouParser(BaseVideoParser):
             logger.debug(f"[{self.name}] parse: HTML获取成功，开始提取元数据")
             metadata = self._extract_metadata(html)
             author = self._build_author_info(metadata)
-            title = metadata.get('caption', '') or "快手视频"
+            title = metadata.get("caption", "") or "快手视频"
             if len(title) > 100:
                 title = title[:100]
             image_headers, video_headers = self._make_headers()
@@ -669,9 +658,9 @@ class KuaishouParser(BaseVideoParser):
             # --- 优先尝试从 INIT_STATE 结构化数据解析 ---
             ssr = self._parse_init_state_data(html)
             if ssr:
-                photo = ssr.get('photo') or {}
-                if ssr['type'] == 'video':
-                    vurl = ssr['video_url']
+                photo = ssr.get("photo") or {}
+                if ssr["type"] == "video":
+                    vurl = ssr["video_url"]
                     logger.debug(f"[{self.name}] parse: SSR 检测到视频")
                     return {
                         "url": url,
@@ -680,15 +669,17 @@ class KuaishouParser(BaseVideoParser):
                         "desc": "",
                         "timestamp": self._extract_timestamp_from_photo(photo, vurl),
                         "video_urls": [[vurl]],
-                        "video_cover_urls": ssr.get('video_cover_urls', []),
+                        "video_cover_urls": ssr.get("video_cover_urls", []),
                         "image_urls": [],
                         "image_headers": image_headers,
                         "video_headers": video_headers,
                     }
-                if ssr['type'] == 'album':
-                    image_url_lists = ssr.get('image_url_lists', [])
+                if ssr["type"] == "album":
+                    image_url_lists = ssr.get("image_url_lists", [])
                     if image_url_lists:
-                        first_url = image_url_lists[0][0] if image_url_lists[0] else None
+                        first_url = (
+                            image_url_lists[0][0] if image_url_lists[0] else None
+                        )
                         logger.debug(
                             f"[{self.name}] parse: SSR 解析完成(图集) {url}, "
                             f"title={title[:50]}, count={len(image_url_lists)}"
@@ -698,7 +689,9 @@ class KuaishouParser(BaseVideoParser):
                             "title": title or "快手图集",
                             "author": author,
                             "desc": "",
-                            "timestamp": self._extract_timestamp_from_photo(photo, first_url),
+                            "timestamp": self._extract_timestamp_from_photo(
+                                photo, first_url
+                            ),
                             "video_urls": [],
                             "image_urls": image_url_lists,
                             "image_headers": image_headers,
@@ -724,13 +717,11 @@ class KuaishouParser(BaseVideoParser):
 
             album = self._parse_album(html)
             if album:
-                image_url_lists = album.get('image_url_lists', [])
+                image_url_lists = album.get("image_url_lists", [])
                 if image_url_lists:
                     image_url = self._extract_album_image_url(html)
                     upload_time = (
-                        self._extract_upload_time(image_url)
-                        if image_url
-                        else None
+                        self._extract_upload_time(image_url) if image_url else None
                     )
                     logger.debug(
                         f"[{self.name}] parse: 解析完成(图集regex) {url}, "
@@ -751,9 +742,11 @@ class KuaishouParser(BaseVideoParser):
 
             rawdata = self._parse_rawdata_json(html)
             if rawdata:
-                if 'video' in rawdata:
-                    vurl = rawdata['video'].get('url') or rawdata['video'].get('srcNoMark')
-                    if vurl and '.mp4' in vurl:
+                if "video" in rawdata:
+                    vurl = rawdata["video"].get("url") or rawdata["video"].get(
+                        "srcNoMark"
+                    )
+                    if vurl and ".mp4" in vurl:
                         video_url = self._min_mp4(vurl)
                         upload_time = self._extract_upload_time(video_url)
                         return {
@@ -768,23 +761,23 @@ class KuaishouParser(BaseVideoParser):
                             "video_headers": video_headers,
                         }
 
-                if 'photo' in rawdata and rawdata.get('type') == 1:
-                    cdn_raw = rawdata['photo'].get('cdn', ['p3.a.yximgs.com'])
+                if "photo" in rawdata and rawdata.get("type") == 1:
+                    cdn_raw = rawdata["photo"].get("cdn", ["p3.a.yximgs.com"])
                     if isinstance(cdn_raw, list):
-                        cdns = cdn_raw if len(cdn_raw) > 0 else ['p3.a.yximgs.com']
+                        cdns = cdn_raw if len(cdn_raw) > 0 else ["p3.a.yximgs.com"]
                     elif isinstance(cdn_raw, str):
                         cdns = [cdn_raw]
                     else:
-                        cdns = ['p3.a.yximgs.com']
+                        cdns = ["p3.a.yximgs.com"]
 
-                    img_paths = rawdata['photo'].get('path', [])
+                    img_paths = rawdata["photo"].get("path", [])
                     if isinstance(img_paths, str):
                         img_paths = [img_paths]
 
-                    music_path = rawdata['photo'].get('music')
+                    music_path = rawdata["photo"].get("music")
                     album_data = self._build_album(cdns, music_path, img_paths)
                     if album_data:
-                        image_url_lists = album_data.get('image_url_lists', [])
+                        image_url_lists = album_data.get("image_url_lists", [])
                         if image_url_lists:
                             upload_time = None
                             if image_url_lists[0] and image_url_lists[0][0]:
@@ -803,10 +796,11 @@ class KuaishouParser(BaseVideoParser):
                                 "video_headers": video_headers,
                             }
 
-            if (metadata.get('userName') or
-                    metadata.get('userId') or
-                    metadata.get('caption')):
+            if (
+                metadata.get("userName")
+                or metadata.get("userId")
+                or metadata.get("caption")
+            ):
                 raise RuntimeError(f"无法获取媒体URL: {url}")
 
             raise RuntimeError(f"无法解析此URL: {url}")
-
