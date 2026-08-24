@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.0.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.1.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -29,6 +29,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **闲鱼** | 视频 / 图片 / 文本 | 支持短链、商品页 |
 | **今日头条** | 视频 / 图片 / 文本 | 支持短链、文章、视频、微头条、QQ小程序卡片 |
 | **小黑盒** | 视频 / 图片 / 文本 | 支持游戏详情、BBS 分享、QQ小程序卡片 |
+| **Steam** | 视频 / 图片 / 文本 | |
 | **Twitter/X** | 视频 / 图片 / 文本 | |
 | **Pixiv** | 图片 / 文本 | 支持插画、漫画多页解析 |
 
@@ -46,9 +47,21 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - 每个平台可独立选择输出模式：全部发送、仅文本、仅富媒体或关闭
 - 可选大模型翻译正文和标题，支持 AstrBot 内置 AI 或自定义 OpenAI 兼容接口
 - 支持消息聚合策略：不聚合、全部聚合或按条件聚合
+- 可选将多条链接的文本元数据、热评和翻译统一渲染为一张图片发送
+- 图片渲染支持清新便签、科技感、专业严肃、温和卡片，以及字体族和字号配置
 - 可将引用链接的解析结果和已下载媒体导出为 ZIP 文件
 - 可选 B站 Cookie 解锁高画质 + 管理员协助自动续期
 - 媒体中转模式，跨服务器部署无需共享目录
+
+---
+
+## 🖼️ 文本元数据图片
+
+在 `消息输出 → 文本元数据` 中开启 `将文本元数据渲染为图片` 后，每次解析会把标题、作者、时间、原始链接、简介/正文、热评和翻译节点合并为一张 PNG 图片发送。原文本节点只会在图片成功生成后移除；Pillow、字体或发送链路不可用时会自动回退为原文本。
+
+可在同一配置项下选择 `清新便签`、`科技感`、`专业严肃` 或 `温和卡片` 样式，字体大小有效范围为 16–42。中文字体默认使用插件内置的 Noto Sans CJK；也可以通过 `ASTRBOT_MEDIA_PARSER_FONT` 环境变量指定字体文件。该功能依赖 `requirements.txt` 中的 Pillow。
+
+启用媒体中转后，渲染图片也会注册为文件 Token，并按 `媒体中转 → 中转缓存有效期` 延迟清理。
 
 ---
 
@@ -141,3 +154,15 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 - 如需体验 YouTube 平台链接解析，请下载 [v0.4.1 贡献者预览版](https://github.com/drdon1234/astrbot_plugin_media_parser/releases/tag/v0.4.1)（贡献者：[shangzhimingge](https://github.com/shangzhimingge)）
 - 欢迎提交 PR 以添加更多平台解析支持和新功能
+
+## 🤝 协作与修改规范
+
+本节用于引导使用 AI 协作的开发者。向 AI 提出代码、配置或文档修改请求时，请先明确要求 AI 完整阅读仓库根目录的 `AGENTS.md`，再阅读与任务相关的 `README.md`、`CHANGELOG.md`、`docs/` 文档、现有实现和测试；AI 完成这些阅读并确认任务要求、修改范围和边界后，才能编辑文件。
+
+可以直接把以下要求作为任务前提交给 AI：
+
+> 请先完整阅读 `AGENTS.md`，再阅读与本任务相关的其他文档、现有实现和测试，确认需求、修改范围和边界后再开始修改。保留工作区已有改动，保持原项目的代码风格与实现模式一致，只处理明确要求的内容，并在完成后运行相关检查、说明验证结果和未验证部分。
+
+修改前应先检查现有实现和工作区状态，保留已有改动，只在明确请求范围内工作。修改时保持原项目的代码风格、命名、导入顺序、异常处理、日志语言、模块边界和实现模式，优先复用现有辅助函数、配置 dataclass 与 `MediaMetadata` 契约；不得为了方便引入临时绕过、重复实现、无明确需求的兼容层或架构重构。
+
+README 只记录稳定且对使用者有帮助的平台能力、配置前提、使用方式和已知限制。常规版本更新、内部实现细节、维护记录以及用户无需感知或无需手动处理的变更，不放入 README，应按内容归入 `CHANGELOG.md`、`docs/` 或提交记录。完成修改后应执行与改动直接相关的检查，并说明验证结果和未验证部分；需求边界不明确时不得擅自扩大修改范围。

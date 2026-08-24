@@ -6,7 +6,10 @@ from .cache_marker import (
     mark_files_expire_after,
     stamp_subdir,
 )
-from .file_token import register_files_with_token_service
+from .file_token import (
+    register_file_with_token_service,
+    register_files_with_token_service,
+)
 from .parse_record import ParseRecordManager
 
 __all__ = [
@@ -18,5 +21,6 @@ __all__ = [
     "mark_files_expire_after",
     "stamp_subdir",
     "register_files_with_token_service",
+    "register_file_with_token_service",
     "ParseRecordManager",
 ]

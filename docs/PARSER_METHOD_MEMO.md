@@ -420,32 +420,56 @@ Result.Data.PlayInfoList
 
 ### 游戏详情页
 
-游戏分享链接先归一成标准 Web 详情页：
+游戏分享链接只提取接口所需的 `appid` 与 `game_type`，不再请求 Web 详情页。`appid` 是不透明字符串，不能强制转换为整数：
 
 ```text
 share_game_detail?appid=...
 或 /app/topic/game/{game_type}/{appid}
   ↓
-/app/topic/game/{game_type}/{appid}
+/game/get_game_detail/?appid=...
 ```
 
-解析分三层：
+当游戏分享 ID 不是 Steam 数字 appid、详情接口返回空结果时，再调用 `game_introduction` 获取 Steam appid，然后重新请求游戏详情接口：
 
 ```text
-HTML
-  ├─ M3U8 视频线索
-  └─ 截图/预览图线索
-__NUXT_DATA__
-  └─ 还原 Nuxt/devalue 引用结构
-game_introduction 接口
-  └─ 补充简介、发行时间、开发商、发行商
+game_introduction?steam_appid=...
+  └─ 映射 Steam appid、简介、发行时间与厂商
+        ↓
+/game/get_game_detail/?appid={steam_appid}
+  └─ 标题、评分、价格、标签、统计、奖项、截图和预览媒体
 ```
 
-`__NUXT_DATA__` 不是普通对象，是 Nuxt 的索引引用结构，需要先还原对象树，再找与目标 appid 匹配的游戏详情对象。评分、评价人数、在线人数、价格、奖项、类型标签都从这棵树里整理出来。
+游戏详情响应中的 `about_the_game`、`screenshots`、`image`、`user_num`、`game_award` 等字段直接用于构建文本和媒体候选，不依赖页面 HTML、Nuxt 注入数据或浏览器执行 JavaScript。`user_num.game_data` 提供当前在线、昨日峰值在线、全球销量排行、平均游戏时间等统计；统计值由小黑盒接口实时决定，接口返回 `-` 时按接口原值展示。
 
-游戏简介通常来自 `game_introduction` 接口。页面树提供统计和展示卡片，接口提供更完整的正文、发行信息和厂商信息。两者合并才能形成比较完整的游戏详情。
+## 十一、Steam
 
-## 十一、Twitter/X
+支持能力：视频 / 图片 / 文本
+
+Steam 游戏页 URL 的稳定标识是 `/app/{appid}`。末尾的 slug（例如 `/_/`）只是页面路由占位，不参与游戏识别；以下两种 URL 会解析为同一个 appid：
+
+```text
+https://store.steampowered.com/app/3998900/_/
+https://store.steampowered.com/app/3998900
+```
+
+默认调用 Steam 商店的 `api/appdetails` 接口：
+
+```text
+store.steampowered.com/app/{appid}/...
+  ↓
+store.steampowered.com/api/appdetails/?appids={appid}&l=schinese&cc=cn
+  ├─ 标题、简介、发行日期、开发商、发行商、类型和价格
+  ├─ screenshots / header_image 图片
+  └─ movies HLS、简介内嵌视频和封面
+```
+
+开启 `steam.use_xiaoheihe` 后，Steam 解析器会把相同 appid 转交给小黑盒完整游戏接口；结果仍保留原始 Steam 链接，因此可以获得小黑盒评分、在线人数、峰值、销量排行和平均游戏时间等额外统计。该选项不请求 Steam HTML 页面。
+
+Steam 代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情接口，`image` 控制截图/封面下载，`video` 控制预告片下载。
+
+每个 Steam 预告片保留一个候选组，优先使用 `m3u8:` HLS 地址，失败时按 MP4/WebM 候选降级；解析结果会标记 `video_force_download`，因此预告片必须进入本地缓存后发送。截图、封面和预告片继续携带 Steam 商店页 Referer。
+
+## 十二、Twitter/X
 
 支持能力：视频 / 图片 / 文本
 
@@ -486,7 +510,7 @@ Twitter 响应嵌套很深，不能假设固定路径永远在。递归找带有
 
 一条推文没有图片和视频但有正文，仍然是可解析内容。
 
-## 十二、Pixiv
+## 十三、Pixiv
 
 支持能力：图片 / 文本
 

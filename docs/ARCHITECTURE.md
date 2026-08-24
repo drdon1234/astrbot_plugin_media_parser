@@ -19,6 +19,7 @@
 - 闲鱼：支持 视频 / 图片 / 文本；覆盖短链、H5 商品页和 PC 商品页。
 - 今日头条：支持 视频 / 图片 / 文本；覆盖文章、微头条、视频、短链跳转页和 `message.meta.news.jumpUrl` 小程序卡片。
 - 小黑盒：支持 视频 / 图片 / 文本；覆盖游戏详情页和 BBS/link 帖子。
+- Steam：支持 视频 / 图片 / 文本；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
 
@@ -58,6 +59,7 @@ astrbot_plugin_media_parser/
     │       ├── xianyu.py            # 闲鱼商品页解析器
     │       ├── toutiao.py           # 今日头条文章/微头条/视频解析器
     │       ├── xiaoheihe.py         # 小黑盒游戏详情/BBS 帖子解析器
+    │       ├── steam.py             # Steam 游戏详情页解析器
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
     │       └── pixiv.py             # Pixiv 插画/漫画解析器
     ├── downloader/
@@ -78,6 +80,7 @@ astrbot_plugin_media_parser/
     │       └── video_cover.py       # 视频仅封面模式的首帧截取
     ├── message_adapter/
     │   ├── node_builder.py          # Plain/Image/Video 节点构建
+    │   ├── text_renderer.py         # 文本元数据 PNG 渲染
     │   ├── sender.py                # 聚合/独立/文件发送
     │   └── archive_builder.py       # 解析结果 ZIP 归档
     ├── translation/
@@ -124,6 +127,8 @@ astrbot_plugin_media_parser/
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。现有 `message.*` 路径保持不变，避免 AstrBot 递归更新 schema 时删除用户旧配置。
+
+`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `fresh/tech/serious/card`，字体大小限制为 16–42；默认优先使用插件内置的 Noto Sans CJK，也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定字体文件，再按配置的字体族和系统字体路径回退。渲染失败、字体不可用或缺少 Pillow 时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
 
 配置 schema 对依赖开关的字段使用条件显隐，例如翻译提供商、权限名单、B站 Cookie、管理员协助登录和媒体中转参数。显隐只影响配置页展示，不会删除已保存的隐藏值。
 
@@ -175,9 +180,10 @@ cache/runtime_manager/bilibili/cookie.json
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
-- `ProxyConfig`：全局代理、TikTok、小黑盒、Twitter/X、Pixiv 代理开关。
+- `ProxyConfig`：全局代理、TikTok、小黑盒、Steam、Twitter/X、Pixiv 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录与主动更新指令。
 - `PixivConfig`：Pixiv Web Ajax API 使用的可选 Cookie。
+- `SteamConfig`：Steam 游戏页是否改用小黑盒完整路径解析。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
 - `TranslationConfig`：翻译开关、翻译范围、目标语言、AstrBot 内置或自定义大模型配置。输入/输出上限固定为 4000，超时固定为 60 秒，随机性固定为 0。
 - `AdminConfig`：清理关键词和 debug 模式。
@@ -282,6 +288,7 @@ video_count .. video_count + image_count   图片
 - 仅增强已经存在且模式为 `local` 的文件。
 - 优先使用插件配置 `media_relay.callback_url`；为空时回退 AstrBot 全局 `callback_api_base`。
 - 注册失败不会改变媒体模式，节点层会回退本地文件。
+- 文本元数据渲染生成的 PNG 不属于媒体索引，但在中转开启时会单独注册，并与媒体文件使用相同 TTL。
 - `main.py` 会按 `media_relay.ttl` 延迟清理本次文件，延迟任务受插件生命周期管理。
 
 ### 2.7 消息适配器 `core/message_adapter/`
@@ -291,6 +298,7 @@ video_count .. video_count + image_count   图片
 - 文本元数据节点按 `_text_metadata_fields` 展示标题、作者、发布时间、原始链接和简介/正文；访问状态、视频大小、跳过原因和解析错误始终保留。简介/正文放在最后，并用分隔符与前面的元数据分开。
 - 热评节点和翻译节点是独立文本节点，不混入文本元数据节点。热评不进入翻译流程。
 - 翻译结果来自后台大模型任务，按链接独立请求，每条请求最多包含标题和简介/正文；无需翻译时不会生成翻译节点。
+- `collect_text_metadata()` 按发送顺序收集基础文本、热评和翻译；启用图片渲染时，`strip_text_metadata_nodes()` 只在 PNG 生成成功后移除这些 Plain 节点。`text_renderer.py` 在线程中调用 Pillow 绘制中文换行、字段标签和样式背景。
 - 富媒体节点只消费 `video_modes/image_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的 URL，`skip` 不构建节点。
 - 内部先尝试构建富媒体节点，再构建文本节点，这样节点构建失败时可把原因回填到 metadata，文本节点可展示。
 - `build_all_nodes()` 返回 `BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)`。
@@ -369,6 +377,10 @@ ZIP 命令?
   └─ 否 -> media_relay.enable 时 register_files_with_token_service()
            ↓
          build_all_nodes() + 等待翻译
+           ↓
+         message.text_metadata.render_to_image=true?
+           ├─ 是 -> 合并文本节点 -> Pillow 生成 PNG -> 成功后移除 Plain 节点
+           └─ 否/失败 -> 保留原文本节点
            ↓
          summarize_node_counts()
            ↓
@@ -453,6 +465,7 @@ build_all_nodes()
   ├─ build_text_node()
   ├─ build_hot_comments_node()
   ├─ Plain 文本按 4000 字上限统一分片
+  ├─ 可选 text_renderer.py 将所有文本节点合并为 PNG
   ├─ 判定大媒体
   └─ 分类 temp_files/video_files
   ↓
@@ -561,7 +574,7 @@ DownloadManager 决策
 cache_marker.stamp_subdir() 写 .astrbot_media_parser
   ↓
 节点构建
-  ├─ relay token URL
+  ├─ relay token URL（媒体文件或渲染 PNG）
   ├─ fromFileSystem()
   └─ fromURL()
   ↓
@@ -584,6 +597,9 @@ DASH 临时 `.m4s` 在合并后由 DASH 处理器清理；M3U8 临时分片目�
 proxy.address
 proxy.tiktok
 proxy.xiaoheihe_video
+proxy.steam.parse
+proxy.steam.image
+proxy.steam.video
 proxy.pixiv
 proxy.twitter.parse
 proxy.twitter.image
@@ -594,6 +610,7 @@ proxy.twitter.video
 
 - `TikTokParser`：TikTok 解析和媒体代理。
 - `XiaoheiheParser`：视频代理。
+- `SteamParser`：Steam 官方接口解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
 - `TwitterParser`：Twitter/X 解析、图片、视频代理。
 - `PixivParser`：Pixiv Web Ajax API 解析和图片下载共用同一代理开关。
 
@@ -634,4 +651,4 @@ metadata.proxy_url > ConfigManager.proxy.address
 - 下载阶段：单个候选失败会尝试下一个候选；媒体项全部失败写入 skip reason；本条 metadata 全部媒体失败时清理对应缓存子目录。
 - 大小限制：普通视频下载前预检，DASH/M3U8/强制缓存视频下载后再兜底检查，超限会删除文件并置为 `skip`。
 - 发送阶段：独立节点采用 best-effort，部分失败会给用户明确提示；预期节点全部发送失败时抛出聚合错误，不再记录虚假的“发送完成”。主发送异常始终进入 finally 清理。
-- 外部子进程：DASH/M3U8/图片转换涉及 ffmpeg，TikTok 涉及系统 curl；超时或取消路径会终止并回收子进程。
+- 外部依赖：DASH/M3U8/图片转换涉及 ffmpeg，TikTok 涉及系统 curl，文本元数据图片渲染依赖 Pillow 和可用中文字体；超时或取消路径会终止并回收子进程。

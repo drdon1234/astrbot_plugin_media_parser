@@ -8,6 +8,7 @@ from .xiaohongshu import XiaohongshuParser
 from .xianyu import XianyuParser
 from .toutiao import ToutiaoParser
 from .xiaoheihe import XiaoheiheParser
+from .steam import SteamParser
 from .twitter import TwitterParser
 from .pixiv import PixivParser
 from .base import BaseVideoParser
@@ -22,6 +23,7 @@ __all__ = [
     'XianyuParser',
     'ToutiaoParser',
     'XiaoheiheParser',
+    'SteamParser',
     'TwitterParser',
     'PixivParser',
     'BaseVideoParser'

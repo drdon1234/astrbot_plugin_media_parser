@@ -23,6 +23,52 @@ def _split_plain_node(node: Optional[Plain]) -> List[Plain]:
     return [Plain(chunk) for chunk in split_message_text(node.text)]
 
 
+def collect_text_metadata(
+    all_link_nodes: List[List[Union[Plain, Image, Video]]],
+    translation_nodes: Optional[List[List[Plain]]] = None,
+) -> str:
+    """按当前发送顺序收集所有文本节点内容。
+
+    Args:
+        all_link_nodes: 每条链接对应的消息节点列表。
+        translation_nodes: 按解析结果顺序排列的翻译节点列表。
+
+    Returns:
+        使用分隔线连接后的完整文本；没有文本节点时返回空字符串。
+    """
+    blocks: List[str] = []
+    for link_nodes in all_link_nodes:
+        text_parts = [
+            str(node.text or "").strip()
+            for node in link_nodes
+            if isinstance(node, Plain) and str(node.text or "").strip()
+        ]
+        if text_parts:
+            blocks.append("\n".join(text_parts))
+
+    for link_nodes in translation_nodes or []:
+        text_parts = [
+            str(node.text or "").strip()
+            for node in link_nodes
+            if isinstance(node, Plain) and str(node.text or "").strip()
+        ]
+        if text_parts:
+            blocks.append("\n".join(text_parts))
+
+    return f"\n\n{TEXT_SECTION_SEPARATOR}\n\n".join(blocks)
+
+
+def strip_text_metadata_nodes(
+    all_link_nodes: List[List[Union[Plain, Image, Video]]],
+    translation_nodes: Optional[List[List[Plain]]] = None,
+) -> None:
+    """从节点列表移除已渲染到图片中的文本节点。"""
+    for link_nodes in all_link_nodes:
+        link_nodes[:] = [node for node in link_nodes if not isinstance(node, Plain)]
+    for link_nodes in translation_nodes or []:
+        link_nodes[:] = [node for node in link_nodes if not isinstance(node, Plain)]
+
+
 def _resolve_output_flag(metadata: Dict[str, Any], key: str, default: bool) -> bool:
     value = metadata.get(key)
     if value is None:

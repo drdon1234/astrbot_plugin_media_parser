@@ -103,6 +103,17 @@
                 ],
                 "default": "全部发送"
             },
+            "steam": {
+                "description": "Steam",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "twitter": {
                 "description": "Twitter/X",
                 "type": "string",
@@ -243,6 +254,51 @@
                         "type": "bool",
                         "hint": "仅普通逐条发送时生效；聚合和 ZIP 不引用。只让文本元数据节点引用对应用户消息，媒体节点不引用。",
                         "default": false
+                    },
+                    "render_to_image": {
+                        "description": "将文本元数据渲染为图片",
+                        "type": "bool",
+                        "hint": "开启后将基础文本、热评和翻译等所有文本节点合并渲染为一张图片发送；渲染失败时自动保留原文本发送。",
+                        "default": false
+                    },
+                    "render_style": {
+                        "description": "图片渲染风格",
+                        "type": "string",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "options": [
+                            "清新便签",
+                            "科技感",
+                            "专业严肃",
+                            "温和卡片"
+                        ],
+                        "default": "清新便签"
+                    },
+                    "render_font_family": {
+                        "description": "图片字体",
+                        "type": "string",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "options": [
+                            "默认黑体",
+                            "专业宋体",
+                            "清新文楷",
+                            "标题手札",
+                            "科技窄体"
+                        ],
+                        "hint": "字体优先使用 ASTRBOT_MEDIA_PARSER_FONT 环境变量指定的字体文件；未指定时按系统可用字体回退。",
+                        "default": "默认黑体"
+                    },
+                    "render_font_size": {
+                        "description": "图片字体大小",
+                        "type": "int",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "hint": "有效范围 16–42，数值越大图片越长。",
+                        "default": 24
                     }
                 }
             },
@@ -725,6 +781,18 @@
             }
         }
     },
+    "steam": {
+        "description": "Steam 设置",
+        "type": "object",
+        "hint": "Steam 游戏页默认使用 Steam 官方接口；开启后改用小黑盒完整游戏路径，可获得更多评分、在线人数和统计信息。",
+        "items": {
+            "use_xiaoheihe": {
+                "description": "使用小黑盒路径解析 Steam 游戏页",
+                "type": "bool",
+                "default": false
+            }
+        }
+    },
     "proxy": {
         "description": "代理设置",
         "type": "object",
@@ -747,6 +815,28 @@
                 "type": "bool",
                 "hint": "需要先填写“代理地址”。",
                 "default": true
+            },
+            "steam": {
+                "description": "Steam 代理",
+                "type": "object",
+                "hint": "需要先填写“代理地址”；解析开关控制 Steam 或小黑盒详情接口请求，图片和视频开关分别控制媒体下载。",
+                "items": {
+                    "parse": {
+                        "description": "解析",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "image": {
+                        "description": "图片下载",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "video": {
+                        "description": "视频下载",
+                        "type": "bool",
+                        "default": true
+                    }
+                }
             },
             "pixiv": {
                 "description": "Pixiv 解析与图片下载使用代理",

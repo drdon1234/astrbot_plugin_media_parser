@@ -465,16 +465,25 @@ class XiaoheiheDevice:
 class XiaoheiheParser(BaseVideoParser):
     "XiaoheiheParser 类。"
 
-    def __init__(self, use_video_proxy: bool = False, proxy_url: str = None):
+    def __init__(
+        self,
+        use_video_proxy: bool = False,
+        proxy_url: str = None,
+        use_parse_proxy: Optional[bool] = None,
+    ):
         """初始化解析器并设置并发限制与默认请求头。
 
         Args:
             use_video_proxy: 视频下载是否使用代理
             proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port）
+            use_parse_proxy: 游戏详情与帖子接口请求是否使用代理；省略时沿用视频代理开关
         """
         super().__init__("xiaoheihe")
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
+        self.use_parse_proxy = (
+            use_video_proxy if use_parse_proxy is None else bool(use_parse_proxy)
+        )
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._default_headers = {
             "User-Agent": UA,
@@ -617,7 +626,30 @@ class XiaoheiheParser(BaseVideoParser):
                 return normalized
         return None
 
-    def _extract_appid_game_type(self, url: str) -> Tuple[Optional[int], Optional[str]]:
+    @staticmethod
+    def _normalize_game_appid(value: Any) -> Optional[str]:
+        """校验并规范化小黑盒游戏 ID。"""
+        normalized = str(value or "").strip()
+        if normalized.isdigit() and int(normalized) <= 0:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", normalized):
+            return normalized
+        return None
+
+    @staticmethod
+    def _game_ids_match(left: Any, right: Any) -> bool:
+        """判断两个游戏 ID 是否指向同一项。"""
+        left_text = str(left or "").strip()
+        right_text = str(right or "").strip()
+        if not left_text or not right_text:
+            return False
+        if left_text == right_text:
+            return True
+        if left_text.isdigit() and right_text.isdigit():
+            return int(left_text) == int(right_text)
+        return False
+
+    def _extract_appid_game_type(self, url: str) -> Tuple[Optional[str], Optional[str]]:
         """从 URL 中提取 appid 与 game_type。
 
         Args:
@@ -625,7 +657,7 @@ class XiaoheiheParser(BaseVideoParser):
 
         Returns:
             二元组 (appid, game_type)：
-            - appid: 成功时为 int，否则为 None
+            - appid: 成功时为字符串，否则为 None
             - game_type: 成功时为字符串（例如 pc），否则为 None
         """
         u = self._parse_http_url(url)
@@ -635,42 +667,43 @@ class XiaoheiheParser(BaseVideoParser):
         host = (u.hostname or "").lower().strip(".")
         path = u.path or ""
 
-        if host == "api.xiaoheihe.cn" and path.rstrip("/") == "/game/share_game_detail":
+        is_share_path = path.rstrip("/") == "/game/share_game_detail"
+        if host in {
+            "api.xiaoheihe.cn",
+            "xiaoheihe.cn",
+            "www.xiaoheihe.cn",
+        } and is_share_path:
             qs = parse_qs(u.query or "")
             raw_appid = (qs.get("appid") or [None])[0]
             raw_game_type = (qs.get("game_type") or ["pc"])[0] or "pc"
-            if not re.fullmatch(r"\d{1,12}", str(raw_appid or "")):
+            appid = self._normalize_game_appid(raw_appid)
+            if not appid:
                 return None, None
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", str(raw_game_type)):
                 return None, None
-            appid = int(raw_appid)
-            return (appid, str(raw_game_type)) if appid > 0 else (None, None)
+            return appid, str(raw_game_type).lower()
 
         if host in {"xiaoheihe.cn", "www.xiaoheihe.cn"}:
             m = re.fullmatch(
                 r"/app/topic/game/(?P<gt>[A-Za-z0-9_-]{1,32})/"
-                r"(?P<appid>\d{1,12})/?",
+                r"(?P<appid>[A-Za-z0-9_-]{1,128})/?",
                 path,
                 re.IGNORECASE,
             )
             if m:
-                appid = int(m.group("appid"))
-                return (appid, m.group("gt")) if appid > 0 else (None, None)
+                return (
+                    self._normalize_game_appid(m.group("appid")),
+                    m.group("gt").lower(),
+                )
+            m = re.fullmatch(
+                r"/games/detail/(?P<appid>[A-Za-z0-9_-]{1,128})/?",
+                path,
+                re.IGNORECASE,
+            )
+            if m:
+                return self._normalize_game_appid(m.group("appid")), "pc"
 
         return None, None
-
-    def _canonical_web_url(self, appid: int, game_type: str) -> str:
-        """构造规范的小黑盒 Web 详情页链接。
-
-        Args:
-            appid: 游戏 appid。
-            game_type: 游戏类型（例如 pc）。
-
-        Returns:
-            标准化后的网页链接。
-        """
-        gt = (game_type or "pc").strip().lower()
-        return f"https://www.xiaoheihe.cn/app/topic/game/{gt}/{appid}"
 
     @staticmethod
     def _unique_keep_order(urls: Iterable[str]) -> List[str]:
@@ -731,23 +764,24 @@ class XiaoheiheParser(BaseVideoParser):
 
     async def _fetch_game_introduction_api(
         self,
-        steam_appid: int,
+        steam_appid: str,
         session: aiohttp.ClientSession,
     ) -> Optional[Dict[str, Any]]:
         """调用小黑盒 `game_introduction` 接口获取简介与发行信息。
 
         Args:
-            steam_appid: Steam appid。
+            steam_appid: 小黑盒游戏 ID 或 Steam appid。
             session: aiohttp 会话。
 
         Returns:
             成功时返回接口 `result` 字段（dict），失败返回 None。
         """
-        if not steam_appid:
+        appid = self._normalize_game_appid(steam_appid)
+        if not appid:
             return None
         api_url = (
             "https://api.xiaoheihe.cn/game/game_introduction/"
-            f"?steam_appid={steam_appid}&return_json=1"
+            f"?steam_appid={appid}&return_json=1"
         )
         async with session.get(
             api_url,
@@ -769,9 +803,60 @@ class XiaoheiheParser(BaseVideoParser):
             for key in ("steam_appid", "appid")
             if result.get(key) not in (None, "")
         }
-        if returned_ids and str(steam_appid) not in returned_ids:
+        if returned_ids and appid.isdigit() and not any(
+            self._game_ids_match(appid, returned_id) for returned_id in returned_ids
+        ):
             raise RuntimeError("小黑盒游戏简介接口返回了其他游戏的数据")
         return result
+
+    async def _fetch_game_detail_api(
+        self,
+        appid: str,
+        session: aiohttp.ClientSession,
+    ) -> Dict[str, Any]:
+        """调用小黑盒完整游戏详情接口。"""
+        normalized = self._normalize_game_appid(appid)
+        if not normalized:
+            return {}
+        return await self._fetch_signed_api(
+            session,
+            "/game/get_game_detail/",
+            {"appid": normalized, "heybox_id": ""},
+        )
+
+    async def _fetch_game_data(
+        self,
+        appid: str,
+        session: aiohttp.ClientSession,
+    ) -> Dict[str, Any]:
+        """获取并合并小黑盒游戏详情接口数据。"""
+        detail = await self._fetch_game_detail_api(appid, session)
+        intro: Optional[Dict[str, Any]] = None
+
+        detail_name = detail.get("name") if isinstance(detail, dict) else None
+        if not detail or not isinstance(detail_name, str) or not detail_name.strip():
+            intro = await self._fetch_game_introduction_api(appid, session)
+            resolved_appid = None
+            if intro:
+                for key in ("steam_appid", "appid"):
+                    resolved_appid = self._normalize_game_appid(intro.get(key))
+                    if resolved_appid:
+                        break
+            if resolved_appid:
+                resolved_detail = await self._fetch_game_detail_api(
+                    resolved_appid, session
+                )
+                if resolved_detail:
+                    detail = resolved_detail
+
+        if intro:
+            merged = dict(intro)
+            merged.update(detail or {})
+            detail = merged
+        detail_name = detail.get("name") if isinstance(detail, dict) else None
+        if not detail or not isinstance(detail_name, str) or not detail_name.strip():
+            raise RuntimeError("未获取到小黑盒游戏详情")
+        return detail
 
     @staticmethod
     def _format_cn_ymd_to_dotted(text: str) -> str:
@@ -796,166 +881,6 @@ class XiaoheiheParser(BaseVideoParser):
             y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
             return f"{y}.{mo}.{d}"
         return text.strip()
-
-    async def _fetch_html(self, url: str, session: aiohttp.ClientSession) -> str:
-        """拉取页面 HTML。
-
-        Args:
-            url: 页面链接。
-            session: aiohttp 会话。
-
-        Returns:
-            HTML 文本。
-
-        Raises:
-            RuntimeError: 当请求失败（非 200）时。
-        """
-        async with session.get(
-            url,
-            headers=self._default_headers,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as response:
-            if response.status != 200:
-                raise RuntimeError(f"无法获取页面内容，状态码: {response.status}")
-            return await response.text()
-
-    def _extract_nuxt_data_payload(self, html: str) -> Optional[list]:
-        """从 HTML 中提取 Nuxt 注入的 `__NUXT_DATA__` JSON payload。
-
-        Args:
-            html: 页面 HTML。
-
-        Returns:
-            解析成功时返回 list payload，否则 None。
-        """
-        if not html:
-            return None
-        m = re.search(
-            r'<script[^>]+id="__NUXT_DATA__"[^>]*>(.*?)</script>',
-            html,
-            re.S | re.I,
-        )
-        if not m:
-            return None
-        raw = m.group(1).strip()
-        try:
-            data = json.loads(raw)
-        except Exception:
-            return None
-        return data if isinstance(data, list) else None
-
-    def _devalue_resolve_root(self, payload: list) -> Any:
-        """将 Nuxt 的 devalue/索引引用结构还原为普通 Python 对象树。
-
-        Nuxt `__NUXT_DATA__` 中经常用“索引引用”来压缩结构，本函数会：
-        - 将 `int` 索引引用解析为对应条目
-        - 处理部分包装结构（Reactive/Ref/Readonly 等）
-        - 尝试规避循环引用导致的递归死循环
-
-        Args:
-            payload: `__NUXT_DATA__` 解析得到的 list。
-
-        Returns:
-            还原后的根对象（通常为 dict/list）。
-        """
-        n = len(payload)
-        memo: Dict[int, Any] = {}
-        resolving: set[int] = set()
-
-        def resolve(v: Any) -> Any:
-            "处理resolve逻辑。"
-            if isinstance(v, int) and 0 <= v < n:
-                return resolve_idx(v)
-            if isinstance(v, list):
-                if (
-                    len(v) == 2
-                    and isinstance(v[0], str)
-                    and v[0]
-                    in {
-                        "ShallowReactive",
-                        "Reactive",
-                        "Ref",
-                        "ShallowRef",
-                        "Readonly",
-                        "ShallowReadonly",
-                    }
-                ):
-                    return resolve(v[1])
-                return [resolve(x) for x in v]
-            if isinstance(v, dict):
-                return {k: resolve(val) for k, val in v.items()}
-            return v
-
-        def resolve_idx(idx: int) -> Any:
-            "处理resolve idx逻辑。"
-            if idx in memo:
-                return memo[idx]
-            if idx in resolving:
-                return None
-            resolving.add(idx)
-            memo[idx] = None
-            memo[idx] = resolve(payload[idx])
-            resolving.remove(idx)
-            return memo[idx]
-
-        return resolve(0)
-
-    @staticmethod
-    def _find_best_game_dict(root: Any, appid: int) -> Optional[Dict[str, Any]]:
-        """在还原后的对象树中寻找最“像游戏详情”的 dict。
-
-        Args:
-            root: `_devalue_resolve_root` 的返回值。
-            appid: 目标 appid（steam_appid/appid 匹配）。
-
-        Returns:
-            匹配到的游戏详情 dict；若未找到返回 None。
-        """
-        if not appid:
-            return None
-        best: Optional[Dict[str, Any]] = None
-        best_score = -1
-        stack = [root]
-        expected_appid = str(appid)
-
-        def matches_appid(value: Any) -> bool:
-            if isinstance(value, bool) or value in (None, ""):
-                return False
-            return str(value).strip() == expected_appid
-
-        while stack:
-            cur = stack.pop()
-            if isinstance(cur, dict):
-                if matches_appid(cur.get("appid")) or matches_appid(
-                    cur.get("steam_appid")
-                ):
-                    score = 0
-                    for k in (
-                        "about_the_game",
-                        "name",
-                        "name_en",
-                        "price",
-                        "heybox_price",
-                        "user_num",
-                        "game_award",
-                    ):
-                        if k in cur:
-                            score += 3
-                    if "comment_stats" in cur:
-                        score += 2
-                    if matches_appid(cur.get("steam_appid")):
-                        score += 2
-                    if score > best_score:
-                        best = cur
-                        best_score = score
-                for v in cur.values():
-                    if isinstance(v, (dict, list)):
-                        stack.append(v)
-            elif isinstance(cur, list):
-                for v in cur:
-                    if isinstance(v, (dict, list)):
-                        stack.append(v)
-        return best
 
     @staticmethod
     def _format_people_count(count: Optional[int]) -> str:
@@ -1041,48 +966,111 @@ class XiaoheiheParser(BaseVideoParser):
         t = re.sub(r"\n{3,}", "\n\n", t).strip()
         return t
 
-    def _parse_types_from_html(self, html: str) -> str:
-        """从页面 HTML 中解析“类型/标签”文本。
+    @staticmethod
+    def _normalize_media_url(value: Any) -> Optional[str]:
+        """校验接口返回的媒体 URL。"""
+        if not isinstance(value, str):
+            return None
+        url = html_lib.unescape(value).replace("\\/", "/").strip()
+        try:
+            parsed = urlparse(url)
+        except (TypeError, ValueError):
+            return None
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return None
+        return url
 
-        Args:
-            html: 页面 HTML。
+    def _extract_game_media(
+        self, game: Dict[str, Any]
+    ) -> Tuple[List[str], List[str]]:
+        """从游戏详情接口的结构化字段中提取视频和图片 URL。"""
+        video_urls: List[str] = []
+        image_urls: List[str] = []
 
-        Returns:
-            拼接后的类型文本（可能为空字符串）。
-        """
-        group1 = ""
-        group2_tags: List[str] = []
+        def append_url(target: List[str], value: Any) -> None:
+            normalized = self._normalize_media_url(value)
+            if normalized:
+                target.append(normalized)
 
-        m = re.search(
-            r'<div class="row-2">.*?<div class="tags">(.*?)</div></div>',
-            html,
-            re.S | re.I,
+        for key in ("image", "header_img", "header_image"):
+            append_url(image_urls, game.get(key))
+
+        screenshots = game.get("screenshots")
+        if isinstance(screenshots, list):
+            for item in screenshots:
+                if not isinstance(item, dict):
+                    continue
+                media_type = str(item.get("type") or "").strip().lower()
+                direct_values = [
+                    item.get(key)
+                    for key in (
+                        "url",
+                        "video_url",
+                        "videoUrl",
+                        "src",
+                        "source",
+                        "play_url",
+                        "download_url",
+                    )
+                ]
+                if media_type in {"movie", "video"}:
+                    for value in direct_values:
+                        candidate = self._normalize_media_url(value)
+                        if not candidate:
+                            continue
+                        if re.search(
+                            r"\.(?:jpg|jpeg|png|webp|avif)(?:[?#]|$)",
+                            candidate,
+                            re.IGNORECASE,
+                        ):
+                            image_urls.append(candidate)
+                        else:
+                            video_urls.append(candidate)
+                    append_url(image_urls, item.get("thumbnail"))
+                else:
+                    for value in direct_values:
+                        append_url(image_urls, value)
+                    append_url(image_urls, item.get("thumbnail"))
+
+        intro_html = game.get("about_the_game")
+        if isinstance(intro_html, str):
+            for value in re.findall(
+                r"<source\b[^>]*\bsrc\s*=\s*['\"]([^'\"]+)['\"]",
+                intro_html,
+                re.IGNORECASE,
+            ):
+                append_url(video_urls, value)
+            for value in re.findall(
+                r"<img\b[^>]*\bsrc\s*=\s*['\"]([^'\"]+)['\"]",
+                intro_html,
+                re.IGNORECASE,
+            ):
+                append_url(image_urls, value)
+
+        return (
+            self._unique_keep_order(video_urls),
+            self._unique_keep_order(image_urls),
         )
-        tags_html = m.group(1) if m else ""
-        if tags_html:
-            m2 = re.search(
-                r'<div class="tag common"[^>]*>(.*?)</div>', tags_html, re.S | re.I
-            )
-            if m2:
-                spans = re.findall(r"<span[^>]*>(.*?)</span>", m2.group(1), re.S | re.I)
-                toks = [self._strip_tags(x) for x in spans]
-                toks = [re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", t) for t in toks]
-                toks = [t for t in toks if t]
-                if toks:
-                    group1 = " ".join(toks)
 
-            raw_tags = re.findall(
-                r'<p class="tag"[^>]*>(.*?)</p>', tags_html, re.S | re.I
-            )
-            group2_tags = [self._strip_tags(t) for t in raw_tags]
-            group2_tags = [t for t in group2_tags if t]
-
-        parts: List[str] = []
-        if group1:
-            parts.append(f"[ {group1} ]")
-        if group2_tags:
-            parts.append(f"[ {' '.join(group2_tags)} ]")
-        return " ".join(parts).strip()
+    def _extract_game_types(self, game: Dict[str, Any]) -> str:
+        """从游戏详情接口提取类型标签。"""
+        values: List[str] = []
+        for key in ("genres", "tags", "game_tags"):
+            raw_values = game.get(key)
+            if isinstance(raw_values, str):
+                raw_values = [raw_values]
+            if not isinstance(raw_values, list):
+                continue
+            for value in raw_values:
+                if isinstance(value, dict):
+                    value = value.get("name") or value.get("desc") or value.get(
+                        "value"
+                    )
+                text = self._strip_tags(str(value or "")).strip()
+                if text:
+                    values.append(text)
+        values = self._unique_keep_order(values)
+        return f"[ {' '.join(values)} ]" if values else ""
 
     async def _fetch_signed_api(
         self, session: aiohttp.ClientSession, path: str, params: Dict[str, Any]
@@ -1101,7 +1089,7 @@ class XiaoheiheParser(BaseVideoParser):
             "device_info": "Chrome",
         }
         api_url = f"https://api.xiaoheihe.cn{path}"
-        proxy = self.proxy_url if self.use_video_proxy else None
+        proxy = self.proxy_url if self.use_parse_proxy else None
         last_error = None
         for attempt in range(2):
             signed = XiaoheiheSign().sign(path)
@@ -1261,10 +1249,9 @@ class XiaoheiheParser(BaseVideoParser):
         """解析小黑盒链接并返回统一结构的结果字典。
 
         解析流程概览：
-        - 从输入 URL 提取 appid/game_type 并规范化为 Web 详情页
-        - 拉取 HTML：提取 m3u8 与图片直链
-        - 解析 `__NUXT_DATA__`：提取评分/价格/奖项/统计信息
-        - 调用 `game_introduction`：补全简介、发行时间、厂商信息
+        - 从输入 URL 提取 appid/game_type
+        - 调用游戏详情接口，必要时通过 `game_introduction` 映射 Steam appid
+        - 从接口返回的结构化字段提取文本与媒体
 
         Args:
             session: aiohttp 会话。
@@ -1286,54 +1273,34 @@ class XiaoheiheParser(BaseVideoParser):
             if not appid or not game_type:
                 raise RuntimeError(f"无法从URL提取 appid/game_type: {url}")
 
-            web_url = self._canonical_web_url(appid, game_type)
-
-            logger.debug(f"[{self.name}] parse: 使用Web链接 {web_url}")
-
-            html = await self._fetch_html(web_url, session)
-
-            videos = self._unique_keep_order(
-                re.findall(r"https?://[^\"'\s<>]+\.m3u8(?:\?[^\"'\s<>]*)?", html, re.I)
+            logger.debug(
+                f"[{self.name}] parse: 请求游戏接口 appid={appid}, game_type={game_type}"
             )
-            all_images = re.findall(
-                r"https?://[^\"'\s<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^\"'\s<>]*)?",
-                html,
-                re.I,
-            )
-            images: List[str] = []
-            for img in self._unique_keep_order(all_images):
-                img_lower = img.lower()
-                if "/thumbnail/" in img_lower:
-                    continue
-                if any(
-                    kw in img_lower
-                    for kw in ["gameimg", "steam_item_assets", "screenshot", "game"]
-                ):
-                    images.append(img)
-
-            types = self._parse_types_from_html(html)
-
-            payload = self._extract_nuxt_data_payload(html)
-            if not payload:
-                raise RuntimeError("未找到 __NUXT_DATA__，无法解析统计/价格/奖项")
-            root = self._devalue_resolve_root(payload)
-            game = self._find_best_game_dict(root, appid)
-            if not game:
-                raise RuntimeError("未找到游戏详情数据（Nuxt 解析失败）")
+            game = await self._fetch_game_data(appid, session)
 
             name = game.get("name") if isinstance(game.get("name"), str) else ""
             name_en = (
                 game.get("name_en") if isinstance(game.get("name_en"), str) else ""
             )
-            title = f"{name}（{name_en}）" if (name and name_en) else (name or name_en)
+            if not name:
+                topic_detail = game.get("topic_detail")
+                if isinstance(topic_detail, dict):
+                    name = (
+                        topic_detail.get("name")
+                        if isinstance(topic_detail.get("name"), str)
+                        else ""
+                    )
+            title = (
+                f"{name}（{name_en}）"
+                if name and name_en and name != name_en
+                else (name or name_en)
+            )
             if not title:
                 raise RuntimeError("未解析到游戏标题")
 
-            score = (
-                str(game.get("score")).strip()
-                if isinstance(game.get("score"), str)
-                else ""
-            )
+            score = str(game.get("score") or "").strip()
+            if not score:
+                score = str(game.get("score_desc") or "").strip()
             score_count = ""
             comment_stats = (
                 game.get("comment_stats")
@@ -1341,30 +1308,28 @@ class XiaoheiheParser(BaseVideoParser):
                 else {}
             )
             score_comment = comment_stats.get("score_comment")
-            if isinstance(score_comment, int):
-                score_count = self._format_people_count(score_comment)
+            try:
+                score_comment_value = int(score_comment)
+            except (TypeError, ValueError):
+                score_comment_value = 0
+            if score_comment_value > 0:
+                score_count = self._format_people_count(score_comment_value)
             rating_line = ""
             if score:
                 rating_line = f"小黑盒评分：{score}"
                 if score_count:
                     rating_line = f"小黑盒评分：{score}（{score_count}）"
 
-            steam_appid = game.get("steam_appid")
-            if isinstance(steam_appid, str) and steam_appid.isdigit():
-                steam_appid = int(steam_appid)
-            if not isinstance(steam_appid, int) or steam_appid <= 0:
-                steam_appid = appid
+            types = self._extract_game_types(game)
+            videos, images = self._extract_game_media(game)
 
-            intro_api = await self._fetch_game_introduction_api(steam_appid, session)
-            if not intro_api or not isinstance(intro_api.get("about_the_game"), str):
-                raise RuntimeError("未获取到简介（game_introduction 接口失败）")
-
-            intro = self._format_intro_text(intro_api.get("about_the_game"))
+            intro_raw = game.get("about_the_game")
+            intro = self._format_intro_text(intro_raw) if isinstance(intro_raw, str) else ""
             release_date = self._format_cn_ymd_to_dotted(
-                str(intro_api.get("release_date") or "").strip()
+                str(game.get("release_date") or "").strip()
             )
-            developers = intro_api.get("developers")
-            publishers = intro_api.get("publishers")
+            developers = game.get("developers")
+            publishers = game.get("publishers")
             developer = ""
             publisher = ""
             if isinstance(developers, list):
@@ -1532,7 +1497,7 @@ class XiaoheiheParser(BaseVideoParser):
             video_headers = build_request_headers(is_video=True, referer=referer)
 
             result_dict = {
-                "url": web_url,
+                "url": url,
                 "source_url": url,
                 "title": title or "",
                 "author": "",

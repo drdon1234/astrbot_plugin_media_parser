@@ -1,5 +1,8 @@
 import asyncio
 import copy
+import tempfile
+import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -20,6 +23,7 @@ from .core.storage import (
     cleanup_marked_in,
     mark_files_expire_after,
     ParseRecordManager,
+    register_file_with_token_service,
     register_files_with_token_service,
 )
 from .core.constants import Config
@@ -27,8 +31,11 @@ from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.node_builder import (
     build_all_nodes,
     build_translation_nodes_for_all,
+    collect_text_metadata,
     summarize_node_counts,
+    strip_text_metadata_nodes,
 )
+from .core.message_adapter.text_renderer import render_text_metadata_image
 from .core.message_adapter.archive_builder import (
     ArchiveSizeLimitError,
     build_zip_archive,
@@ -44,7 +51,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "1.0.0",
+    "1.1.0",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -381,6 +388,78 @@ class VideoParserPlugin(Star):
             return []
         return build_translation_nodes_for_all(translation_metadata_list)
 
+    async def _render_text_metadata_output(
+        self,
+        build_result,
+        translation_nodes,
+        cfg,
+    ) -> str:
+        """将所有文本节点合并渲染为图片，失败时保留原文本节点。"""
+        if not getattr(cfg.message.text_metadata, "render_to_image", False):
+            return ""
+
+        text = collect_text_metadata(
+            build_result.all_link_nodes,
+            translation_nodes,
+        )
+        if not text:
+            return ""
+
+        cache_root = str(cfg.download.cache_dir or "").strip()
+        if cache_root:
+            image_dir = Path(cache_root).resolve() / "rendered_text"
+        else:
+            image_dir = Path(tempfile.gettempdir()).resolve() / "astrbot_media_parser"
+        image_path = image_dir / f"metadata_{uuid.uuid4().hex}.png"
+        try:
+            rendered_path = await render_text_metadata_image(
+                text,
+                str(image_path),
+                style=getattr(
+                    cfg.message.text_metadata,
+                    "render_style",
+                    "fresh",
+                ),
+                font_family=getattr(
+                    cfg.message.text_metadata,
+                    "render_font_family",
+                    "noto_sans",
+                ),
+                font_size=getattr(
+                    cfg.message.text_metadata,
+                    "render_font_size",
+                    24,
+                ),
+            )
+        except asyncio.CancelledError:
+            try:
+                image_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        except (
+            ImportError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as exc:
+            try:
+                image_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.logger.warning(f"文本元数据图片渲染失败，保留原文本节点: {exc}")
+            return ""
+
+        strip_text_metadata_nodes(
+            build_result.all_link_nodes,
+            translation_nodes,
+        )
+        for metadata in build_result.link_metadata:
+            metadata["metadata_text_node"] = None
+        self.logger.debug(f"文本元数据已渲染为图片: {rendered_path}")
+        return rendered_path
+
     def _metadata_has_output_candidate(self, metadata: Dict[str, Any]) -> bool:
         """判断 metadata 在当前输出策略下是否可能构建出节点。"""
         if metadata.get("error"):
@@ -443,6 +522,8 @@ class VideoParserPlugin(Star):
         build_result = None
         processed_metadata_list = metadata_list
         relay_registered = False
+        text_metadata_image_path = ""
+        text_metadata_image_ref = ""
 
         try:
             opening_lock = asyncio.Lock()
@@ -559,7 +640,12 @@ class VideoParserPlugin(Star):
                 True,
             )
 
-            if not build_result.all_link_nodes:
+            translation_nodes = await self._build_translation_nodes_after_task(
+                translation_task,
+                translation_metadata_list,
+            )
+
+            if not build_result.all_link_nodes and not any(translation_nodes):
                 await event.send(
                     event.plain_result(
                         "解析完成，但没有可发送的内容，可能是下载失败或媒体不可访问。"
@@ -567,10 +653,21 @@ class VideoParserPlugin(Star):
                 )
                 return
 
-            translation_nodes = await self._build_translation_nodes_after_task(
-                translation_task,
-                translation_metadata_list,
+            text_metadata_image_path = await self._render_text_metadata_output(
+                build_result,
+                translation_nodes,
+                cfg,
             )
+            text_metadata_image_ref = text_metadata_image_path
+            if text_metadata_image_path and cfg.relay.enabled:
+                token_url = await register_file_with_token_service(
+                    text_metadata_image_path,
+                    cfg.relay.callback_api_base,
+                    cfg.relay.file_token_ttl,
+                )
+                if token_url:
+                    text_metadata_image_ref = token_url
+                    relay_registered = True
             aggregatable_nodes = [
                 meta["link_nodes"]
                 for meta in build_result.link_metadata
@@ -598,6 +695,7 @@ class VideoParserPlugin(Star):
                     sender_name,
                     sender_id,
                     cfg.download.large_video_threshold_mb,
+                    text_metadata_image=text_metadata_image_ref,
                 )
             else:
                 await self.message_sender.send_individual_results(
@@ -606,6 +704,7 @@ class VideoParserPlugin(Star):
                     build_result.link_metadata,
                     quote_user_message=(cfg.message.text_metadata.quote_user_message),
                     quote_message_id=quote_source_message_id,
+                    text_metadata_image=text_metadata_image_ref,
                 )
 
             try:
@@ -663,6 +762,7 @@ class VideoParserPlugin(Star):
                     self._collect_metadata_files(processed_metadata_list),
                     build_temp_files,
                     build_video_files,
+                    [text_metadata_image_path] if text_metadata_image_path else [],
                 )
                 if all_files:
                     if relay_registered and not zip_requested:

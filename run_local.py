@@ -50,6 +50,7 @@ PARSER_DISCOVERY_ORDER = (
     "xianyu",
     "toutiao",
     "xiaoheihe",
+    "steam",
     "twitter",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {

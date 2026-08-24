@@ -20,6 +20,7 @@ class MediaMetadata(TypedDict, total=False):
     platform: str
     parser_name: str
     translation_target_language: str
+    steam_appid: str
 
     video_urls: List[List[str]]
     video_cover_urls: List[List[str]]
