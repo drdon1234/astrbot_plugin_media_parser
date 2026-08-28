@@ -135,6 +135,17 @@
                     "仅富媒体"
                 ],
                 "default": "全部发送"
+            },
+            "xueqiu": {
+                "description": "雪球",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },

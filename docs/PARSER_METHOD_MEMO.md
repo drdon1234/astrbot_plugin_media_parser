@@ -547,7 +547,63 @@ image_urls = [
 
 单个作品依次请求元信息和分页接口；多个作品并发解析时由 `Config.PARSER_MAX_CONCURRENT` 限制，避免大量链接形成无界请求突发。
 
-## 十三、维护原则
+## 十四、雪球
+
+支持能力：图片 / 文本
+
+稳定入口是帖子 ID。分享链形如 `xueqiu.com/{user_id}/{status_id}`，查询串里常挂 `md5__1038` 等 WAF/CDN 参数，只取路径即可，不需要展开重定向。
+
+关键约束是取数入口的选择。`xueqiu.com` 的 HTML 页面和同域 `/statuses/*.json` 都在阿里云 WAF 的 JS 挑战后面，普通 HTTP 客户端只会拿到 `aliyun_waf` 挑战页；`api.xueqiu.com` 不受该挑战保护，但要求访客令牌。
+
+```text
+xueqiu.com/{user_id}/{status_id}
+  ↓
+提取 status_id（忽略查询串）
+  ↓
+xueqiu.com/service/csrf?api=/statuses/show.json
+  └─ 下发 xq_a_token / u / s 等访客 Cookie
+  ↓
+api.xueqiu.com/statuses/show.json?id={status_id}
+  ↓
+校验返回 id 与请求一致
+  ↓
+按普通帖 / 长文 / 转发帖提取文本与图片
+```
+
+`/service/csrf` 只返回 `{}`，价值在 `Set-Cookie`。访客令牌写入会话 Cookie 后即可访问详情接口，无需登录账号。
+
+详情接口的错误用业务码表达，HTTP 状态是 400 而不是 200：
+
+- `400016` 表示令牌缺失或过期，重新申请访客令牌后可重试一次。
+- `20210` 表示帖子不存在，不要重试。
+- 返回体含 `aliyun_waf` 说明请求被挑战页拦截，通常是短时间内请求过密，按解析失败处理，不要当成 JSON 错误。
+
+字段提取：
+
+- 标题读 `title`，回退 `rawTitle`、`topic_title`。普通帖没有标题是正常状态，正文本身就是主体内容，不能因缺标题判定失败。
+- 正文优先读完整的 `text`，`description` 是截断版本，只作兜底。
+- 作者读 `user.screen_name`，时间读毫秒级 `created_at`。
+- 图片有三个来源：`text` 里的 `<img src>`、`pic`（逗号分隔）和 `image_info_list[].filename`（拼 `https://xqimg.imedao.com/{filename}`）。长文的配图按阅读顺序内嵌在正文里，先按正文顺序收集，再用另两个来源补齐，按原图地址去重。
+- `pic` 里的地址常带 `!thumb.jpg`、`!custom.jpg` 之类的缩略后缀。去掉 `!` 之后的部分得到原图，原图放首位、原始形态作为降级候选。
+- `assets.imedao.com` 下的图片是站点表情等静态资源，不是帖子配图。表情标签要按 `title` / `alt` 还原成 `[捂脸]` 这类文字，其余 `<img>` 直接从正文移除。
+
+转发帖的 `retweeted_status` 是一个同构的帖子对象。外层 `text` 只有转发语和评论链，原帖正文不在里面，两侧都要保留：外层正文之后追加 `转发原帖：` 段落，带上原帖作者、标题和正文，图片按外层在前、原帖在后合并去重。
+
+视频不假设一定存在。`video_info` 和 `vod_info` 为空是常态，只有出现可播放 URL 时才作为视频返回。一条帖子最多挂一个视频，两个字段描述的是同一个视频，收集到的多条地址视为同一视频的候选链路，不拆成多个独立视频项。命中 HLS 时加 `m3u8:` 前缀并标记 `video_force_download`。
+
+图片直链不需要 Referer 或 Cookie 即可下载，但仍按平台惯例携带帖子页 Referer。
+
+图文路径已按普通帖、长文、多图长文、转发帖和表情帖实测通过；视频路径按上述字段防御性实现，暂未取到公开视频帖样本验证。
+
+## 十五、NGA
+
+当前未提供解析器。
+
+NGA 已关闭访客浏览：`read.php?tid=...` 直接返回 `ERROR:1 未登录`，站点根路径返回 `ERROR:15 访客不能直接访问`。挑战页里的 `guestJs` Cookie 每次请求都会重新生成，回填后仍被拒绝；`app_api.php` 的 `post/list` 返回 `code:12 未登录`，随响应下发的 `guest_token` 无法换取内容，带 `access_token` 时改报 `code:5 签名错误`。`__output=8`、`__output=11`、`lite=js` 等输出形式只是换了错误载体，同样是 403。
+
+也就是说取数必须依赖 `ngaPassportUid` + `ngaPassportCid` 登录 Cookie。若之后决定支持，需要先引入用户提供 Cookie 的配置项，并注意页面是 GBK/GB18030 编码。
+
+## 十六、维护原则
 
 改平台解析逻辑前，过一遍这些问题：
 

@@ -22,6 +22,7 @@ from .parser.platform import (
     SteamParser,
     TwitterParser,
     PixivParser,
+    XueqiuParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -53,6 +54,7 @@ PARSER_OUTPUT_KEYS = (
     "steam",
     "twitter",
     "pixiv",
+    "xueqiu",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -580,6 +582,7 @@ class ConfigManager:
         self._enable_steam = self._parser_enabled("steam")
         self._enable_twitter = self._parser_enabled("twitter")
         self._enable_pixiv = self._parser_enabled("pixiv")
+        self._enable_xueqiu = self._parser_enabled("xueqiu")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -1187,6 +1190,8 @@ class ConfigManager:
                     proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
                 )
             )
+        if self._enable_xueqiu:
+            parsers.append(XueqiuParser())
 
         return parsers
 

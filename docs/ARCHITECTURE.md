@@ -22,6 +22,7 @@
 - Steam：支持 视频 / 图片 / 文本；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
+- 雪球：支持 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
 
 ### 1.2 核心模块结构
 
@@ -61,7 +62,8 @@ astrbot_plugin_media_parser/
     │       ├── xiaoheihe.py         # 小黑盒游戏详情/BBS 帖子解析器
     │       ├── steam.py             # Steam 游戏详情页解析器
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
-    │       └── pixiv.py             # Pixiv 插画/漫画解析器
+    │       ├── pixiv.py             # Pixiv 插画/漫画解析器
+    │       └── xueqiu.py            # 雪球帖子/长文解析器
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range
