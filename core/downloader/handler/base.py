@@ -11,11 +11,11 @@ import aiohttp
 from ...logger import logger
 
 from ...storage import cleanup_file
+from ...constants import Config
 from ..utils import extract_size_from_headers
 from ..validator import validate_media_response
 from ..budget import ByteBudget, DownloadLimitExceeded, resolve_max_bytes
 from ..fileio import run_blocking
-from ...constants import Config
 
 
 def _is_retryable_exception(exc: BaseException) -> bool:

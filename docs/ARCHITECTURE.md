@@ -22,7 +22,7 @@
 - Steam：支持 视频 / 图片 / 文本；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
-- 雪球：支持 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
+- 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
 
 ### 1.2 核心模块结构
 
@@ -30,6 +30,7 @@
 astrbot_plugin_media_parser/
 ├── main.py                          # AstrBot 插件入口与生命周期
 ├── _conf_schema.json                # AstrBot 配置 schema
+├── run_local.py                     # 本地调试入口，递归发现平台解析器
 ├── docs/
 │   ├── ARCHITECTURE.md              # 当前架构文档
 │   └── PARSER_METHOD_MEMO.md        # 平台解析方法说明
@@ -48,11 +49,11 @@ astrbot_plugin_media_parser/
     │   │   └── bilibili/auth.py     # BilibiliAuthRuntime，Cookie 校验与扫码登录
     │   └── platform/                # 各平台解析器
     │       ├── base.py              # BaseVideoParser 接口定义与共用方法
-    │       ├── short_video_shared.py # 抖音/TikTok 共享的 URL、HTML、JSON 工具
+    │       ├── douyin/              # 抖音子包
+    │       │   ├── parser.py        # 抖音视频/图集解析器
+    │       │   ├── sign.py          # 抖音 a_bogus 签名
+    │       │   └── web.py           # 抖音 Web 详情接口与会话管理
     │       ├── bilibili.py          # B站视频/番剧/动态解析器
-    │       ├── douyin.py            # 抖音视频/图集解析器
-    │       ├── douyin_web.py        # 抖音 Web 详情接口与会话管理
-    │       ├── douyin_sign.py       # 抖音 a_bogus 签名
     │       ├── tiktok.py            # TikTok 视频/图集解析器
     │       ├── kuaishou.py          # 快手视频/图集解析器
     │       ├── weibo.py             # 微博桌面/移动/视频组件解析器
@@ -89,8 +90,7 @@ astrbot_plugin_media_parser/
     │   ├── manager.py               # 元数据翻译与严格 JSON 结果回填
     │   ├── llm_client.py            # 自定义 OpenAI 兼容 / Ollama 调用
     │   └── provider_defs.py         # 翻译相关厂商标签与默认值
-    ├── storage/
-    │   ├── __init__.py              # 导出清理、标记、文件 Token 注册能力
+    ├── storage/                     # 导出清理、标记、文件 Token 注册能力
     │   ├── file_cleaner.py          # 文件与空父目录清理
     │   ├── cache_marker.py          # .astrbot_media_parser 标记与安全清理
     │   ├── file_token.py            # AstrBot file_token_service 集成
@@ -130,7 +130,7 @@ astrbot_plugin_media_parser/
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。现有 `message.*` 路径保持不变，避免 AstrBot 递归更新 schema 时删除用户旧配置。
 
-`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `fresh/tech/serious/card`，字体大小限制为 16–42；默认优先使用插件内置的 Noto Sans CJK，也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定字体文件，再按配置的字体族和系统字体路径回退。渲染失败、字体不可用或缺少 Pillow 时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
+`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42；默认优先使用插件内置的 Noto Sans CJK，也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定字体文件，再按配置的字体族和系统字体路径回退。渲染失败、字体不可用或缺少 Pillow 时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
 
 配置 schema 对依赖开关的字段使用条件显隐，例如翻译提供商、权限名单、B站 Cookie、管理员协助登录和媒体中转参数。显隐只影响配置页展示，不会删除已保存的隐藏值。
 
@@ -211,6 +211,13 @@ cache/runtime_manager/bilibili/cookie.json
 - 归一 `platform`、`parser_name`、`source_url`、`video_urls`、`image_urls`、headers。
 
 `BaseVideoParser` 定义 `can_parse()`、`extract_links()`、`parse()` 接口，并提供 `_add_range_prefix_to_video_urls()`，可给普通视频候选 URL 或 DASH 子流增加 `range:` 前缀。
+
+`core/parser/platform/` 的模块归属规则：
+
+- 平台解析器：单模块平台为 `platform/<平台>.py`，多模块平台为 `platform/<平台>/parser.py`。
+- 平台辅助模块：只被 1 个平台解析器引用的传输层、签名等模块，放在该平台的子包内，模块名只描述职责。
+- 不新建跨平台共享位置：不存在被 2 个及以上平台解析器共同继承的类或共同导入的模块（`base.py` 与 `utils.py` 除外）。2 个及以上平台需要等价辅助逻辑时各自持有一份实现——抖音与 TikTok 的 URL / 时间戳 / JSON 辅助方法即按此规则各存一份，代价是两份实现可能随时间产生差异，收益是单平台调整不会波及另一平台。
+- 新增平台需要修改 3 处登记点：`platform/__init__.py` 的 `__all__`、`config_manager.py` 的 `PARSER_OUTPUT_KEYS` 与 `create_parsers()`、`_conf_schema.json` 的平台配置项。
 
 ### 2.4 B站运行时与管理员交互
 

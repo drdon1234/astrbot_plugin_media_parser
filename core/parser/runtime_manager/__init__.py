@@ -1,2 +1,2 @@
-"""Runtime managers for parser-side platform helpers."""
+"""解析器侧平台运行时管理子包。"""
 

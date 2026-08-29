@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.2.0] - 2026-08-29
+
+### 雪球帖子解析
+
+- 新增雪球帖子解析器，支持 `xueqiu.com/{user_id}/{status_id}` 形式的分享链接。
+- 先向 `xueqiu.com/service/csrf` 申请访客令牌，再经 `api.xueqiu.com/statuses/show.json` 读取帖子详情，绕开 HTML 页面的 JS 挑战与 WAF 拦截。
+- 覆盖普通帖、长文、多图长文、转发帖和表情帖；正文按阅读顺序内嵌配图，`pic` 与 `image_info_list` 用于补齐并按原图地址去重，表情图片还原为文字标记。
+- 访客令牌过期（业务码 `400016`）时自动重新申请并重试一次。
+- 命中 HLS 播放地址时补 `m3u8:` 前缀并标记为强制缓存后发送。
+- 新增 `parsers.xueqiu` 输出模式配置项。
+
+### 解析器结构维护
+
+- 抖音的解析器入口与专属辅助模块收拢为 `core/parser/platform/douyin/` 子包（`parser.py` / `sign.py` / `web.py`），其余 12 个平台维持一平台一文件。
+- 解散抖音与 TikTok 共用的跨平台 mixin，辅助方法按平台各自内联；`core/parser/` 不再保留跨平台共享 mixin。
+- 本地调试入口的平台模块遍历改为递归进入平台子包，解析器发现顺序补齐至 13 个平台。
+- 统一 `core/parser/` 项目内导入组的组内顺序为按相对层级由深到浅。
+- 将解析器模块落位规则写入 `AGENTS.md`，`core/parser/` 目录结构说明写入 `docs/ARCHITECTURE.md`。
+- 更正 `AGENTS.md` 中 `parse()` 失败语义的表述：解析失败时抛出异常，由 `ParserManager` 统一转换为含 `"error"` 键的结果。
+- 上述调整均为内部结构整理，不改变解析、下载和消息输出的对外行为。
+
 ## [1.1.0] - 2026-08-24
 
 ### Steam 游戏页解析

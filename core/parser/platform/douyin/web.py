@@ -1,8 +1,7 @@
-"""抖音 Web 详情接口传输层。
+"""抖音 Web 详情接口传输层。"""
 
-该接口并非公开稳定 API，所有易变参数和会话状态集中在本模块，解析器只消费
-经过目标作品 ID 校验的数据。签名算法见 :mod:`douyin_sign`。
-"""
+# 该接口并非公开稳定 API，所有易变参数和会话状态集中在本模块，解析器只消费
+# 经过目标作品 ID 校验的数据。签名算法见 :mod:`sign`。
 
 import asyncio
 import json
@@ -13,8 +12,9 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from ...logger import logger
-from .douyin_sign import generate_abogus
+from ....logger import logger
+
+from .sign import generate_abogus
 
 
 DOUYIN_WEB_USER_AGENT = (

@@ -12,7 +12,7 @@
 - 对外只保留 generate_abogus() 入口，其余为内部实现。
 
 用法:
-    from .douyin_sign import generate_abogus
+    from .sign import generate_abogus
     sig = generate_abogus(param_str, body="", user_agent=ua, options=[0, 1, 14])
 """
 

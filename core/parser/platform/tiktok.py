@@ -1,19 +1,21 @@
 """TikTok 解析器实现。"""
 
 import asyncio
+import html as html_lib
 import json
 import re
 import shutil
+from datetime import datetime
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 
-from ...constants import Config
 from ...logger import logger
+
+from ...constants import Config
 from ..utils import SkipParse, build_request_headers, is_live_url
 from .base import BaseVideoParser
-from .short_video_shared import ShortVideoParserMixin
 
 
 TIKTOK_USER_AGENT = (
@@ -32,9 +34,11 @@ TIKTOK_PAGE_HOSTS = frozenset(
         "vt.tiktok.com",
     }
 )
+URL_TRAILING_PUNCTUATION = ".,!?)]}>\"'，。！？；：）】》」"
+HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 
-class TikTokParser(ShortVideoParserMixin, BaseVideoParser):
+class TikTokParser(BaseVideoParser):
     """TikTok 解析器实现。"""
 
     def __init__(self, use_proxy: bool = False, proxy_url: str = None):
@@ -53,6 +57,159 @@ class TikTokParser(ShortVideoParserMixin, BaseVideoParser):
         if self.use_proxy and self.proxy_url:
             return self.proxy_url
         return None
+
+    @classmethod
+    def _get_host(cls, url: str) -> str:
+        """提取链接的主机名并归一化为小写。"""
+        try:
+            return (urlparse(url).hostname or "").lower().strip(".")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _clean_extracted_url(url: str) -> str:
+        """去除链接尾部的中英文标点。"""
+        if not url:
+            return ""
+        return url.rstrip(URL_TRAILING_PUNCTUATION)
+
+    @staticmethod
+    def _strip_query_and_fragment(url: str) -> str:
+        """去除链接的查询串与片段部分。"""
+        if not url:
+            return url
+        parsed = urlparse(url)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+    @staticmethod
+    def _format_timestamp(timestamp_value: Any) -> str:
+        """把秒级或毫秒级时间戳格式化为日期字符串。"""
+        if timestamp_value in (None, ""):
+            return ""
+        try:
+            timestamp = int(timestamp_value)
+            if timestamp > 10 ** 12:
+                timestamp //= 1000
+            return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+        except (TypeError, ValueError, OSError):
+            return ""
+
+    @staticmethod
+    def _extend_unique_urls(target: List[str], candidates: List[str]) -> None:
+        """按原顺序把候选链接去重追加到目标列表。"""
+        for url in candidates:
+            if url and url not in target:
+                target.append(url)
+
+    @staticmethod
+    def _decode_json_string(value: str) -> str:
+        """还原 JSON 转义字符串，失败时退化为替换转义斜杠。"""
+        if not value:
+            return ""
+        try:
+            return json.loads(f'"{value}"')
+        except Exception:
+            return value.replace("\\u002F", "/").replace("\\/", "/")
+
+    @classmethod
+    def _extract_nested_http_urls(
+        cls,
+        value: Any,
+        depth: int = 0,
+        max_depth: int = 4
+    ) -> List[str]:
+        """在深度上限内递归提取嵌套结构中的 HTTP 链接。"""
+        if depth > max_depth or value is None:
+            return []
+
+        if isinstance(value, str):
+            decoded = cls._decode_json_string(value)
+            if decoded.startswith(("http://", "https://")):
+                return [cls._clean_extracted_url(decoded)]
+            return [
+                cls._clean_extracted_url(url)
+                for url in HTTP_URL_RE.findall(decoded)
+            ]
+
+        urls: List[str] = []
+        if isinstance(value, list):
+            for item in value:
+                cls._extend_unique_urls(
+                    urls,
+                    cls._extract_nested_http_urls(
+                        item,
+                        depth=depth + 1,
+                        max_depth=max_depth
+                    )
+                )
+            return urls
+
+        if isinstance(value, dict):
+            preferred_keys = (
+                "urlList",
+                "url_list",
+                "UrlList",
+                "urls",
+                "url",
+                "Url",
+                "playAddr",
+                "downloadAddr",
+                "PlayAddr",
+                "PlayAddrStruct",
+                "imageURL",
+                "imageUrl",
+                "displayImage",
+                "originImage",
+                "downloadImage",
+                "ownerWatermarkImage",
+                "ownerWatermarkUrl",
+                "image",
+                "cover",
+            )
+            for key in preferred_keys:
+                if key in value:
+                    cls._extend_unique_urls(
+                        urls,
+                        cls._extract_nested_http_urls(
+                            value.get(key),
+                            depth=depth + 1,
+                            max_depth=max_depth
+                        )
+                    )
+            return urls
+
+        return []
+
+    @staticmethod
+    def extract_script_json(text: str, script_id: str) -> Optional[str]:
+        """按 id 提取 script 标签内的 JSON 文本。
+
+        Args:
+            text: 页面 HTML 文本
+            script_id: script 标签的 id 属性值
+
+        Returns:
+            反转义后的 JSON 文本，未匹配到时返回 None
+        """
+        pattern = (
+            rf"<script[^>]+id=[\"']{re.escape(script_id)}[\"'][^>]*>"
+            rf"(.*?)</script>"
+        )
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+        return html_lib.unescape(match.group(1).strip())
+
+    @classmethod
+    def _walk_dicts(cls, obj: Any):
+        """深度优先遍历 dict / list 中的全部字典节点。"""
+        if isinstance(obj, dict):
+            yield obj
+            for value in obj.values():
+                yield from cls._walk_dicts(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                yield from cls._walk_dicts(value)
 
     @classmethod
     def _is_tiktok_url(cls, url: str) -> bool:

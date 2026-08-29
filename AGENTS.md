@@ -6,6 +6,7 @@
 
 ```
 main.py                  # 插件入口，VideoParserPlugin(Star)
+run_local.py             # 本地调试脚本，命令行验证解析与下载流程
 _conf_schema.json        # AstrBot WebUI 配置面板 JSON Schema
 metadata.yaml            # AstrBot 插件清单（名称、版本、依赖版本范围）
 requirements.txt         # Python 依赖（aiohttp / cryptography / qrcode / pillow）
@@ -14,17 +15,22 @@ core/
   constants.py           # 全局常量（Config 类）
   types.py               # MediaMetadata TypedDict — 全流程核心数据契约
   logger.py              # 全局日志实例（包装 AstrBot logger）
-  parser/                # 链接路由 + 平台解析器
+  message_text.py        # 消息文本的统一长度约束与分片
+  metadata_visibility.py # 文本元数据字段可见性的统一读取
+  parser/                # 链接路由 + 平台解析器 + 平台运行时管理
     manager.py           #   ParserManager — 并发调度
     router.py            #   LinkRouter — 链接提取 / 去重
-    platform/            #   每个平台一个文件，继承 BaseVideoParser
+    utils.py             #   跨平台共享的纯函数式工具（唯一既存共享位置）
+    platform/            #   单模块平台一个文件、多模块平台一个子包，均继承 BaseVideoParser
       base.py            #   抽象基类：can_parse / extract_links / parse
+      douyin/            #   抖音子包：parser.py / sign.py / web.py
+    runtime_manager/     #   解析器侧平台运行时管理（如 B 站鉴权凭据）
   downloader/            # 媒体下载决策 + 多种下载策略
     manager.py           #   DownloadManager — 按媒体决策 local/direct/skip
-    handler/             #   具体下载器：stream / range / dash / m3u8 / image
+    handler/             #   具体下载器：normal_video / range / dash / m3u8 / image / video_cover
   message_adapter/       # AstrBot 消息构建与发送
   translation/           # LLM 翻译（OpenAI 兼容 / Ollama）
-  storage/               # 缓存清理、过期标记、频率限制
+  storage/               # 缓存清理、过期标记、频率限制、文件 Token 注册
   interaction/           # 管理员交互功能（如 B 站扫码登录）
 ```
 
@@ -58,12 +64,16 @@ from typing import Optional, List
 # 2. 第三方
 import aiohttp
 
-# 3. 项目内（logger 优先，与其余内部导入间空一行）
+# 3. 项目内（logger 优先并单独空一行；其余按相对层级由深到浅）
 from ...logger import logger
 
-from .base import BaseVideoParser
+from ...constants import Config
 from ..utils import build_request_headers
+from .base import BaseVideoParser
 ```
+
+- `logger` 排在项目内组首位，与其余项目内导入间恰好一个空行。
+- 项目内组内按相对层级由深到浅排列（`...` → `..` → `.`），同层级内按模块名字典序。
 
 ### 类型标注
 
@@ -98,7 +108,7 @@ from ..utils import build_request_headers
 
 ### 日志
 
-全局单例 `from ..logger import logger`，不要自建 logger。
+全局单例 `from <相对层级>.logger import logger`（层级随模块深度而定），不要自建 logger。
 
 - `debug` — 内部状态与流程跟踪（可受 `debug_mode` 控制）
 - `info` — 管理操作完成
@@ -125,21 +135,26 @@ from ..utils import build_request_headers
 
 ```
 消息事件 → LinkRouter（提取/去重）→ ParserManager（并发解析）
-→ DownloadManager（按媒体决策下载）→ NodeBuilder（构建消息节点）
+→ DownloadManager（按媒体决策下载）→ node_builder.py（构建消息节点）
 → MessageSender（聚合/逐条发送）
 ```
 
 ### 新增平台解析器
 
-1. 在 `core/parser/platform/` 新建文件，继承 `BaseVideoParser`。
-2. 实现 `can_parse` / `extract_links` / `parse` 三个方法。
-3. 在 `core/parser/platform/__init__.py` 中导出。
-4. 在 `core/config_manager.py` 的 `PARSER_OUTPUT_KEYS` 和 `create_parsers` 中注册。
-5. 在 `_conf_schema.json` 中添加对应的配置项。
+1. 确认平台归属位置：单模块实现放 `core/parser/platform/<平台>.py`；需要拆成 2 个及以上模块时，建立子包 `core/parser/platform/<平台>/`，解析器入口固定命名为该子包内的 `parser.py`。目录名与文件名一律使用小写英文平台名。
+2. 编写解析器类，继承 `BaseVideoParser`（`core/parser/platform/base.py`），实现 `can_parse` / `extract_links` / `parse` 三个方法。
+3. 放置平台辅助模块（该平台专属的传输层、签名、加解密等模块）：判定条件是「仅被 1 个平台解析器引用」。单模块平台需要新增辅助模块时，先按第 1 步升级为该平台的子包；子包内的模块名只描述职责、不重复平台名（例如 `sign.py`、`web.py`，而非 `douyin_sign.py`）。
+4. 禁止为平台代码新建跨平台共享位置：不新增跨平台共享 mixin 类，也不新增跨平台共享模块。`core/parser/utils.py` 是唯一既存的跨平台共享位置，只接纳与任何平台无关的纯函数式工具。
+5. 2 个及以上平台需要功能等价的辅助逻辑时，各平台在自身归属位置内各自持有一份实现，不抽取共享层。
+6. 兜底判定：新增文件若不属于上述任一类别，按引用它的平台归入该平台的归属位置；引用平台为 2 个及以上时，改为在每个引用平台的归属位置内各自持有一份实现。同一文件因此始终只有一个合法目标位置。
+7. 在 `core/parser/platform/__init__.py` 中导入该解析器类并加入 `__all__`。多模块平台从子包导入（`from .<平台> import <解析器类>`），子包 `__init__.py` 只再导出解析器类。
+8. 在 `core/config_manager.py` 的 `PARSER_OUTPUT_KEYS` 元组中追加平台开关键名，并在 `create_parsers()` 中按该开关追加实例化分支。
+9. 在 `_conf_schema.json` 的 `parsers` 节点添加该平台的输出模式配置项；平台还有专属参数时，同步添加对应配置节点。
+10. 在 `run_local.py` 的 `PARSER_DISCOVERY_ORDER` 中追加平台名，保持本地调试的路由优先级；解析器类由 `discover_local_parser_classes()` 自动发现，不需要手写注册。
 
 ### 关键约定
 
-- `parse()` 返回 `Optional[MediaMetadata]`；失败时返回含 `"error"` 键的字典，不要抛异常。
+- `parse()` 返回 `Optional[MediaMetadata]`；解析失败时抛出异常，由 `ParserManager` 统一转换为含 `"error"` 键的结果。
 - 下载管理器通过回填 `MediaMetadata` 中的下载阶段字段传递结果，不引入额外数据结构。
 - `__init__.py` 作为子包的导出面，使用 `__all__` 暴露公开 API。
 
@@ -153,7 +168,7 @@ from ..utils import build_request_headers
 ## 测试
 
 - 测试在 `test/` 目录（已 gitignore），使用 `unittest.TestCase` / `IsolatedAsyncioTestCase`。
-- 不依赖 pytest，不使用 mock 框架；用内联轻量 stub 类替代。
+- 不依赖 pytest，不引入第三方 mock 框架；优先用内联轻量 stub 类，需要打补丁时用标准库 `unittest.mock`。
 - AstrBot 运行时模块通过 `sys.modules` 注入 stub。
 - 运行：`python -m unittest discover -s test`
 

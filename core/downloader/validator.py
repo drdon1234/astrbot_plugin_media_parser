@@ -7,13 +7,13 @@ import aiohttp
 
 from ..logger import logger
 
+from ..constants import Config
 from .utils import (
     validate_content_type,
     check_json_error_response,
     extract_size_from_headers,
     strip_media_prefixes,
 )
-from ..constants import Config
 from .image_format import (
     detect_supported_image_format,
     image_content_type_requires_probe,

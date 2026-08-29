@@ -1,11 +1,9 @@
-"""
-Pixiv 插画/漫画解析器。
+"""Pixiv 插画/漫画解析器。"""
 
-负责：
-1. 匹配 pixiv.net 插画链接（artworks / i）
-2. 调用 Pixiv Web Ajax API 获取作品元信息
-3. 返回图片直链集合供下载管理器处理
-"""
+# 负责：
+# 1. 匹配 pixiv.net 插画链接（artworks / i）
+# 2. 调用 Pixiv Web Ajax API 获取作品元信息
+# 3. 返回图片直链集合供下载管理器处理
 
 import asyncio
 import re
@@ -15,11 +13,12 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from .base import BaseVideoParser
-from ...constants import Config
 from ...logger import logger
+
+from ...constants import Config
 from ...types import MediaMetadata
 from ..utils import build_request_headers
+from .base import BaseVideoParser
 
 
 # ── URL 正则 ──────────────────────────────────────────────

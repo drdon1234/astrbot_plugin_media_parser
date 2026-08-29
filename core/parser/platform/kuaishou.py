@@ -11,9 +11,9 @@ import aiohttp
 
 from ...logger import logger
 
-from .base import BaseVideoParser
-from ..utils import build_request_headers, is_live_url, SkipParse
 from ...constants import Config
+from ..utils import build_request_headers, is_live_url, SkipParse
+from .base import BaseVideoParser
 
 MOBILE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) "

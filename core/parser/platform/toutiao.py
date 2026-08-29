@@ -12,8 +12,9 @@ from urllib.parse import unquote, urlparse
 
 import aiohttp
 
-from ...constants import Config
 from ...logger import logger
+
+from ...constants import Config
 from ..utils import SkipParse, build_request_headers
 from .base import BaseVideoParser
 

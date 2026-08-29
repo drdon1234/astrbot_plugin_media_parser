@@ -8,10 +8,10 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from ...constants import Config
 from ...logger import logger
-from ...types import MediaMetadata
 
+from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import build_request_headers
 from .base import BaseVideoParser
 from .xiaoheihe import XiaoheiheParser

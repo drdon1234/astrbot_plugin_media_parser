@@ -5,6 +5,7 @@ from typing import Optional, List
 import aiohttp
 
 from ...logger import logger
+
 from ...types import MediaMetadata
 
 

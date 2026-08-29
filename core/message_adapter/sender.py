@@ -6,8 +6,9 @@ from typing import Any, List, Optional
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Nodes, Plain, Image, Node, Reply
 
-from .node_builder import is_pure_image_gallery
 from ..logger import logger
+
+from .node_builder import is_pure_image_gallery
 
 
 class MessageDeliveryError(RuntimeError):

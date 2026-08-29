@@ -11,9 +11,9 @@ import aiohttp
 
 from ...logger import logger
 
-from .base import BaseVideoParser
-from ..utils import build_request_headers
 from ...constants import Config
+from ..utils import build_request_headers
+from .base import BaseVideoParser
 
 
 class FxTwitterServiceUnavailableError(RuntimeError):

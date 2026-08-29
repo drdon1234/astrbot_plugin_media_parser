@@ -17,9 +17,9 @@ import aiohttp
 
 from ...logger import logger
 
-from .base import BaseVideoParser
-from ..utils import build_request_headers, is_live_url, SkipParse
 from ...constants import Config
+from ..utils import build_request_headers, is_live_url, SkipParse
+from .base import BaseVideoParser
 
 
 ANDROID_UA = (

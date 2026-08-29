@@ -14,10 +14,10 @@ import aiohttp
 
 from ...logger import logger
 
-from .base import BaseVideoParser
+from ...constants import Config
 from ..runtime_manager.bilibili.auth import BilibiliAuthRuntime
 from ..utils import build_request_headers, is_live_url, SkipParse, format_duration_ms
-from ...constants import Config
+from .base import BaseVideoParser
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

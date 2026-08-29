@@ -39,7 +39,7 @@ from core.logger import logger  # noqa: E402
 LOCAL_MEDIA_DIR = Config.build_cache_dir(_project_root)
 
 PARSER_DISCOVERY_PACKAGE = "core.parser.platform"
-PARSER_DISCOVERY_SKIP_MODULES = {"base", "short_video_shared"}
+PARSER_DISCOVERY_SKIP_MODULES = {"base"}
 PARSER_DISCOVERY_ORDER = (
     "bilibili",
     "douyin",
@@ -52,6 +52,8 @@ PARSER_DISCOVERY_ORDER = (
     "xiaoheihe",
     "steam",
     "twitter",
+    "pixiv",
+    "xueqiu",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {
     module_name: index for index, module_name in enumerate(PARSER_DISCOVERY_ORDER)
@@ -60,15 +62,41 @@ PARSER_DISCOVERY_ORDER_INDEX = {
 
 def _parser_order_key(parser_class: Type[BaseVideoParser]):
     """保持已知解析器的路由优先级，新解析器自动排到后面。"""
-    module_name = parser_class.__module__.rsplit(".", 1)[-1]
+    relative_path = parser_class.__module__.removeprefix(
+        f"{PARSER_DISCOVERY_PACKAGE}."
+    )
+    platform_name = relative_path.split(".", 1)[0]
     return (
         PARSER_DISCOVERY_ORDER_INDEX.get(
-            module_name,
+            platform_name,
             len(PARSER_DISCOVERY_ORDER_INDEX),
         ),
-        module_name,
+        relative_path,
         parser_class.__name__,
     )
+
+
+def _iter_platform_module_paths(package) -> List[str]:
+    """列出平台包内模块的相对路径，递归进入平台子包一层。"""
+    relative_paths = []
+    for module_info in pkgutil.iter_modules(package.__path__):
+        short_name = module_info.name
+        if short_name.startswith("_"):
+            continue
+        if not module_info.ispkg:
+            relative_paths.append(short_name)
+            continue
+        sub_package_name = f"{package.__name__}.{short_name}"
+        try:
+            sub_package = importlib.import_module(sub_package_name)
+        except Exception as e:
+            logger.warning(f"跳过解析器模块 {sub_package_name}: {e}")
+            continue
+        for sub_info in pkgutil.iter_modules(sub_package.__path__):
+            if sub_info.ispkg or sub_info.name.startswith("_"):
+                continue
+            relative_paths.append(f"{short_name}.{sub_info.name}")
+    return relative_paths
 
 
 def discover_local_parser_classes() -> List[Type[BaseVideoParser]]:
@@ -76,16 +104,11 @@ def discover_local_parser_classes() -> List[Type[BaseVideoParser]]:
     package = importlib.import_module(PARSER_DISCOVERY_PACKAGE)
     parser_classes = {}
 
-    for module_info in pkgutil.iter_modules(package.__path__):
-        module_short_name = module_info.name
-        if (
-            module_info.ispkg
-            or module_short_name.startswith("_")
-            or module_short_name in PARSER_DISCOVERY_SKIP_MODULES
-        ):
+    for relative_path in _iter_platform_module_paths(package):
+        if relative_path in PARSER_DISCOVERY_SKIP_MODULES:
             continue
 
-        module_name = f"{package.__name__}.{module_short_name}"
+        module_name = f"{package.__name__}.{relative_path}"
         try:
             module = importlib.import_module(module_name)
         except Exception as e:

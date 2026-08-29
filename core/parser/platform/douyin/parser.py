@@ -3,17 +3,18 @@
 import asyncio
 import json
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 
-from ...constants import Config
-from ...logger import logger
-from ..utils import SkipParse, build_request_headers, is_live_url
-from .base import BaseVideoParser
-from .douyin_web import DouyinWebClient
-from .short_video_shared import ShortVideoParserMixin
+from ....logger import logger
+
+from ....constants import Config
+from ...utils import SkipParse, build_request_headers, is_live_url
+from ..base import BaseVideoParser
+from .web import DouyinWebClient
 
 
 DOUYIN_USER_AGENT = (
@@ -22,7 +23,11 @@ DOUYIN_USER_AGENT = (
     "Chrome/116.0.0.0 Mobile Safari/537.36"
 )
 DOUYIN_REFERER = "https://www.douyin.com/"
-class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
+URL_TRAILING_PUNCTUATION = ".,!?)]}>\"'，。！？；：）】》」"
+HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+
+
+class DouyinParser(BaseVideoParser):
     """抖音解析器实现。"""
 
     def __init__(self):
@@ -34,6 +39,161 @@ class DouyinParser(ShortVideoParserMixin, BaseVideoParser):
         }
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.web_client = DouyinWebClient()
+
+    @staticmethod
+    def _host_matches(host: str, *suffixes: str) -> bool:
+        """判断主机名是否等于给定后缀之一或为其子域。"""
+        if not host:
+            return False
+        normalized = host.lower().strip(".")
+        return any(
+            normalized == suffix or normalized.endswith(f".{suffix}")
+            for suffix in suffixes
+        )
+
+    @classmethod
+    def _get_host(cls, url: str) -> str:
+        """提取链接的主机名并归一化为小写。"""
+        try:
+            return (urlparse(url).hostname or "").lower().strip(".")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _clean_extracted_url(url: str) -> str:
+        """去除链接尾部的中英文标点。"""
+        if not url:
+            return ""
+        return url.rstrip(URL_TRAILING_PUNCTUATION)
+
+    @staticmethod
+    def _format_timestamp(timestamp_value: Any) -> str:
+        """把秒级或毫秒级时间戳格式化为日期字符串。"""
+        if timestamp_value in (None, ""):
+            return ""
+        try:
+            timestamp = int(timestamp_value)
+            if timestamp > 10 ** 12:
+                timestamp //= 1000
+            return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+        except (TypeError, ValueError, OSError):
+            return ""
+
+    @staticmethod
+    def _extend_unique_urls(target: List[str], candidates: List[str]) -> None:
+        """按原顺序把候选链接去重追加到目标列表。"""
+        for url in candidates:
+            if url and url not in target:
+                target.append(url)
+
+    @staticmethod
+    def _decode_json_string(value: str) -> str:
+        """还原 JSON 转义字符串，失败时退化为替换转义斜杠。"""
+        if not value:
+            return ""
+        try:
+            return json.loads(f'"{value}"')
+        except Exception:
+            return value.replace("\\u002F", "/").replace("\\/", "/")
+
+    @classmethod
+    def _extract_nested_http_urls(
+        cls,
+        value: Any,
+        depth: int = 0,
+        max_depth: int = 4
+    ) -> List[str]:
+        """在深度上限内递归提取嵌套结构中的 HTTP 链接。"""
+        if depth > max_depth or value is None:
+            return []
+
+        if isinstance(value, str):
+            decoded = cls._decode_json_string(value)
+            if decoded.startswith(("http://", "https://")):
+                return [cls._clean_extracted_url(decoded)]
+            return [
+                cls._clean_extracted_url(url)
+                for url in HTTP_URL_RE.findall(decoded)
+            ]
+
+        urls: List[str] = []
+        if isinstance(value, list):
+            for item in value:
+                cls._extend_unique_urls(
+                    urls,
+                    cls._extract_nested_http_urls(
+                        item,
+                        depth=depth + 1,
+                        max_depth=max_depth
+                    )
+                )
+            return urls
+
+        if isinstance(value, dict):
+            preferred_keys = (
+                "urlList",
+                "url_list",
+                "UrlList",
+                "urls",
+                "url",
+                "Url",
+                "playAddr",
+                "downloadAddr",
+                "PlayAddr",
+                "PlayAddrStruct",
+                "imageURL",
+                "imageUrl",
+                "displayImage",
+                "originImage",
+                "downloadImage",
+                "ownerWatermarkImage",
+                "ownerWatermarkUrl",
+                "image",
+                "cover",
+            )
+            for key in preferred_keys:
+                if key in value:
+                    cls._extend_unique_urls(
+                        urls,
+                        cls._extract_nested_http_urls(
+                            value.get(key),
+                            depth=depth + 1,
+                            max_depth=max_depth
+                        )
+                    )
+            return urls
+
+        return []
+
+    @staticmethod
+    def extract_router_data(text: str) -> Optional[str]:
+        """从 HTML 中提取 `window._ROUTER_DATA` 的 JSON 文本。
+
+        Args:
+            text: 分享页 HTML 文本
+
+        Returns:
+            大括号配对完整的 JSON 文本，未匹配到时返回 None
+        """
+        start_flag = "window._ROUTER_DATA = "
+        start_idx = text.find(start_flag)
+        if start_idx == -1:
+            return None
+        brace_start = text.find("{", start_idx)
+        if brace_start == -1:
+            return None
+
+        index = brace_start
+        stack = []
+        while index < len(text):
+            if text[index] == "{":
+                stack.append("{")
+            elif text[index] == "}":
+                stack.pop()
+                if not stack:
+                    return text[brace_start:index + 1]
+            index += 1
+        return None
 
     @classmethod
     def _is_douyin_url(cls, url: str) -> bool:
