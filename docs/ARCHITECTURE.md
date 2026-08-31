@@ -130,7 +130,7 @@ astrbot_plugin_media_parser/
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。现有 `message.*` 路径保持不变，避免 AstrBot 递归更新 schema 时删除用户旧配置。
 
-`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42；默认优先使用插件内置的 Noto Sans CJK，也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定字体文件，再按配置的字体族和系统字体路径回退。渲染失败、字体不可用或缺少 Pillow 时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
+`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42。`font_manager.py` 在插件加载和实际渲染前幂等检查默认 Noto Sans CJK，缺失或大小、SHA256 校验失败时从固定版本的字体仓库 Release 流式下载，经临时文件校验后原子落盘；也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体，再按配置的字体族和系统字体路径回退。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
 
 配置 schema 对依赖开关的字段使用条件显隐，例如翻译提供商、权限名单、B站 Cookie、管理员协助登录和媒体中转参数。显隐只影响配置页展示，不会删除已保存的隐藏值。
 

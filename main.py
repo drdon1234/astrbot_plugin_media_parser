@@ -27,6 +27,7 @@ from .core.storage import (
     register_files_with_token_service,
 )
 from .core.constants import Config
+from .core.message_adapter.font_manager import FontDownloadError, ensure_default_fonts
 from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.node_builder import (
     build_all_nodes,
@@ -51,7 +52,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析流媒体平台链接，转换为媒体直链发送",
-    "1.1.0",
+    "1.2.1",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -105,6 +106,17 @@ class VideoParserPlugin(Star):
             command=cfg.bilibili.admin_cookie_update_command,
         )
         self._start_expired_cache_cleanup()
+
+    async def initialize(self) -> None:
+        """插件加载时检查并补全图片渲染字体。"""
+        try:
+            await ensure_default_fonts()
+        except asyncio.CancelledError:
+            raise
+        except FontDownloadError as exc:
+            self.logger.warning(
+                f"字体资源补全失败，插件将继续加载，文本图片渲染会回退原文本: {exc}"
+            )
 
     async def terminate(self):
         await self._shutdown_expired_cache_cleanup()

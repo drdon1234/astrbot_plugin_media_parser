@@ -7,12 +7,13 @@ import os
 from pathlib import Path
 from typing import List
 
+from .font_manager import FONT_DIR, ensure_default_fonts
+
 
 DEFAULT_RENDER_WIDTH = 960
 DEFAULT_RENDER_FONT_SIZE = 24
 DEFAULT_RENDER_STYLE = "fresh"
 DEFAULT_RENDER_FONT_FAMILY = "noto_sans"
-FONT_DIR = Path(__file__).resolve().parents[2] / "resource" / "font"
 MIN_RENDER_FONT_SIZE = 16
 MAX_RENDER_FONT_SIZE = 42
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
@@ -52,6 +53,7 @@ async def render_text_metadata_image(
     if not str(text or "").strip():
         raise ValueError("没有可渲染的文本元数据")
 
+    await ensure_default_fonts()
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.wait_for(

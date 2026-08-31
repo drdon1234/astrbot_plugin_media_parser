@@ -299,7 +299,7 @@
                             "标题手札",
                             "科技窄体"
                         ],
-                        "hint": "字体优先使用 ASTRBOT_MEDIA_PARSER_FONT 环境变量指定的字体文件；未指定时按系统可用字体回退。",
+                        "hint": "默认字体缺失或校验失败时会从独立字体仓库自动补全；ASTRBOT_MEDIA_PARSER_FONT 指定的字体仍优先使用，字体补全不可用时渲染会回退原文本。",
                         "default": "默认黑体"
                     },
                     "render_font_size": {

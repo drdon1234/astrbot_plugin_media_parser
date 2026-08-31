@@ -152,6 +152,10 @@ cython_debug/
 # 本地运行与缓存目录
 cache/
 
+# 运行时下载字体
+/resource/font/*.otf
+/resource/font/*.part
+
 # 本地测试目录
 /test/
 
