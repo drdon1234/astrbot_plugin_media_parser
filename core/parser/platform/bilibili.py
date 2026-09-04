@@ -1391,6 +1391,7 @@ class BilibiliParser(BaseVideoParser):
             "author": author,
             "timestamp": timestamp,
             "aid": aid_value,
+            "pic": data.get("pic") or "",
             "content_access_type_hint": (
                 "charge_exclusive"
                 if data.get("is_upower_exclusive")
@@ -1478,12 +1479,17 @@ class BilibiliParser(BaseVideoParser):
         except (TypeError, ValueError):
             aid_value = None
 
+        cover = (ep_obj.get("cover") if isinstance(ep_obj, dict) else None) or ""
+        if not cover:
+            cover = result.get("cover") or ""
+
         return {
             "title": title,
             "desc": desc,
             "author": author,
             "timestamp": timestamp,
             "aid": aid_value,
+            "pic": cover,
         }
 
     async def get_first_ep_id_by_season(
@@ -2764,6 +2770,11 @@ class BilibiliParser(BaseVideoParser):
             "image_headers": image_headers,
             "video_headers": video_headers,
         }
+        cover_url = self._normalize_bilibili_url(info.get("pic") or "")
+        if cover_url.startswith("http://"):
+            cover_url = "https://" + cover_url[len("http://"):]
+        if cover_url:
+            result["video_cover_urls"] = [[cover_url]]
         result.update(self._access_fields_from_info(access_info))
         if enable_hot_comments:
             await self._attach_hot_comments_to_result(
