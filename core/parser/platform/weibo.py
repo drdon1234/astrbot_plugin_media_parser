@@ -10,6 +10,7 @@ import aiohttp
 
 from ...logger import logger
 
+from ...types import MediaMetadata
 from ..utils import build_request_headers
 from .base import BaseVideoParser
 
@@ -1040,7 +1041,7 @@ class WeiboParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个微博链接
 
         Args:

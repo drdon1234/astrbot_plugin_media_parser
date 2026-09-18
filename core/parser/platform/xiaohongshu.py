@@ -18,6 +18,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import build_request_headers, is_live_url, SkipParse
 from .base import BaseVideoParser
 
@@ -677,7 +678,7 @@ class XiaohongshuParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个小红书链接
 
         Args:

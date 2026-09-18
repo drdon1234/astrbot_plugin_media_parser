@@ -296,13 +296,10 @@ def print_metadata(
         if len(image_urls) > 5:
             print(f"  ... 还有 {len(image_urls) - 5} 张")
 
-    if metadata.get("is_twitter_video"):
+    if metadata.get("platform") == "twitter" and metadata.get("video_urls"):
         print("标记: Twitter视频")
     if metadata.get("platform") == "tiktok":
         print("平台: TikTok")
-    if metadata.get("referer"):
-        print(f"Referer: {metadata.get('referer')}")
-
     print("=" * 80)
 
 

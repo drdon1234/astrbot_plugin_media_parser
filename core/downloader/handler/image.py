@@ -10,13 +10,13 @@ import aiohttp
 from ...logger import logger
 
 from ..budget import MAX_IMAGE_PIXELS, resolve_max_bytes
-from ..utils import generate_cache_file_path
 from ..fileio import run_blocking
 from ..image_format import (
     DIRECT_IMAGE_FORMATS,
     detect_supported_image_file_format,
     normalized_image_path,
 )
+from ..utils import generate_cache_file_path
 from .base import download_media_from_url
 
 
@@ -170,7 +170,13 @@ async def download_image_to_cache(
             url=url,
         )
 
-    file_path, size_mb, status_code, error = await download_media_from_url(
+    (
+        file_path,
+        size_mb,
+        status_code,
+        error,
+        limit_source,
+    ) = await download_media_from_url(
         session=session,
         media_url=image_url,
         file_path_generator=file_path_generator,
@@ -183,9 +189,10 @@ async def download_image_to_cache(
     if not file_path:
         return {
             "file_path": None,
-            "size_mb": None,
+            "size_mb": size_mb,
             "status_code": status_code,
             "error": error or "下载失败",
+            "limit_source": limit_source,
         }
 
     try:

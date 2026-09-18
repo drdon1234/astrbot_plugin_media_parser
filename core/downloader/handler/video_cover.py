@@ -11,15 +11,15 @@ import aiohttp
 from aiohttp import web
 
 from ...logger import logger
+
 from ...storage import cleanup_file
-from ..utils import generate_cache_file_path, strip_media_prefixes
 from ..budget import (
-    ByteBudget,
     DEFAULT_IMAGE_MAX_BYTES,
     DownloadLimitExceeded,
-    resolve_max_bytes,
+    create_byte_budget,
 )
 from ..fileio import run_blocking
+from ..utils import generate_cache_file_path, strip_media_prefixes
 
 
 VIDEO_COVER_TIMEOUT = 45
@@ -34,7 +34,7 @@ async def _media_relay(
     max_bytes: Optional[int],
 ):
     """通过本地 HTTP 流式中继为 ffmpeg 提供有字节上限的输入。"""
-    budget = ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
+    budget = create_byte_budget(max_bytes, is_video=True)
     route_path = f"/{uuid.uuid4().hex}/media"
 
     async def relay(request: web.Request) -> web.StreamResponse:

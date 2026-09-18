@@ -59,19 +59,20 @@ class BaseVideoParser(ABC):
 
         Returns:
             解析结果字典，包含以下字段：
-            - url: 原始url（必需）
+            - url: 单一规范链接（可选，缺省时由 ParserManager 使用输入链接补齐）
             - title: 标题（可选）
             - author: 作者（可选）
             - desc: 简介（可选）
             - timestamp: 发布时间（可选）
-            - video_urls: 视频URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
-            - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（必需，可为空列表）
-            - image_headers: dict，图片下载的完整请求头字典（必需）
-            - video_headers: dict，视频下载的完整请求头字典（必需）
+            - video_urls: 视频URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（可选，缺省时补为空列表）
+            - video_cover_urls: 视频封面URL列表，与视频逐项对齐；单个通用封面也使用二维列表（可选）
+            - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（可选，缺省时补为空列表）
+            - image_headers: dict，图片下载的完整请求头字典（可选，缺省时补为空字典）
+            - video_headers: dict，视频下载的完整请求头字典（可选，缺省时补为空字典）
             - video_force_download: bool，是否强制下载到缓存目录（可选，默认False）。True=缓存目录不可用或下载失败时跳过该视频；False=由下载决策引擎按目录能力选择 local/direct
-            - video_force_downloads: List[bool]，逐视频强制写入缓存标记（可选）
-            - platform: 平台名
-            - 其他平台特定字段
+            - platform: 内容来源平台名（可选）
+
+            ParserManager 会统一写入 source_url 和 parser_name，平台解析器不得返回这两个字段。
 
         Raises:
             解析失败时直接raise异常，不记录日志

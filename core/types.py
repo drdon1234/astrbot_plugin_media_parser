@@ -11,61 +11,60 @@ class MediaMetadata(TypedDict, total=False):
     # ── 解析阶段（平台解析器产出）──────────────────────
 
     url: str
-    source_url: str
     title: str
     author: str
     desc: str
-    _translated_fields: Dict[str, str]
     timestamp: str
     platform: str
-    parser_name: str
-    translation_target_language: str
-    steam_appid: str
 
     video_urls: List[List[str]]
     video_cover_urls: List[List[str]]
-    video_cover_url_lists: List[List[str]]
     image_urls: List[List[str]]
     image_headers: Dict[str, str]
     video_headers: Dict[str, str]
     video_force_download: bool
-    video_force_downloads: List[bool]
-    video_cover_only: bool
-    video_cover_source_count: int
-    video_cover_fallbacks: List[Dict[str, Any]]
-    video_cover_fallback_indexes: List[int]
 
     access_status: str
     restriction_type: str
     restriction_label: str
-    can_access_full_video: bool
+    can_access_full_video: Optional[bool]
     is_preview_only: bool
     access_message: str
-    timelength_ms: int
-    available_length_ms: int
+    timelength_ms: Optional[int]
+    available_length_ms: Optional[int]
     hot_comments: List[Dict[str, Any]]
 
     use_image_proxy: bool
     use_video_proxy: bool
-    proxy_url: str
+    proxy_url: Optional[str]
 
+    # ── 解析边界与流程错误 ──────────────────────────────
+
+    source_url: str
+    parser_name: str
     error: str
+
+    # ── 流程控制与翻译阶段 ──────────────────────────────
+
     _enable_text_metadata: bool
     _enable_rich_media: bool
     _text_metadata_fields: Dict[str, bool]
+    translation_target_language: str
+    _translated_fields: Dict[str, str]
 
     # ── 下载阶段（DownloadManager 回填）─────────────────
 
     file_paths: List[Optional[str]]
     video_sizes: List[Optional[float]]
+    video_size_limit_flags: List[bool]
     video_status_codes: List[Optional[int]]
     image_status_codes: List[Optional[int]]
     video_modes: List[str]
     image_modes: List[str]
     video_skip_reasons: List[Optional[str]]
     image_skip_reasons: List[Optional[str]]
-    media_cache_dir_available: bool
-    max_video_size_mb: float
+    image_warnings: List[Optional[str]]
+    largest_video_size_mb: Optional[float]
     total_video_size_mb: float
     video_count: int
     image_count: int

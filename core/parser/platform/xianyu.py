@@ -14,6 +14,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import SkipParse, build_request_headers, is_live_url
 from .base import BaseVideoParser
 
@@ -684,7 +685,7 @@ class XianyuParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
             context = await self._resolve_source_context(session, url)

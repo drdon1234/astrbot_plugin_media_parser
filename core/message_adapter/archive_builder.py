@@ -73,6 +73,14 @@ def _append_field(lines: list[str], label: str, value: Any) -> None:
         lines.append(f"{label}：{text}")
 
 
+def _count_valid_media(metadata: Mapping[str, Any], kind: str) -> int:
+    """按下载模式计算可发送媒体数量。"""
+    modes = metadata.get(f"{kind}_modes")
+    if not isinstance(modes, list):
+        return 0
+    return sum(1 for mode in modes if mode in ("local", "direct"))
+
+
 def _format_hot_comments(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -120,9 +128,9 @@ def format_archive_metadata(
     _append_field(lines, "访问状态", metadata.get("access_status"))
     _append_field(lines, "访问提示", metadata.get("access_message"))
     _append_field(lines, "解析错误", metadata.get("error"))
-    _append_field(lines, "最大视频大小(MB)", metadata.get("max_video_size_mb"))
-    _append_field(lines, "有效视频数", metadata.get("valid_video_count"))
-    _append_field(lines, "有效图片数", metadata.get("valid_image_count"))
+    _append_field(lines, "最大视频大小(MB)", metadata.get("largest_video_size_mb"))
+    _append_field(lines, "有效视频数", _count_valid_media(metadata, "video"))
+    _append_field(lines, "有效图片数", _count_valid_media(metadata, "image"))
     _append_field(lines, "失败视频数", metadata.get("failed_video_count"))
     _append_field(lines, "失败图片数", metadata.get("failed_image_count"))
     warnings = [
@@ -189,11 +197,9 @@ def _build_archive_details(
         "access_message",
         "error",
         "has_valid_media",
-        "valid_video_count",
-        "valid_image_count",
         "failed_video_count",
         "failed_image_count",
-        "max_video_size_mb",
+        "largest_video_size_mb",
         "exceeds_max_size",
         "image_warnings",
         "hot_comments",
@@ -203,6 +209,8 @@ def _build_archive_details(
         for key in safe_fields
         if metadata.get(key) not in (None, "", [], {})
     }
+    details["valid_video_count"] = _count_valid_media(metadata, "video")
+    details["valid_image_count"] = _count_valid_media(metadata, "image")
     details["media"] = [_safe_json_value(item) for item in media]
 
     translated_fields = (

@@ -1,13 +1,15 @@
 """Range 分段下载器实现。"""
 
+import asyncio
 from typing import Dict, Any, Optional
 
 import aiohttp
 
 from ...logger import logger
+
 from ...constants import Config
+from ..budget import DownloadLimitExceeded, create_byte_budget
 from ..utils import generate_cache_file_path
-from ..budget import ByteBudget, resolve_max_bytes
 from .base import range_download_file
 
 
@@ -35,7 +37,7 @@ async def download_video_with_range_to_cache(
         url=video_url,
     )
 
-    budget = ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
+    budget = create_byte_budget(max_bytes, is_video=True)
     try:
         result = await range_download_file(
             session=session,
@@ -48,6 +50,21 @@ async def download_video_with_range_to_cache(
             max_bytes=max_bytes,
             budget=budget,
         )
+    except asyncio.CancelledError:
+        raise
+    except DownloadLimitExceeded as e:
+        logger.warning(f"Range下载已触发大小限制: {video_url}, 错误: {e}")
+        return {
+            "file_path": None,
+            "size_mb": (
+                e.observed_bytes / (1024 * 1024)
+                if e.observed_bytes is not None
+                else None
+            ),
+            "status_code": None,
+            "error": str(e),
+            "limit_source": e.limit_source,
+        }
     except Exception as e:
         logger.warning(f"Range下载异常，降级为normal_video: {video_url}, 错误: {e}")
         result = None

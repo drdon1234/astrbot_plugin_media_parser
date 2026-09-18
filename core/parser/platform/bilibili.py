@@ -15,6 +15,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..runtime_manager.bilibili.auth import BilibiliAuthRuntime
 from ..utils import build_request_headers, is_live_url, SkipParse, format_duration_ms
 from .base import BaseVideoParser
@@ -1196,6 +1197,7 @@ class BilibiliParser(BaseVideoParser):
                     video_result.get("video_urls", [])
                 ),
                 "image_urls": video_result.get("image_urls", []),
+                "video_cover_urls": video_result.get("video_cover_urls", []),
                 "image_headers": image_headers,
                 "video_headers": video_headers,
                 "access_status": video_result.get("access_status", ""),
@@ -2295,7 +2297,6 @@ class BilibiliParser(BaseVideoParser):
                 origin_title = video_result.get("title", "")
                 origin_author = video_result.get("author", "")
                 origin_desc = video_result.get("desc", "")
-                origin_url = video_result.get("url", video_url)
 
                 origin_timestamp = ""
                 if origin_data_for_timestamp and isinstance(
@@ -2346,10 +2347,6 @@ class BilibiliParser(BaseVideoParser):
                     final_timestamp = timestamp
 
                 dynamic_url = original_url if _is_b23_url(original_url) else url
-                if dynamic_url and origin_url and dynamic_url != origin_url:
-                    final_url = f"{dynamic_url} ({origin_url})"
-                else:
-                    final_url = dynamic_url
 
                 referer = url
                 origin = "https://www.bilibili.com"
@@ -2357,7 +2354,7 @@ class BilibiliParser(BaseVideoParser):
                     referer=referer, origin=origin, cookie_header=cookie_header
                 )
                 result = {
-                    "url": final_url,
+                    "url": dynamic_url,
                     "title": final_title,
                     "author": final_author,
                     "desc": final_desc,
@@ -2366,6 +2363,7 @@ class BilibiliParser(BaseVideoParser):
                         video_result.get("video_urls", [])
                     ),
                     "image_urls": video_result.get("image_urls", []),
+                    "video_cover_urls": video_result.get("video_cover_urls", []),
                     "image_headers": image_headers,
                     "video_headers": video_headers,
                     "access_status": video_result.get("access_status", ""),
@@ -2415,6 +2413,7 @@ class BilibiliParser(BaseVideoParser):
                         video_result.get("video_urls", [])
                     ),
                     "image_urls": video_result.get("image_urls", []),
+                    "video_cover_urls": video_result.get("video_cover_urls", []),
                     "image_headers": image_headers,
                     "video_headers": video_headers,
                     "access_status": video_result.get("access_status", ""),
@@ -2483,7 +2482,7 @@ class BilibiliParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个B站链接
 
         Args:

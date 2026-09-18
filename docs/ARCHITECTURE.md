@@ -40,6 +40,7 @@ astrbot_plugin_media_parser/
     ├── logger.py                    # 统一 logger
     ├── types.py                     # MediaMetadata / LinkBuildMeta / BuildAllNodesResult
     ├── message_text.py              # 消息文本长度约束与分片
+    ├── metadata_state.py            # 媒体模式、大小与有效性汇总字段统一派生
     ├── metadata_visibility.py       # 文本元数据字段可见性读取
     ├── parser/
     │   ├── manager.py               # ParserManager，并发解析与结果归一
@@ -238,7 +239,7 @@ cache/runtime_manager/bilibili/cookie.json
 
 ### 2.5 下载器模块 `core/downloader/`
 
-`DownloadManager.process_metadata()` 是下载决策入口。它会把解析器输出归一为：
+`ParserManager` 是解析结果的规范化边界：统一写入输入链接和实际解析器名，补齐必需字段，并校验解析阶段全部声明字段的类型、URL 候选组结构及请求头内容。`DownloadManager.process_metadata()` 只消费已经规范化的结构：
 
 ```text
 video_urls: List[List[str]]
@@ -246,18 +247,18 @@ image_urls: List[List[str]]
 file_paths: List[Optional[str]]
 ```
 
-当 `message.media_display.video_cover_only=true` 时，下载器会先把视频媒体转换为图片媒体：解析结果提供 `video_cover_urls` 等封面字段时直接按图片下载封面；没有封面字段时创建本地 `video_cover` 任务。远端视频先经 `handler/video_cover.py` 的本地 HTTP 流式中继读取，按 `download.max_video_size_mb` 及下载器硬上限限制输入字节，再由 ffmpeg 截取第一帧；中继也负责让 HTTPS 来源以本地 HTTP 输入形式兼容 ffmpeg。
+当 `message.media_display.video_cover_only=true` 时，下载器会先把视频媒体转换为图片媒体：解析结果提供唯一标准字段 `video_cover_urls` 时直接按图片下载封面；没有封面时创建本地 `video_cover` 任务。远端视频先经 `handler/video_cover.py` 的本地 HTTP 流式中继读取，按 `download.max_video_size_mb` 及下载器硬上限限制输入字节，再由 ffmpeg 截取第一帧；中继也负责让 HTTPS 来源以本地 HTTP 输入形式兼容 ffmpeg。
 
 `file_paths` 索引固定为：
 
 ```text
 0 .. video_count - 1                       视频
-video_count .. video_count + image_count   图片
+video_count .. video_count + image_count - 1   图片
 ```
 
 每个视频独立决策：
 
-- `video_force_download` 或逐项 `video_force_downloads` 为真：必须 `local`。
+- `video_force_download` 为真：该解析结果中的视频必须 `local`。
 - URL 含 `dash:` 或 `m3u8:`：必须 `local`。
 - 缓存可用的普通视频：`local`。
 - 缓存不可用的普通视频：通过大小与可访问性预检后 `direct`。
@@ -454,7 +455,7 @@ local_items 并发下载
   ├─ file_paths
   ├─ video_modes/image_modes
   ├─ video_skip_reasons/image_skip_reasons
-  ├─ video_sizes/status_codes
+  ├─ video_sizes/video_size_limit_flags/status_codes
   ├─ has_valid_media/use_local_files
   ├─ failed_video_count/failed_image_count
   └─ exceeds_max_size/has_access_denied
@@ -523,32 +524,47 @@ cleanup_marked_in(cache_dir)
 解析器产出：
 
 ```text
-url/source_url/platform/parser_name
+url/platform
 title/author/desc/timestamp
-video_urls/image_urls
+video_urls/video_cover_urls/image_urls
 video_headers/image_headers
-video_force_download/video_force_downloads
+video_force_download
 access_status/restriction_type/restriction_label
 can_access_full_video/is_preview_only/access_message
 timelength_ms/available_length_ms
 hot_comments
-translation_target_language/_translated_fields
 use_image_proxy/use_video_proxy/proxy_url
-error
 ```
 
-Pixiv 解析器还会附加 `pixiv_illust_id`、`pixiv_user_id`、`pixiv_x_restrict`、`pixiv_ai_type`、`pixiv_sanity_level` 和 `pixiv_page_count`，用于保留作品访问限制与分页信息。
+`ParserManager` 归一化时统一回填：
+
+```text
+source_url/parser_name
+```
+
+其中 `source_url` 始终是消息中提取的输入链接，`url` 是单一规范链接；`parser_name` 始终是实际解析器名，`platform` 表示内容来源。平台解析器不得主动返回 `source_url` 或 `parser_name`。
+
+流程控制、错误与翻译层回填：
+
+```text
+error
+_enable_text_metadata/_enable_rich_media/_text_metadata_fields
+translation_target_language/_translated_fields
+```
+
+`error` 可由 `ParserManager` 的解析错误隔离或后续运行时处理失败回填，平台解析器不得主动返回。
 
 下载层回填：
 
 ```text
 file_paths
 video_sizes
+video_size_limit_flags
 video_status_codes/image_status_codes
 video_modes/image_modes
 video_skip_reasons/image_skip_reasons
-media_cache_dir_available
-max_video_size_mb/total_video_size_mb
+image_warnings
+largest_video_size_mb/total_video_size_mb
 video_count/image_count
 has_valid_media/use_local_files
 exceeds_max_size/has_access_denied
@@ -658,6 +674,6 @@ metadata.proxy_url > ConfigManager.proxy.address
 - 解析阶段：`SkipParse` 跳过；普通异常生成 error metadata；`CancelledError` 继续抛出。
 - Pixiv Ajax 返回 HTML 时会在 HTTP 状态抛错前识别 Cloudflare 防护页，避免把拦截页当作 JSON 处理。
 - 下载阶段：单个候选失败会尝试下一个候选；媒体项全部失败写入 skip reason；本条 metadata 全部媒体失败时清理对应缓存子目录。
-- 大小限制：普通视频下载前预检，DASH/M3U8/强制缓存视频下载后再兜底检查，超限会删除文件并置为 `skip`。
+- 大小限制：普通视频优先下载前预检；无声明大小的普通流、Range、DASH 与 M3U8 在下载预算或合并产物检查中识别运行时超限，删除临时文件并置为 `skip`。下载器内部区分用户配置上限与资源保护安全上限，只有前者会写入 `video_size_limit_flags` 并参与 `exceeds_max_size` 派生；已知完整大小时同步回填 `video_sizes`，流式中止时不推测文件总大小。
 - 发送阶段：独立节点采用 best-effort，部分失败会给用户明确提示；预期节点全部发送失败时抛出聚合错误，不再记录虚假的“发送完成”。主发送异常始终进入 finally 清理。
 - 外部依赖：DASH/M3U8/图片转换涉及 ffmpeg，TikTok 涉及系统 curl，文本元数据图片渲染依赖 Pillow 和可用中文字体；超时或取消路径会终止并回收子进程。

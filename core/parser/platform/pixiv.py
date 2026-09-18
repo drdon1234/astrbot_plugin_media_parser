@@ -285,7 +285,6 @@ class PixivParser(BaseVideoParser):
         # ── 构建元数据 ──
         title = str(body.get("illustTitle") or body.get("title") or "Untitled")
         user_name = str(body.get("userName") or "Unknown")
-        user_id = str(body.get("userId") or "")
 
         def safe_int(value: Any) -> int:
             try:
@@ -295,7 +294,6 @@ class PixivParser(BaseVideoParser):
 
         x_restrict = safe_int(body.get("xRestrict"))
         ai_type = safe_int(body.get("aiType"))
-        sanity_level = safe_int(body.get("sl"))
 
         # 构建描述（包含标签 + 限制信息）
         desc_parts = []
@@ -316,11 +314,9 @@ class PixivParser(BaseVideoParser):
 
         metadata: MediaMetadata = {
             "url": url,
-            "source_url": url,
             "title": title,
             "author": user_name,
             "platform": "pixiv",
-            "parser_name": "pixiv",
             "desc": desc,
             "image_urls": image_urls,
             "video_urls": [],
@@ -332,16 +328,7 @@ class PixivParser(BaseVideoParser):
             "video_headers": {},
             "use_image_proxy": bool(self.proxy),
             "proxy_url": self.proxy,
-            "has_valid_media": bool(image_urls),
         }
-
-        # 附加 Pixiv 特有字段
-        metadata["pixiv_illust_id"] = illust_id
-        metadata["pixiv_user_id"] = user_id
-        metadata["pixiv_x_restrict"] = x_restrict
-        metadata["pixiv_ai_type"] = ai_type
-        metadata["pixiv_sanity_level"] = sanity_level
-        metadata["pixiv_page_count"] = page_count
 
         elapsed = time.time() - t_start
         r18_label = ""

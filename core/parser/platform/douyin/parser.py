@@ -12,6 +12,7 @@ import aiohttp
 from ....logger import logger
 
 from ....constants import Config
+from ....types import MediaMetadata
 from ...utils import SkipParse, build_request_headers, is_live_url
 from ..base import BaseVideoParser
 from .web import DouyinWebClient
@@ -547,23 +548,23 @@ class DouyinParser(BaseVideoParser):
         """提取视频段和图片段；视频存在时不再把条目降级成图集。"""
         video_url_lists: List[List[str]] = []
         image_url_lists: List[List[str]] = []
-        video_cover_url_lists: List[List[str]] = []
+        video_cover_groups: List[List[str]] = []
 
         top_level_video_urls = self._extract_douyin_video_url_list(
             item_info.get("video")
         )
         if top_level_video_urls:
             video_url_lists.append(top_level_video_urls)
-            video_cover_url_lists.append(
+            video_cover_groups.append(
                 self._extract_douyin_video_cover_url_list(item_info.get("video"))
             )
-            return video_url_lists, image_url_lists, video_cover_url_lists
+            return video_url_lists, image_url_lists, video_cover_groups
 
         for image_item in item_info.get("images") or []:
             slide_video_urls = self._extract_douyin_slide_video_url_list(image_item)
             if slide_video_urls:
                 video_url_lists.append(slide_video_urls)
-                video_cover_url_lists.append(
+                video_cover_groups.append(
                     self._extract_douyin_slide_cover_url_list(image_item)
                 )
                 continue
@@ -572,7 +573,7 @@ class DouyinParser(BaseVideoParser):
             if image_urls:
                 image_url_lists.append(image_urls)
 
-        return video_url_lists, image_url_lists, video_cover_url_lists
+        return video_url_lists, image_url_lists, video_cover_groups
 
     def _build_douyin_result_from_item(
         self, item_info: Dict[str, Any]
@@ -583,7 +584,7 @@ class DouyinParser(BaseVideoParser):
         (
             video_url_lists,
             image_url_lists,
-            video_cover_url_lists,
+            video_cover_groups,
         ) = self._extract_douyin_media_url_lists(item_info)
 
         return {
@@ -592,7 +593,7 @@ class DouyinParser(BaseVideoParser):
             "timestamp": self._format_timestamp(item_info.get("create_time")),
             "video_url_lists": video_url_lists,
             "video_url_list": video_url_lists[0] if video_url_lists else [],
-            "video_cover_urls": video_cover_url_lists,
+            "video_cover_urls": video_cover_groups,
             "image_url_lists": image_url_lists,
             "is_gallery": bool(image_url_lists and not video_url_lists),
             "user_agent": DOUYIN_USER_AGENT,
@@ -706,6 +707,12 @@ class DouyinParser(BaseVideoParser):
                 session, item_id, referer=referer
             )
             if result:
+                if result.get("is_gallery") and not result.get("video_url_lists"):
+                    logger.warning(
+                        f"[{self.name}] Web详情获取失败，作品 {item_id} 已使用 "
+                        "slidesinfo 图片兜底；该接口可能缺少动态图片的视频地址，"
+                        f"图片数={len(result.get('image_url_lists') or [])}"
+                    )
                 return result
             url = f"https://www.iesdouyin.com/share/slides/{item_id}/"
         elif is_note:
@@ -855,7 +862,7 @@ class DouyinParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个抖音链接。"""
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
@@ -903,7 +910,6 @@ class DouyinParser(BaseVideoParser):
                     "desc": "",
                     "timestamp": timestamp,
                     "platform": "douyin",
-                    "parser_name": self.name,
                     "video_urls": [],
                     "video_cover_urls": [],
                     "image_urls": image_url_lists,
@@ -922,7 +928,6 @@ class DouyinParser(BaseVideoParser):
                 "desc": "",
                 "timestamp": timestamp,
                 "platform": "douyin",
-                "parser_name": self.name,
                 "video_urls": video_url_lists,
                 "video_cover_urls": video_cover_urls,
                 "image_urls": image_url_lists,

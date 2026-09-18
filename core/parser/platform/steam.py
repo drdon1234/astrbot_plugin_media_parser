@@ -417,8 +417,6 @@ class SteamParser(BaseVideoParser):
             raise RuntimeError("小黑盒路径未返回有效游戏详情")
         result = dict(result)
         result["url"] = url
-        result["source_url"] = url
-        result["steam_appid"] = appid
         result["use_image_proxy"] = self.use_image_proxy
         result["use_video_proxy"] = self.use_video_proxy
         result["proxy_url"] = (
@@ -449,8 +447,6 @@ class SteamParser(BaseVideoParser):
             canonical_url = f"https://store.steampowered.com/app/{appid}/"
             result: MediaMetadata = {
                 "url": url,
-                "source_url": url,
-                "steam_appid": appid,
                 "title": name,
                 "author": ", ".join(self._string_values(game.get("developers"))),
                 "desc": description,

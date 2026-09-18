@@ -8,6 +8,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ..budget import merge_limit_sources
 from ..utils import process_gather_results, generate_cache_file_path
 from .base import download_media_from_url
 
@@ -52,7 +53,13 @@ async def download_video_to_cache(
             url=url,
         )
 
-    file_path, size_mb, status_code, error = await download_media_from_url(
+    (
+        file_path,
+        size_mb,
+        status_code,
+        error,
+        limit_source,
+    ) = await download_media_from_url(
         session=session,
         media_url=video_url,
         file_path_generator=file_path_generator,
@@ -69,9 +76,10 @@ async def download_video_to_cache(
     logger.debug(f"视频下载失败: {video_url}")
     return {
         "file_path": None,
-        "size_mb": None,
+        "size_mb": size_mb,
         "status_code": status_code,
         "error": error or "下载失败",
+        "limit_source": limit_source,
     }
 
 
@@ -119,6 +127,8 @@ async def batch_download_videos(
                         "index": index,
                     }
 
+                last_result: Dict[str, Any] = {}
+                failed_results: List[Dict[str, Any]] = []
                 for url in url_list:
                     result = await download_video_to_cache(
                         session,
@@ -130,6 +140,7 @@ async def batch_download_videos(
                         item_proxy,
                         max_bytes,
                     )
+                    last_result = result or {}
                     if result and result.get("file_path"):
                         return {
                             "url": url_list[0],
@@ -138,13 +149,33 @@ async def batch_download_videos(
                             "success": True,
                             "index": index,
                         }
+                    if result:
+                        failed_results.append(result)
+
+                limited_results = [
+                    result for result in failed_results if result.get("limit_source")
+                ]
+                known_sizes = [
+                    float(result["size_mb"])
+                    for result in limited_results
+                    if isinstance(result.get("size_mb"), (int, float))
+                ]
+                error_result = next(
+                    (result for result in limited_results if result.get("error")),
+                    last_result,
+                )
 
                 return {
                     "url": url_list[0] if url_list else None,
                     "file_path": None,
-                    "size_mb": None,
+                    "size_mb": max(known_sizes) if known_sizes else None,
+                    "status_code": last_result.get("status_code"),
                     "success": False,
                     "index": index,
+                    "error": error_result.get("error"),
+                    "limit_source": merge_limit_sources(
+                        *(result.get("limit_source") for result in failed_results)
+                    ),
                 }
             except Exception as e:
                 url_list = item.get("url_list", [])

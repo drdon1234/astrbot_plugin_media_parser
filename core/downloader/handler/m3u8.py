@@ -13,14 +13,16 @@ import aiohttp
 
 from ...logger import logger
 
-from ...storage import cleanup_directory, cleanup_file, stamp_subdir
 from ...constants import Config
+from ...storage import cleanup_directory, cleanup_file, stamp_subdir
 from ..budget import (
     ByteBudget,
+    DownloadLimitExceeded,
     MAX_HLS_INIT_BYTES,
     MAX_HLS_SEGMENTS,
     MAX_MANIFEST_BYTES,
-    resolve_max_bytes,
+    classify_limit_source,
+    create_byte_budget,
 )
 from ..fileio import gather_cancel_on_error, run_blocking
 from .base import (
@@ -70,18 +72,19 @@ async def _terminate_process(process, label: str) -> None:
 
 async def _communicate_process(process, label: str):
     """等待子进程完成，超时或取消时确保回收。"""
+    completed = False
     try:
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=Config.VIDEO_DOWNLOAD_TIMEOUT
         )
+        completed = True
         return stdout, stderr, False
     except asyncio.TimeoutError:
-        await _terminate_process(process, label)
         logger.warning(f"{label} 超时")
         return b"", b"", True
-    except asyncio.CancelledError:
-        await _terminate_process(process, label)
-        raise
+    finally:
+        if not completed:
+            await _terminate_process(process, label)
 
 
 class M3U8Handler:
@@ -171,7 +174,7 @@ class M3U8Handler:
             二进制内容
         """
         attempts = Config.DOWNLOAD_RETRY_ATTEMPTS
-        active_budget = budget or ByteBudget(resolve_max_bytes(None, is_video=True))
+        active_budget = budget or create_byte_budget(None, is_video=True)
         for attempt in range(1, attempts + 1):
             consumed = 0
             try:
@@ -195,6 +198,9 @@ class M3U8Handler:
                         chunks.append(chunk)
                     return b"".join(chunks)
             except asyncio.CancelledError:
+                await active_budget.release(consumed)
+                raise
+            except DownloadLimitExceeded:
                 await active_budget.release(consumed)
                 raise
             except Exception as e:
@@ -222,7 +228,7 @@ class M3U8Handler:
             失败时抛出 M3U8DownloadError
         """
         attempts = Config.DOWNLOAD_RETRY_ATTEMPTS
-        active_budget = budget or ByteBudget(resolve_max_bytes(None, is_video=True))
+        active_budget = budget or create_byte_budget(None, is_video=True)
         for attempt in range(1, attempts + 1):
             temp_path = f"{output_path}.{uuid.uuid4().hex}.part"
             consumed = 0
@@ -240,7 +246,12 @@ class M3U8Handler:
                 )
                 async with response:
                     response.raise_for_status()
-                    output_file = await run_blocking(open, temp_path, "wb")
+                    output_file = await run_blocking(
+                        open,
+                        temp_path,
+                        "wb",
+                        cancel_result_cleanup=lambda file_obj: file_obj.close(),
+                    )
                     async for chunk in response.content.iter_chunked(
                         Config.STREAM_DOWNLOAD_CHUNK_SIZE
                     ):
@@ -254,6 +265,12 @@ class M3U8Handler:
                     os.replace(temp_path, output_path)
                 return
             except asyncio.CancelledError:
+                if output_file is not None:
+                    await run_blocking(output_file.close)
+                cleanup_file(temp_path)
+                await active_budget.release(consumed)
+                raise
+            except DownloadLimitExceeded:
                 if output_file is not None:
                     await run_blocking(output_file.close)
                 cleanup_file(temp_path)
@@ -361,7 +378,7 @@ class M3U8Handler:
                     for index, segment_url in enumerate(segments)
                 )
             )
-        except M3U8DownloadError:
+        except (DownloadLimitExceeded, M3U8DownloadError):
             raise
         except Exception as exc:
             raise M3U8DownloadError(
@@ -413,7 +430,7 @@ class M3U8Handler:
             return True
         except asyncio.CancelledError:
             raise
-        except M3U8DownloadError:
+        except (DownloadLimitExceeded, M3U8DownloadError):
             raise
         except Exception as e:
             logger.warning(f"合并分片失败: {e}")
@@ -506,6 +523,7 @@ class M3U8Handler:
         output_path: str,
         use_ffmpeg: bool,
         budget: ByteBudget,
+        max_bytes: Optional[int],
     ) -> bool:
         """将拼接后的 TS/fMP4 正确封装为输出文件并原子提交。"""
         if not use_ffmpeg:
@@ -536,14 +554,23 @@ class M3U8Handler:
                 return False
             size = await run_blocking(os.path.getsize, ffmpeg_output)
             if size > budget.limit:
-                logger.warning("M3U8单流封装输出超过下载硬限制")
-                return False
+                raise DownloadLimitExceeded(
+                    "M3U8单流封装输出超过下载硬限制",
+                    limit_source=classify_limit_source(
+                        max_bytes,
+                        is_video=True,
+                        observed_bytes=size,
+                    ),
+                    observed_bytes=size,
+                )
             os.replace(ffmpeg_output, output_path)
             return True
         except FileNotFoundError:
             logger.warning("ffmpeg 未找到，无法正确封装M3U8单流")
             return False
         except asyncio.CancelledError:
+            raise
+        except DownloadLimitExceeded:
             raise
         except Exception as exc:
             logger.warning(f"M3U8单流封装异常: {exc}")
@@ -571,7 +598,7 @@ class M3U8Handler:
         output_dir = os.path.dirname(os.path.abspath(output_path))
         os.makedirs(output_dir, exist_ok=True)
         temp_dir = tempfile.mkdtemp(prefix=".m3u8_", dir=output_dir)
-        budget = ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
+        budget = create_byte_budget(max_bytes, is_video=True)
         try:
             video_m3u8, audio_m3u8 = await self.parse_master_m3u8(m3u8_url)
 
@@ -584,7 +611,7 @@ class M3U8Handler:
                 video_merged = os.path.join(temp_dir, "video.m4s")
                 if await self.merge_segments(v_init, v_files, video_merged, budget):
                     if await self._publish_single_stream(
-                        video_merged, output_path, use_ffmpeg, budget
+                        video_merged, output_path, use_ffmpeg, budget, max_bytes
                     ):
                         logger.info(f"✓ 视频下载完成: {output_path}")
                         return True, None, None
@@ -600,7 +627,7 @@ class M3U8Handler:
                 video_merged = os.path.join(temp_dir, "video.m4s")
                 if await self.merge_segments(v_init, v_files, video_merged, budget):
                     if await self._publish_single_stream(
-                        video_merged, output_path, use_ffmpeg, budget
+                        video_merged, output_path, use_ffmpeg, budget, max_bytes
                     ):
                         logger.info(f"✓ 视频下载完成: {output_path}")
                         return True, None, None
@@ -659,7 +686,15 @@ class M3U8Handler:
                     if process.returncode == 0:
                         output_size = await run_blocking(os.path.getsize, ffmpeg_output)
                         if output_size > budget.limit:
-                            raise M3U8DownloadError("M3U8合并输出超过下载硬限制")
+                            raise DownloadLimitExceeded(
+                                "M3U8合并输出超过下载硬限制",
+                                limit_source=classify_limit_source(
+                                    max_bytes,
+                                    is_video=True,
+                                    observed_bytes=output_size,
+                                ),
+                                observed_bytes=output_size,
+                            )
                         os.replace(ffmpeg_output, output_path)
                         logger.info(f"✓ 视频下载完成: {output_path}")
                         return True, None, None
@@ -682,6 +717,9 @@ class M3U8Handler:
                 return False, "M3U8音视频分离但未启用ffmpeg合并", None
 
         except asyncio.CancelledError:
+            raise
+        except DownloadLimitExceeded as e:
+            logger.error(f"✗ 视频下载超过大小限制: {e}")
             raise
         except M3U8DownloadError as e:
             logger.error(f"✗ 视频下载失败: {e}")
@@ -749,6 +787,19 @@ class M3U8Handler:
             }
         except asyncio.CancelledError:
             raise
+        except DownloadLimitExceeded as e:
+            cleanup_file(output_path)
+            return {
+                "file_path": None,
+                "size_mb": (
+                    e.observed_bytes / (1024 * 1024)
+                    if e.observed_bytes is not None
+                    else None
+                ),
+                "status_code": None,
+                "error": str(e),
+                "limit_source": e.limit_source,
+            }
         except Exception as e:
             logger.warning(f"下载 m3u8 到缓存目录失败: {m3u8_url}, 错误: {e}")
             return {

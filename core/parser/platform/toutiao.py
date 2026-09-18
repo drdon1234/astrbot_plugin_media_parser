@@ -15,6 +15,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import SkipParse, build_request_headers
 from .base import BaseVideoParser
 
@@ -524,7 +525,6 @@ class ToutiaoParser(BaseVideoParser):
         content_html = self._extract_article_content_html(article_info)
         return {
             "url": source_url,
-            "source_url": source_url,
             "title": title,
             "author": self._format_author(article_info),
             "desc": self._clean_html_text(content_html),
@@ -633,7 +633,6 @@ class ToutiaoParser(BaseVideoParser):
 
         return {
             "url": source_url,
-            "source_url": source_url,
             "title": title,
             "author": self._format_author(article_info),
             "desc": self._clean_html_text(str(article_info.get("content") or "")),
@@ -656,7 +655,7 @@ class ToutiaoParser(BaseVideoParser):
         self,
         session: aiohttp.ClientSession,
         url: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
             context = await self._resolve_content_context(session, url)

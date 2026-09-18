@@ -12,6 +12,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import build_request_headers
 from .base import BaseVideoParser
 
@@ -590,7 +591,7 @@ class TwitterParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个Twitter链接
 
         Args:
@@ -663,7 +664,6 @@ class TwitterParser(BaseVideoParser):
                     ),
                     "video_cover_urls": video_cover_urls,
                     "image_urls": [[url] for url in image_urls],
-                    "is_twitter_video": True,
                     "video_force_download": True,
                 }
                 logger.debug(
@@ -678,7 +678,6 @@ class TwitterParser(BaseVideoParser):
                     ),
                     "video_cover_urls": video_cover_urls,
                     "image_urls": [],
-                    "is_twitter_video": True,
                     "video_force_download": True,
                 }
                 logger.debug(
@@ -691,7 +690,6 @@ class TwitterParser(BaseVideoParser):
                     "video_urls": [],
                     "video_cover_urls": [],
                     "image_urls": [[url] for url in image_urls],
-                    "is_twitter_video": False,
                 }
                 if image_urls:
                     logger.debug(

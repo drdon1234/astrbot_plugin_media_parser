@@ -574,13 +574,11 @@ class XueqiuParser(BaseVideoParser):
 
         metadata: MediaMetadata = {
             "url": url,
-            "source_url": url,
             "title": title,
             "author": self._extract_author(status),
             "desc": desc,
             "timestamp": self._format_timestamp(status.get("created_at")),
             "platform": "xueqiu",
-            "parser_name": "xueqiu",
             "video_urls": video_urls,
             "image_urls": image_urls,
             "image_headers": build_request_headers(

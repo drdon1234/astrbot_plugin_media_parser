@@ -1,7 +1,7 @@
 """消息节点构建器，将解析结果转换为可发送消息节点。"""
 
 import os
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from ..logger import logger
 
@@ -9,8 +9,9 @@ from astrbot.api.message_components import Plain, Image, Video
 
 from ..downloader.utils import strip_media_prefixes
 from ..message_text import split_message_text
+from ..metadata_state import largest_size_limited_video_mb, refresh_media_state
 from ..metadata_visibility import text_metadata_field_enabled
-from ..types import BuildAllNodesResult, LinkBuildMeta
+from ..types import BuildAllNodesResult, LinkBuildMeta, MediaMetadata
 
 
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
@@ -69,14 +70,16 @@ def strip_text_metadata_nodes(
         link_nodes[:] = [node for node in link_nodes if not isinstance(node, Plain)]
 
 
-def _resolve_output_flag(metadata: Dict[str, Any], key: str, default: bool) -> bool:
+def _resolve_output_flag(metadata: MediaMetadata, key: str, default: bool) -> bool:
     value = metadata.get(key)
     if value is None:
         return bool(default)
     return bool(value)
 
 
-def _append_media_skip_summary(text_parts: List[str], metadata: Dict[str, Any]) -> None:
+def _append_media_skip_summary(
+    text_parts: List[str], metadata: MediaMetadata
+) -> None:
     """将媒体跳过统计和逐项原因追加到文本节点。"""
     video_reasons = metadata.get("video_skip_reasons", []) or []
     image_reasons = metadata.get("image_skip_reasons", []) or []
@@ -112,23 +115,37 @@ def _append_media_skip_summary(text_parts: List[str], metadata: Dict[str, Any]) 
 
 
 def _mark_media_failure(
-    metadata: Dict[str, Any], kind: str, index: int, reason: str
+    metadata: MediaMetadata, kind: str, index: int, reason: str
 ) -> None:
-    """节点构建失败时回填跳过原因，供文本节点或调试使用。"""
-    key = "video_skip_reasons" if kind == "video" else "image_skip_reasons"
-    count_key = "failed_video_count" if kind == "video" else "failed_image_count"
-    reasons = metadata.setdefault(key, [])
+    """节点构建失败时回填状态，并重新派生媒体汇总字段。"""
+    mode_key = "video_modes" if kind == "video" else "image_modes"
+    url_key = "video_urls" if kind == "video" else "image_urls"
+    reason_key = "video_skip_reasons" if kind == "video" else "image_skip_reasons"
+
+    modes = metadata.get(mode_key)
+    if not isinstance(modes, list):
+        modes = []
+        metadata[mode_key] = modes
+    media_urls = metadata.get(url_key)
+    media_count = len(media_urls) if isinstance(media_urls, list) else 0
+    default_mode = "local" if metadata.get("use_local_files") else "direct"
+    while len(modes) < max(media_count, index + 1):
+        modes.append(default_mode)
+    modes[index] = "skip"
+
+    reasons = metadata.get(reason_key)
+    if not isinstance(reasons, list):
+        reasons = []
+        metadata[reason_key] = reasons
     while len(reasons) <= index:
         reasons.append(None)
     if not reasons[index]:
         reasons[index] = reason
-    try:
-        metadata[count_key] = int(metadata.get(count_key, 0) or 0) + 1
-    except (TypeError, ValueError):
-        metadata[count_key] = 1
+
+    refresh_media_state(metadata)
 
 
-def _translated_text(metadata: Dict[str, Any], field: str) -> str:
+def _translated_text(metadata: MediaMetadata, field: str) -> str:
     translated_fields = metadata.get("_translated_fields")
     if isinstance(translated_fields, dict):
         value = str(translated_fields.get(field) or "").strip()
@@ -138,7 +155,7 @@ def _translated_text(metadata: Dict[str, Any], field: str) -> str:
 
 
 def build_text_node(
-    metadata: Dict[str, Any],
+    metadata: MediaMetadata,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
 ) -> Optional[Plain]:
@@ -178,16 +195,23 @@ def build_text_node(
 
     video_count = metadata.get("video_count", 0)
     if video_count > 0:
-        actual_max_video_size_mb = metadata.get("max_video_size_mb")
+        actual_max_video_size_mb = metadata.get("largest_video_size_mb")
         total_video_size_mb = metadata.get("total_video_size_mb", 0.0)
+        video_modes = metadata.get("video_modes")
+        sendable_video_count = (
+            sum(mode in ("local", "direct") for mode in video_modes)
+            if isinstance(video_modes, list)
+            else video_count
+        )
 
         if actual_max_video_size_mb is not None:
-            if video_count == 1:
+            if sendable_video_count == 1:
                 text_parts.append(f"视频大小：{actual_max_video_size_mb:.1f} MB")
             else:
                 text_parts.append(
                     f"视频大小：最大 {actual_max_video_size_mb:.1f} MB "
-                    f"(共 {video_count} 个视频, 总计 {total_video_size_mb:.1f} MB)"
+                    f"(共 {sendable_video_count} 个可发送视频, "
+                    f"总计 {total_video_size_mb:.1f} MB)"
                 )
 
     has_valid_media = metadata.get("has_valid_media")
@@ -248,7 +272,7 @@ def build_text_node(
             text_parts.append("解析失败：直链内未找到有效媒体")
 
     if metadata.get("exceeds_max_size"):
-        actual_video_size = metadata.get("max_video_size_mb")
+        actual_video_size = largest_size_limited_video_mb(metadata)
         if actual_video_size is not None:
             if max_video_size_mb > 0:
                 text_parts.append(
@@ -258,6 +282,12 @@ def build_text_node(
                 text_parts.append(
                     f"解析失败：视频大小超过限制（{actual_video_size:.1f}MB）"
                 )
+        elif max_video_size_mb > 0:
+            text_parts.append(
+                f"解析失败：视频大小超过管理员设定的限制（{max_video_size_mb:.1f}MB）"
+            )
+        else:
+            text_parts.append("解析失败：视频大小超过限制")
 
     _append_media_skip_summary(text_parts, metadata)
 
@@ -276,7 +306,7 @@ def build_text_node(
 
 
 def build_hot_comments_node(
-    metadata: Dict[str, Any], enable_text_metadata: bool = True
+    metadata: MediaMetadata, enable_text_metadata: bool = True
 ) -> Optional[Plain]:
     """构建独立热评节点，避免与基础文本元数据混排。"""
     if not enable_text_metadata:
@@ -312,7 +342,7 @@ def build_hot_comments_node(
 
 
 def build_translation_node(
-    metadata: Dict[str, Any], enable_text_metadata: bool = True
+    metadata: MediaMetadata, enable_text_metadata: bool = True
 ) -> Optional[Plain]:
     """构建独立翻译节点，翻译内容不混入基础文本元数据。"""
     if not enable_text_metadata:
@@ -349,7 +379,7 @@ def build_translation_node(
 
 
 def build_media_nodes(
-    metadata: Dict[str, Any],
+    metadata: MediaMetadata,
     use_local_files: bool = False,
     enable_rich_media: bool = True,
 ) -> List[Union[Image, Video]]:
@@ -365,6 +395,10 @@ def build_media_nodes(
     """
     nodes = []
     url = metadata.get("url", "")
+
+    if metadata.get("error"):
+        logger.debug(f"元数据包含解析错误，跳过媒体节点构建: {url}")
+        return nodes
 
     if not enable_rich_media:
         logger.debug(f"富媒体输出已关闭，跳过媒体节点: {url}")
@@ -524,7 +558,7 @@ def build_media_nodes(
 
 
 def _build_node_parts_for_link(
-    metadata: Dict[str, Any],
+    metadata: MediaMetadata,
     use_local_files: bool = False,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
@@ -612,7 +646,7 @@ def summarize_node_counts(
 
 
 def build_all_nodes(
-    metadata_list: List[Dict[str, Any]],
+    metadata_list: List[MediaMetadata],
     large_video_threshold_mb: float = 0.0,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
@@ -639,22 +673,10 @@ def build_all_nodes(
 
     for idx, metadata in enumerate(metadata_list):
         url = metadata.get("url", "")
-        max_video_size = metadata.get("max_video_size_mb")
-        exceeds_max_size = metadata.get("exceeds_max_size", False)
-        is_large_media = False
-        if (
-            large_video_threshold_mb > 0
-            and max_video_size is not None
-            and not exceeds_max_size
-        ):
-            if max_video_size > large_video_threshold_mb:
-                is_large_media = True
-
         use_local_files = metadata.get("use_local_files", False)
 
         logger.debug(
-            f"构建节点[{idx}]: {url}, "
-            f"大媒体: {is_large_media}, 使用本地文件: {use_local_files}"
+            f"构建节点[{idx}]: {url}, 使用本地文件: {use_local_files}"
         )
 
         link_nodes, metadata_text_node = _build_node_parts_for_link(
@@ -665,7 +687,19 @@ def build_all_nodes(
             enable_rich_media,
         )
 
-        logger.debug(f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}")
+        max_video_size = metadata.get("largest_video_size_mb")
+        exceeds_max_size = metadata.get("exceeds_max_size", False)
+        is_large_media = bool(
+            large_video_threshold_mb > 0
+            and max_video_size is not None
+            and max_video_size > large_video_threshold_mb
+            and not exceeds_max_size
+        )
+
+        logger.debug(
+            f"节点构建完成[{idx}]: {url}, 节点数量: {len(link_nodes)}, "
+            f"大媒体: {is_large_media}"
+        )
 
         link_file_paths = metadata.get("file_paths", [])
         link_video_files = []
@@ -718,7 +752,7 @@ def build_all_nodes(
 
 
 def build_translation_nodes_for_all(
-    metadata_list: List[Dict[str, Any]], enable_text_metadata: bool = True
+    metadata_list: List[MediaMetadata], enable_text_metadata: bool = True
 ) -> List[List[Plain]]:
     """按原 metadata 顺序构建翻译节点列表，空翻译保留空列表占位。"""
     all_translation_nodes: List[List[Plain]] = []

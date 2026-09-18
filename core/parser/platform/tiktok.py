@@ -14,6 +14,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import SkipParse, build_request_headers, is_live_url
 from .base import BaseVideoParser
 
@@ -786,7 +787,7 @@ class TikTokParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析单个 TikTok 链接。"""
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
@@ -818,7 +819,6 @@ class TikTokParser(BaseVideoParser):
                     "desc": "",
                     "timestamp": timestamp,
                     "platform": "tiktok",
-                    "parser_name": self.name,
                     "video_urls": [],
                     "image_urls": image_url_lists,
                     "image_headers": headers["image_headers"],
@@ -837,7 +837,6 @@ class TikTokParser(BaseVideoParser):
                 "desc": "",
                 "timestamp": timestamp,
                 "platform": "tiktok",
-                "parser_name": self.name,
                 "video_urls": [video_url_list],
                 "image_urls": [],
                 "image_headers": headers["image_headers"],

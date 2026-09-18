@@ -7,9 +7,17 @@ from typing import Dict, Any, Optional
 import aiohttp
 
 from ...logger import logger
+
 from ...constants import Config
 from ...storage import cleanup_file, stamp_subdir
-from ..budget import ByteBudget, resolve_max_bytes
+from ..budget import (
+    ByteBudget,
+    DownloadLimitExceeded,
+    classify_limit_source,
+    create_byte_budget,
+    merge_limit_sources,
+    resolve_max_bytes,
+)
 from ..fileio import gather_cancel_on_error, run_blocking
 from .base import download_media_from_url
 
@@ -29,22 +37,25 @@ async def _download_stream_normal(
         """根据内容类型与链接生成目标文件路径。"""
         return output_path
 
-    file_path, size_mb, status_code, error = await download_media_from_url(
-        session=session,
-        media_url=media_url,
-        file_path_generator=file_path_generator,
-        is_video=True,
-        headers=headers,
-        proxy=proxy,
-        max_bytes=max_bytes,
-        budget=budget,
+    file_path, size_mb, status_code, error, limit_source = (
+        await download_media_from_url(
+            session=session,
+            media_url=media_url,
+            file_path_generator=file_path_generator,
+            is_video=True,
+            headers=headers,
+            proxy=proxy,
+            max_bytes=max_bytes,
+            budget=budget,
+        )
     )
     if not file_path:
         return {
             "file_path": None,
-            "size_mb": None,
+            "size_mb": size_mb,
             "status_code": status_code,
             "error": error or "下载失败",
+            "limit_source": limit_source,
         }
 
     if size_mb is None:
@@ -92,6 +103,21 @@ async def _download_stream(
             if range_result:
                 return range_result
             logger.debug(f"DASH子流Range下载失败，降级普通下载: {actual_url}")
+        except asyncio.CancelledError:
+            raise
+        except DownloadLimitExceeded as e:
+            logger.warning(f"DASH子流Range下载已触发大小限制: {actual_url}, 错误: {e}")
+            return {
+                "file_path": None,
+                "size_mb": (
+                    e.observed_bytes / (1024 * 1024)
+                    if e.observed_bytes is not None
+                    else None
+                ),
+                "status_code": None,
+                "error": str(e),
+                "limit_source": e.limit_source,
+            }
         except Exception as e:
             logger.warning(
                 f"DASH子流Range下载异常，降级普通下载: {actual_url}, 错误: {e}"
@@ -142,8 +168,15 @@ async def _merge_dash_streams(
             output_size = await run_blocking(os.path.getsize, temp_output)
             if output_size > resolve_max_bytes(max_bytes, is_video=True):
                 cleanup_file(temp_output)
-                logger.warning("DASH合并输出超过下载硬限制")
-                return False
+                raise DownloadLimitExceeded(
+                    "DASH合并输出超过下载硬限制",
+                    limit_source=classify_limit_source(
+                        max_bytes,
+                        is_video=True,
+                        observed_bytes=output_size,
+                    ),
+                    observed_bytes=output_size,
+                )
             os.replace(temp_output, output_path)
             return True
 
@@ -159,10 +192,13 @@ async def _merge_dash_streams(
     except asyncio.CancelledError:
         await _terminate_ffmpeg_process(process, "DASH ffmpeg 合并")
         raise
+    except DownloadLimitExceeded:
+        raise
     except FileNotFoundError:
         logger.warning("ffmpeg 未找到，无法合并DASH音视频")
         return False
     except Exception as e:
+        await _terminate_ffmpeg_process(process, "DASH ffmpeg 合并")
         logger.warning(f"DASH ffmpeg 合并异常: {e}")
         return False
     finally:
@@ -202,6 +238,46 @@ def _replace_as_output(src_path: str, output_path: str) -> bool:
         return False
 
 
+def _build_stream_failure(
+    default_error: str,
+    *results: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """汇总 DASH 并发子流失败信息，避免丢失另一条流的限额事实。"""
+    available_results = [result for result in results if isinstance(result, dict)]
+    limited_results = [
+        result for result in available_results if result.get("limit_source")
+    ]
+    known_sizes = [
+        float(result["size_mb"])
+        for result in limited_results
+        if isinstance(result.get("size_mb"), (int, float))
+    ]
+    error_result = next(
+        (result for result in limited_results if result.get("error")),
+        next(
+            (result for result in available_results if result.get("error")),
+            {},
+        ),
+    )
+    status_code = next(
+        (
+            result.get("status_code")
+            for result in available_results
+            if result.get("status_code") is not None
+        ),
+        None,
+    )
+    return {
+        "file_path": None,
+        "size_mb": max(known_sizes) if known_sizes else None,
+        "status_code": status_code,
+        "error": error_result.get("error") or default_error,
+        "limit_source": merge_limit_sources(
+            *(result.get("limit_source") for result in available_results)
+        ),
+    }
+
+
 async def download_dash_to_cache(
     session: aiohttp.ClientSession,
     video_url: str,
@@ -235,7 +311,7 @@ async def download_dash_to_cache(
 
     video_result = None
     audio_result = None
-    budget = ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
+    budget = create_byte_budget(max_bytes, is_video=True)
     try:
         if audio_url:
             video_task = _download_stream(
@@ -273,23 +349,20 @@ async def download_dash_to_cache(
         if not video_result or not video_result.get("file_path"):
             cleanup_file(video_temp_path)
             cleanup_file(audio_temp_path)
-            return {
-                "file_path": None,
-                "size_mb": None,
-                "status_code": (video_result or {}).get("status_code"),
-                "error": (video_result or {}).get("error") or "DASH视频流下载失败",
-            }
+            return _build_stream_failure(
+                "DASH视频流下载失败",
+                video_result,
+                audio_result,
+            )
 
         if audio_url and (not audio_result or not audio_result.get("file_path")):
             cleanup_file(video_result.get("file_path"))
             cleanup_file(video_temp_path)
             cleanup_file(audio_temp_path)
-            return {
-                "file_path": None,
-                "size_mb": None,
-                "status_code": (audio_result or {}).get("status_code"),
-                "error": ((audio_result or {}).get("error") or "DASH音频流下载失败"),
-            }
+            return _build_stream_failure(
+                "DASH音频流下载失败",
+                audio_result,
+            )
 
         video_file_path = video_result["file_path"]
         audio_file_path = audio_result["file_path"] if audio_result else None
@@ -321,6 +394,8 @@ async def download_dash_to_cache(
                 }
         else:
             if not _replace_as_output(video_file_path, output_path):
+                cleanup_file(video_file_path)
+                cleanup_file(output_path)
                 return {
                     "file_path": None,
                     "size_mb": None,
@@ -356,6 +431,24 @@ async def download_dash_to_cache(
         cleanup_file(audio_temp_path)
         cleanup_file(output_path)
         raise
+    except DownloadLimitExceeded as e:
+        cleanup_file(video_temp_path)
+        cleanup_file(audio_temp_path)
+        cleanup_file(output_path)
+        return {
+            "file_path": None,
+            "size_mb": (
+                e.observed_bytes / (1024 * 1024)
+                if e.observed_bytes is not None
+                else None
+            ),
+            "status_code": (
+                (video_result or {}).get("status_code")
+                or (audio_result or {}).get("status_code")
+            ),
+            "error": str(e),
+            "limit_source": e.limit_source,
+        }
     except Exception as e:
         logger.warning(f"DASH 下载失败: video={video_url}, 错误: {e}")
         cleanup_file(video_temp_path)

@@ -10,12 +10,19 @@ import aiohttp
 
 from ...logger import logger
 
-from ...storage import cleanup_file
 from ...constants import Config
+from ...storage import cleanup_file
+from ..budget import (
+    ByteBudget,
+    DownloadLimitExceeded,
+    DownloadLimitSource,
+    classify_limit_source,
+    create_byte_budget,
+    resolve_max_bytes,
+)
+from ..fileio import run_blocking
 from ..utils import extract_size_from_headers
 from ..validator import validate_media_response
-from ..budget import ByteBudget, DownloadLimitExceeded, resolve_max_bytes
-from ..fileio import run_blocking
 
 
 def _is_retryable_exception(exc: BaseException) -> bool:
@@ -218,12 +225,24 @@ async def range_download_file(
         logger.debug(f"Range下载无法获取文件大小: {url}")
         return None
 
-    active_budget = budget or ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
+    active_budget = budget or create_byte_budget(max_bytes, is_video=True)
+    if file_size > active_budget.limit:
+        raise DownloadLimitExceeded(
+            "Range下载内容超过硬限制"
+            f"（{file_size / 1024 / 1024:.1f}MB > "
+            f"{active_budget.limit / 1024 / 1024:.1f}MB）",
+            limit_source=classify_limit_source(
+                max_bytes,
+                is_video=True,
+                observed_bytes=file_size,
+            ),
+            observed_bytes=file_size,
+        )
     try:
         await active_budget.consume(file_size)
     except DownloadLimitExceeded as e:
         logger.warning(f"Range下载已拒绝: {url}, 错误: {e}")
-        return None
+        raise
     budget_reserved = file_size
 
     num_chunks = (file_size + chunk_size - 1) // chunk_size
@@ -240,6 +259,10 @@ async def range_download_file(
     temp_path = _temporary_path(output_path)
     try:
         await run_blocking(_prepare_range_file, temp_path, file_size)
+    except asyncio.CancelledError:
+        cleanup_file(temp_path)
+        await active_budget.release(budget_reserved)
+        raise
     except Exception as e:
         logger.warning(f"创建Range目标文件失败: {output_path}, 错误: {e}")
         cleanup_file(temp_path)
@@ -327,6 +350,10 @@ async def range_download_file(
 
     try:
         actual_size = await run_blocking(os.path.getsize, temp_path)
+    except asyncio.CancelledError:
+        cleanup_file(temp_path)
+        await active_budget.release(budget_reserved)
+        raise
     except Exception as e:
         logger.warning(f"读取Range下载文件大小失败: {output_path}, 错误: {e}")
         cleanup_file(temp_path)
@@ -377,9 +404,7 @@ async def download_media_stream(
     Returns:
         下载是否成功
     """
-    active_budget = budget or ByteBudget(
-        resolve_max_bytes(max_bytes, is_video=is_video)
-    )
+    active_budget = budget or create_byte_budget(max_bytes, is_video=is_video)
     temp_path = _temporary_path(file_path)
     written = 0
     output_file = None
@@ -387,7 +412,12 @@ async def download_media_stream(
         file_dir = os.path.dirname(file_path)
         if file_dir:
             await run_blocking(os.makedirs, file_dir, exist_ok=True)
-        output_file = await run_blocking(open, temp_path, "wb")
+        output_file = await run_blocking(
+            open,
+            temp_path,
+            "wb",
+            cancel_result_cleanup=lambda file_obj: file_obj.close(),
+        )
 
         async def write_chunk(chunk: bytes) -> None:
             nonlocal written
@@ -437,7 +467,13 @@ async def download_media_from_url(
     retry_enabled: bool = True,
     max_bytes: Optional[int] = None,
     budget: Optional[ByteBudget] = None,
-) -> Tuple[Optional[str], Optional[float], Optional[int], Optional[str]]:
+) -> Tuple[
+    Optional[str],
+    Optional[float],
+    Optional[int],
+    Optional[str],
+    Optional[DownloadLimitSource],
+]:
     """通用媒体下载函数，封装公共的下载逻辑
 
     Args:
@@ -449,8 +485,9 @@ async def download_media_from_url(
         proxy: 代理地址（可选）
 
     Returns:
-        (file_path, size_mb, status_code, error) 元组；
-        成功时 error 为 None，失败时尽量保留 HTTP 状态码与错误文本。
+        (file_path, size_mb, status_code, error, limit_source) 元组；
+        成功时 error 为 None，失败时尽量保留 HTTP 状态码、错误文本，以及
+        下载限额来源。
     """
     attempts = Config.DOWNLOAD_RETRY_ATTEMPTS if retry_enabled else 1
     last_error = None
@@ -480,12 +517,13 @@ async def download_media_from_url(
                         None,
                         response.status,
                         "普通媒体下载未返回完整HTTP 200响应",
+                        None,
                     )
                 is_valid, content_preview = await validate_media_response(
                     response, media_url, is_video=is_video, allow_read_content=True
                 )
                 if not is_valid:
-                    return (None, None, response.status, "响应不是有效媒体")
+                    return (None, None, response.status, "响应不是有效媒体", None)
 
                 content_type = response.headers.get("Content-Type", "")
                 size_mb = extract_size_from_headers(response)
@@ -495,8 +533,17 @@ async def download_media_from_url(
                 declared_length = response.headers.get("Content-Length")
                 if declared_length:
                     try:
-                        if int(declared_length) > hard_limit:
-                            raise DownloadLimitExceeded("响应声明大小超过下载硬限制")
+                        declared_bytes = int(declared_length)
+                        if declared_bytes > hard_limit:
+                            raise DownloadLimitExceeded(
+                                "响应声明大小超过下载硬限制",
+                                limit_source=classify_limit_source(
+                                    max_bytes,
+                                    is_video=is_video,
+                                    observed_bytes=declared_bytes,
+                                ),
+                                observed_bytes=declared_bytes,
+                            )
                     except ValueError:
                         pass
 
@@ -505,7 +552,7 @@ async def download_media_from_url(
                     file_path,
                     content_preview,
                     is_video=is_video,
-                    max_bytes=hard_limit,
+                    max_bytes=max_bytes,
                     budget=budget,
                 ):
                     if size_mb is None:
@@ -514,8 +561,14 @@ async def download_media_from_url(
                             size_mb = file_size_bytes / (1024 * 1024)
                         except Exception:
                             pass
-                    return os.path.normpath(file_path), size_mb, response.status, None
-                return None, None, response.status, "写入媒体文件失败"
+                    return (
+                        os.path.normpath(file_path),
+                        size_mb,
+                        response.status,
+                        None,
+                        None,
+                    )
+                return None, None, response.status, "写入媒体文件失败", None
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -534,9 +587,16 @@ async def download_media_from_url(
             break
     if last_error:
         logger.debug(f"最终下载错误: {_format_download_error(last_error)}")
+    limit_error = last_error if isinstance(last_error, DownloadLimitExceeded) else None
+    observed_size_mb = (
+        limit_error.observed_bytes / (1024 * 1024)
+        if limit_error and limit_error.observed_bytes is not None
+        else None
+    )
     return (
         None,
-        None,
+        observed_size_mb,
         last_status_code,
         _format_download_error(last_error) if last_error else "下载失败",
+        limit_error.limit_source if limit_error else None,
     )

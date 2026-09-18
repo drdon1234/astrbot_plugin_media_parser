@@ -125,14 +125,16 @@ HEAD 展开，失败再 GET 展开
 判断 video、note 或 slides
   ↓
 优先请求 douyin.com/aweme/v1/web/aweme/detail/
-（a_bogus 签名 + 有界 ttwid 会话）
+（open.douyin.com 来源上下文 + 最小参数）
   ├─ 成功 -> 使用目标作品详情
-  └─ 失败 -> slidesinfo 或 iesdouyin.com/share/{type}/{id}/
+  └─ 失败 -> a_bogus 签名 + 有界 ttwid 会话
+               ├─ 成功 -> 使用目标作品详情
+               └─ 失败 -> slidesinfo 或 iesdouyin.com/share/{type}/{id}/
                          ↓
                     读取 window._ROUTER_DATA
 ```
 
-优先走 Web 详情接口：只带作品 ID 等稳定参数，用 `a_bogus` 签名和短生命周期 `ttwid` 会话完成访问；目标作品 ID 会再次校验，遇到会话失效、非 JSON 或目标不匹配时最多刷新一次会话。详情接口不可用时再回退 slidesinfo 或分享页。移动分享页相对轻量，通常保留 `window._ROUTER_DATA`，是重要的兜底数据源。
+优先使用 `open.douyin.com` 的来源上下文和作品 ID 等最小参数请求 Web 详情接口，不依赖 Cookie 或签名；响应必须再次校验目标作品 ID。该路径不可用时，回退到 `a_bogus` 签名和短生命周期 `ttwid` 会话，遇到会话失效、非 JSON 或目标不匹配时执行有界重试。两条详情路径均不可用时再回退 slidesinfo 或分享页。移动分享页相对轻量，通常保留 `window._ROUTER_DATA`，是重要的末级兜底数据源。
 
 视频和图文结构不同：
 

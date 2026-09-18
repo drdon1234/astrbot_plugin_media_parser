@@ -18,6 +18,7 @@ import aiohttp
 from ...logger import logger
 
 from ...constants import Config
+from ...types import MediaMetadata
 from ..utils import build_request_headers
 from .base import BaseVideoParser
 
@@ -1245,7 +1246,7 @@ class XiaoheiheParser(BaseVideoParser):
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[MediaMetadata]:
         """解析小黑盒链接并返回统一结构的结果字典。
 
         解析流程概览：
@@ -1498,7 +1499,6 @@ class XiaoheiheParser(BaseVideoParser):
 
             result_dict = {
                 "url": url,
-                "source_url": url,
                 "title": title or "",
                 "author": "",
                 "desc": desc,

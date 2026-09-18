@@ -9,7 +9,7 @@
 
 改动说明:
 - 移除 gmssl 依赖，内嵌纯 Python 的 SM3 实现（GB/T 32905-2016）。
-- 对外只保留 generate_abogus() 入口，其余为内部实现。
+- 对外提供浏览器指纹和 a_bogus 生成入口，其余为内部实现。
 
 用法:
     from .sign import generate_abogus
@@ -753,6 +753,15 @@ class _ABogus:
         )
         abogus = self.crypto_utility.abogus_encode(abogus_bytes_str, 0)
         return (f"{params}&a_bogus={abogus}", abogus, self.user_agent, body)
+
+
+def generate_browser_fingerprint() -> str:
+    """生成供抖音 Web 会话复用的浏览器指纹。
+
+    Returns:
+        浏览器环境指纹字符串
+    """
+    return _BrowserFingerprintGenerator.generate_fingerprint("Edge")
 
 
 def generate_abogus(
