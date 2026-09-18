@@ -105,6 +105,8 @@ opus_id
 
 转发动态要注意：只保留原视频会丢转发人的文字，只保留动态又丢视频主体。把外层动态和内层视频信息组合起来，让用户能看到"谁转发了什么"和"原视频是什么"。
 
+视频封面使用统一字段 `video_cover_urls`：UGC 从 `x/web-interface/view` 的 `pic` 读取，PGC 优先取目标 episode 的 `cover`，缺失时回退 season 的 `cover`，再统一规范为 HTTPS 二维候选组。动态、opus 和转发内容重新组合视频元数据时必须同步透传该字段，避免「视频仅发送封面」模式退回截取首帧。
+
 ### Cookie 与评论
 
 Cookie 是增强条件，不是前提。有 Cookie 时 Web 播放接口可能返回更完整的清晰度和可访问内容；没有时仍走无 Cookie 解析。UGC 播放用 `/x/player/wbi/playurl` + 动态 WBI 签名，DASH 请求用 `fnval=4048`，MP4 兼容回退用 `fnval=1`；不再用旧的 `/x/player/playurl`、HTML5 平台或 `fnval=0` FLV 回退。

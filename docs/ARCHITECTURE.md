@@ -208,8 +208,8 @@ cache/runtime_manager/bilibili/cookie.json
 
 - 接收 `(url, parser)` 列表，按 URL 去重。
 - 使用 `asyncio.gather(..., return_exceptions=True)` 并发调用平台解析器。
-- 将解析异常转成带 `error` 的 metadata；`SkipParse` 只跳过该链接。
-- 归一 `platform`、`parser_name`、`source_url`、`video_urls`、`image_urls`、headers。
+- 将解析异常、无效结果类型、空字典和不符合契约的字段隔离为带 `error` 的 metadata；`None` 与 `SkipParse` 只跳过该链接。
+- 归一 `platform`、`parser_name`、`source_url`、三类媒体 URL 和 headers，并拒绝未知字段及解析器提前写入的下游字段。
 
 `BaseVideoParser` 定义 `can_parse()`、`extract_links()`、`parse()` 接口，并提供 `_add_range_prefix_to_video_urls()`，可给普通视频候选 URL 或 DASH 子流增加 `range:` 前缀。
 
@@ -243,9 +243,12 @@ cache/runtime_manager/bilibili/cookie.json
 
 ```text
 video_urls: List[List[str]]
+video_cover_urls: List[List[str]]
 image_urls: List[List[str]]
 file_paths: List[Optional[str]]
 ```
+
+三类媒体 URL 均以“一个媒体对应一组候选 URL”的二维列表表达，不接受一维 URL 列表；`image_headers` 与 `video_headers` 均为 `Dict[str, str]`。`video_cover_urls` 可缺省或为空；非空时只能包含一个供所有视频共用的封面组，或与 `video_urls` 逐项等长，且不能在没有视频时单独出现。
 
 当 `message.media_display.video_cover_only=true` 时，下载器会先把视频媒体转换为图片媒体：解析结果提供唯一标准字段 `video_cover_urls` 时直接按图片下载封面；没有封面时创建本地 `video_cover` 任务。远端视频先经 `handler/video_cover.py` 的本地 HTTP 流式中继读取，按 `download.max_video_size_mb` 及下载器硬上限限制输入字节，再由 ffmpeg 截取第一帧；中继也负责让 HTTPS 来源以本地 HTTP 输入形式兼容 ffmpeg。
 
@@ -543,6 +546,8 @@ source_url/parser_name
 ```
 
 其中 `source_url` 始终是消息中提取的输入链接，`url` 是单一规范链接；`parser_name` 始终是实际解析器名，`platform` 表示内容来源。平台解析器不得主动返回 `source_url` 或 `parser_name`。
+
+`video_urls`、`video_cover_urls` 与 `image_urls` 的值均遵循 `List[List[str]]`；内层列表按优先级保存同一媒体的候选地址。解析器返回未知字段、错阶段字段、非法类型或非法候选组时，`ParserManager` 会为该链接生成错误 metadata，不让无效结构进入下载阶段。
 
 流程控制、错误与翻译层回填：
 
