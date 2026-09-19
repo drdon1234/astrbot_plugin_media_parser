@@ -446,6 +446,8 @@ game_introduction?steam_appid=...
 
 游戏详情响应中的 `about_the_game`、`screenshots`、`image`、`user_num`、`game_award` 等字段直接用于构建文本和媒体候选，不依赖页面 HTML、Nuxt 注入数据或浏览器执行 JavaScript。`user_num.game_data` 提供当前在线、昨日峰值在线、全球销量排行、平均游戏时间等统计；统计值由小黑盒接口实时决定，接口返回 `-` 时按接口原值展示。
 
+`proxy.xiaoheihe_video` 仅控制直接解析小黑盒时的视频下载，帖子和游戏详情接口不使用代理。Steam 委托小黑盒时，详情请求由 `proxy.steam.parse` 控制。
+
 ## 十一、雪球
 
 支持能力：视频 / 图片 / 文本
@@ -560,7 +562,7 @@ data.feedInfo + data.authorInfo
 
 ### 配置与边界
 
-`parsers.wechat` 控制关闭、全部发送、仅文本或仅富媒体，默认全部发送。`wechat.yuanbao_cookie` 仅供视频号换取令牌，公众号无需填写；配置项默认为空，元宝 Cookie 失效后需要手动更新。已有有效 `token` 和 `eid` 的预览长链可跳过元宝请求。`proxy.wechat` 默认关闭，开启后配合 `proxy.address` 同时覆盖公众号页面、视频号接口与媒体下载；本地调试通过 `YUANBAO_COOKIE` 环境变量提供元宝 Cookie。
+`parsers.wechat` 控制关闭、全部发送、仅文本或仅富媒体，默认全部发送。`wechat.yuanbao_cookie` 仅供视频号换取令牌，公众号无需填写；配置项默认为空，元宝 Cookie 失效后需要手动更新。已有有效 `token` 和 `eid` 的预览长链可跳过元宝请求；微信解析不提供代理开关。本地调试通过 `YUANBAO_COOKIE` 环境变量提供元宝 Cookie。
 
 两个分支均使用现有 aiohttp 会话和解析并发限制，页面/API 单次请求超时为 30 秒。公众号是否返回可读正文、元宝是否接受分享链接以及视频号令牌的有效性都由上游决定；不支持视频号图集、直播或公众号内嵌视频，也不在解析失败时将受限内容伪装成媒体成功结果。
 

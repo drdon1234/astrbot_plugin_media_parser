@@ -470,21 +470,19 @@ class XiaoheiheParser(BaseVideoParser):
         self,
         use_video_proxy: bool = False,
         proxy_url: str = None,
-        use_parse_proxy: Optional[bool] = None,
+        use_parse_proxy: bool = False,
     ):
         """初始化解析器并设置并发限制与默认请求头。
 
         Args:
             use_video_proxy: 视频下载是否使用代理
-            proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port）
-            use_parse_proxy: 游戏详情与帖子接口请求是否使用代理；省略时沿用视频代理开关
+            proxy_url: 代理地址（格式：http://host:port 或 https://host:port）
+            use_parse_proxy: 游戏详情与帖子接口请求是否使用代理
         """
         super().__init__("xiaoheihe")
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
-        self.use_parse_proxy = (
-            use_video_proxy if use_parse_proxy is None else bool(use_parse_proxy)
-        )
+        self.use_parse_proxy = bool(use_parse_proxy)
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._default_headers = {
             "User-Agent": UA,
@@ -787,6 +785,7 @@ class XiaoheiheParser(BaseVideoParser):
         async with session.get(
             api_url,
             headers={**self._default_headers, "Accept": "application/json"},
+            proxy=self.proxy_url if self.use_parse_proxy else None,
             timeout=aiohttp.ClientTimeout(total=15),
         ) as resp:
             if resp.status != 200:

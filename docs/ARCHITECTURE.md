@@ -195,10 +195,11 @@ cache/runtime_manager/bilibili/cookie.json
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
-- `ProxyConfig`：全局代理、TikTok、小黑盒、Steam、Twitter/X、Pixiv、YouTube 代理开关。
+- `ProxyConfig`：全局代理、小黑盒、TikTok、YouTube、Steam、Twitter/X、Pixiv 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录与主动更新指令。
-- `PixivConfig`：Pixiv Web Ajax API 使用的可选 Cookie。
+- `WechatConfig`：视频号短链换取播放令牌所需的腾讯元宝 Cookie。
 - `SteamConfig`：Steam 游戏页是否改用小黑盒完整路径解析。
+- `PixivConfig`：Pixiv Web Ajax API 使用的可选 Cookie。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
 - `TranslationConfig`：翻译开关、翻译范围、目标语言、AstrBot 内置或自定义大模型配置。输入/输出上限固定为 4000，超时固定为 60 秒，随机性固定为 0。
 - `AdminConfig`：清理关键词和 debug 模式。
@@ -246,9 +247,9 @@ AcFun 不设置全局强制下载标记；HLS 候选通过 `m3u8:` 前缀交给�
 
 视频号借鉴 [astrbot_plugin_parser 的方案](https://github.com/Zhalslar/astrbot_plugin_parser/blob/main/core/parsers/shipinhao.py)：未带完整 `token/eid` 的分享链接先以 `wechat.yuanbao_cookie` 请求腾讯元宝 `api/weixin/get_parse_result`，从 `playable_url` 与 `wx_export_id` 读取播放令牌和作品标识，再请求视频号 `finder-preview/api/feed/get_feed_info`。已有令牌的预览长链直接进入第二步。
 
-解析器优先使用 H.264 视频直链，其次使用 H.265；封面、作者、描述、时间和互动统计映射到 `MediaMetadata`，时长从秒转换为毫秒。视频强制缓存下载，请求头保留视频号 Referer；元宝 Cookie 仅用于元宝请求。`proxy.wechat` 控制解析与媒体下载是否使用代理。HTTP、JSON、内容不可访问和无视频直链错误抛给 `ParserManager` 统一处理。
+解析器优先使用 H.264 视频直链，其次使用 H.265；封面、作者、描述、时间和互动统计映射到 `MediaMetadata`，时长从秒转换为毫秒。视频强制缓存下载，请求头保留视频号 Referer；元宝 Cookie 仅用于元宝请求，微信解析不提供代理开关。HTTP、JSON、内容不可访问和无视频直链错误抛给 `ParserManager` 统一处理。
 
-本地调试通过环境变量 `YUANBAO_COOKIE` 向自动发现的微信解析器注入视频号所需的 Cookie，无需修改源码；公众号解析无需此变量。公众号与视频号共用 `parsers.wechat` 输出模式和 `proxy.wechat` 代理开关，不创建独立鉴权运行时。
+本地调试通过环境变量 `YUANBAO_COOKIE` 向自动发现的微信解析器注入视频号所需的 Cookie，无需修改源码；公众号解析无需此变量。公众号与视频号共用 `parsers.wechat` 输出模式，不创建独立鉴权运行时。
 
 ### 2.4 B站运行时与管理员交互
 
@@ -655,26 +656,26 @@ DASH 临时 `.m4s` 在合并后由 DASH 处理器清理；M3U8 临时分片目�
 
 ```text
 proxy.address
-proxy.tiktok
 proxy.xiaoheihe_video
+proxy.tiktok
+proxy.youtube
 proxy.steam.parse
 proxy.steam.image
 proxy.steam.video
-proxy.pixiv
 proxy.twitter.parse
 proxy.twitter.image
 proxy.twitter.video
-proxy.youtube
+proxy.pixiv
 ```
 
 解析器初始化时接收代理配置：
 
+- `XiaoheiheParser`：直接解析小黑盒时仅视频下载使用代理，详情请求不使用代理；Steam 的小黑盒路径由 `proxy.steam` 分组控制。
 - `TikTokParser`：TikTok 解析和媒体代理。
-- `XiaoheiheParser`：视频代理。
+- `YoutubeParser`：YouTube 页面和播放器接口解析，以及视频下载共用 `proxy.youtube` 开关。
 - `SteamParser`：Steam 官方接口解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
 - `TwitterParser`：Twitter/X 解析、图片、视频代理。
 - `PixivParser`：Pixiv Web Ajax API 解析和图片下载共用同一代理开关。
-- `YoutubeParser`：YouTube 页面和播放器接口解析，以及视频下载共用 `proxy.youtube` 开关。
 
 解析结果写入：
 

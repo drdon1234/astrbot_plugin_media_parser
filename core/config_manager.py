@@ -442,16 +442,15 @@ class ParseRateLimitConfig:
 class ProxyConfig:
     address: str = ""
     xiaoheihe_use_video_proxy: bool = True
+    tiktok_use_proxy: bool = False
+    youtube_use_proxy: bool = True
     steam_use_parse_proxy: bool = False
     steam_use_image_proxy: bool = True
     steam_use_video_proxy: bool = True
     twitter_use_parse_proxy: bool = False
     twitter_use_image_proxy: bool = True
     twitter_use_video_proxy: bool = True
-    tiktok_use_proxy: bool = False
     pixiv_use_proxy: bool = False
-    youtube_use_proxy: bool = True
-    wechat_use_proxy: bool = False
 
 
 @dataclass
@@ -469,11 +468,6 @@ class BilibiliEnhancedConfig:
 
 
 @dataclass
-class PixivConfig:
-    cookie: str = ""
-
-
-@dataclass
 class WechatConfig:
     """微信视频号换取播放令牌所需的配置。"""
 
@@ -483,6 +477,11 @@ class WechatConfig:
 @dataclass
 class SteamConfig:
     use_xiaoheihe: bool = False
+
+
+@dataclass
+class PixivConfig:
+    cookie: str = ""
 
 
 @dataclass
@@ -1012,14 +1011,6 @@ class ConfigManager:
             admin_cookie_update_command=admin_cookie_update_command,
         )
 
-        # --- pixiv ---
-        pixiv_raw = config.get("pixiv", {})
-        if not isinstance(pixiv_raw, dict):
-            pixiv_raw = {}
-        self.pixiv = PixivConfig(
-            cookie=str(pixiv_raw.get("cookie", "") or "").strip(),
-        )
-
         # ── 微信视频号 ──────────────────────────────
         wechat_raw = self._as_dict(config.get("wechat"))
         self.wechat = WechatConfig(
@@ -1038,6 +1029,14 @@ class ConfigManager:
             ),
         )
 
+        # --- pixiv ---
+        pixiv_raw = config.get("pixiv", {})
+        if not isinstance(pixiv_raw, dict):
+            pixiv_raw = {}
+        self.pixiv = PixivConfig(
+            cookie=str(pixiv_raw.get("cookie", "") or "").strip(),
+        )
+
         # --- proxy ---
         proxy_raw = self._as_dict(config.get("proxy"))
         steam_proxy = self._as_dict(proxy_raw.get("steam"))
@@ -1048,6 +1047,16 @@ class ConfigManager:
                 proxy_raw.get("xiaoheihe_video", True),
                 True,
                 "proxy.xiaoheihe_video",
+            ),
+            tiktok_use_proxy=self._parse_bool(
+                proxy_raw.get("tiktok", False),
+                False,
+                "proxy.tiktok",
+            ),
+            youtube_use_proxy=self._parse_bool(
+                proxy_raw.get("youtube", True),
+                True,
+                "proxy.youtube",
             ),
             steam_use_parse_proxy=self._parse_bool(
                 steam_proxy.get("parse", False),
@@ -1079,25 +1088,10 @@ class ConfigManager:
                 True,
                 "proxy.twitter.video",
             ),
-            tiktok_use_proxy=self._parse_bool(
-                proxy_raw.get("tiktok", False),
-                False,
-                "proxy.tiktok",
-            ),
             pixiv_use_proxy=self._parse_bool(
                 proxy_raw.get("pixiv", False),
                 False,
                 "proxy.pixiv",
-            ),
-            youtube_use_proxy=self._parse_bool(
-                proxy_raw.get("youtube", True),
-                True,
-                "proxy.youtube",
-            ),
-            wechat_use_proxy=self._parse_bool(
-                proxy_raw.get("wechat", False),
-                False,
-                "proxy.wechat",
             ),
         )
 
@@ -1201,8 +1195,6 @@ class ConfigManager:
             parsers.append(
                 WechatParser(
                     yuanbao_cookie=self.wechat.yuanbao_cookie,
-                    use_proxy=self.proxy.wechat_use_proxy,
-                    proxy_url=proxy_addr,
                 )
             )
         if self._enable_zhihu:

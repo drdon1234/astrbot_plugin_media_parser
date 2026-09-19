@@ -54,20 +54,14 @@ class WechatParser(BaseVideoParser):
     def __init__(
         self,
         yuanbao_cookie: str = "",
-        use_proxy: bool = False,
-        proxy_url: Optional[str] = None,
     ) -> None:
         """初始化微信解析器。
 
         Args:
             yuanbao_cookie: 腾讯元宝网页 Cookie，用于短链换取视频号令牌。
-            use_proxy: 是否使用代理请求解析接口和视频下载。
-            proxy_url: 代理地址。
         """
         super().__init__("wechat")
         self.yuanbao_cookie = str(yuanbao_cookie or "").strip()
-        self.use_proxy = bool(use_proxy)
-        self.proxy_url = proxy_url if self.use_proxy and proxy_url else None
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.yuanbao_headers = {
             "Accept": "application/json, text/plain, */*",
@@ -199,7 +193,6 @@ class WechatParser(BaseVideoParser):
                 self.PARSE_URL,
                 json=payload,
                 headers=headers,
-                proxy=self.proxy_url,
                 timeout=aiohttp.ClientTimeout(total=30),
                 allow_redirects=False,
             ) as response:
@@ -271,7 +264,6 @@ class WechatParser(BaseVideoParser):
                 api_url,
                 json=payload,
                 headers=headers,
-                proxy=self.proxy_url,
                 timeout=aiohttp.ClientTimeout(total=30),
                 allow_redirects=False,
             ) as response:
@@ -388,9 +380,6 @@ class WechatParser(BaseVideoParser):
                 user_agent=WECHAT_USER_AGENT,
             ),
             "video_force_download": True,
-            "use_video_proxy": bool(self.proxy_url),
-            "use_image_proxy": bool(self.proxy_url),
-            "proxy_url": self.proxy_url,
         }
         duration = self._pick_duration(feed_info)
         if duration is not None:
@@ -444,7 +433,6 @@ class WechatParser(BaseVideoParser):
             async with session.get(
                 url,
                 headers=headers,
-                proxy=self.proxy_url,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 if response.status != 200:
@@ -468,6 +456,4 @@ class WechatParser(BaseVideoParser):
             referer="https://mp.weixin.qq.com/",
             user_agent=ARTICLE_USER_AGENT,
         )
-        result["use_image_proxy"] = bool(self.proxy_url)
-        result["proxy_url"] = self.proxy_url
         return result

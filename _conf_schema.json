@@ -825,19 +825,6 @@
             }
         }
     },
-    "pixiv": {
-        "description": "Pixiv 设置",
-        "type": "object",
-        "hint": "Pixiv 解析需要 Cookie 才能获取原图；无 Cookie 也能解析但可能仅返回缩略图。",
-        "items": {
-            "cookie": {
-                "description": "Pixiv Cookie",
-                "type": "string",
-                "hint": "包含 PHPSESSID 的完整 Cookie 字符串；仅本地使用，不要公开分享。登录 pixiv.net 后从浏览器开发者工具复制。",
-                "default": ""
-            }
-        }
-    },
     "wechat": {
         "description": "微信设置",
         "type": "object",
@@ -863,6 +850,19 @@
             }
         }
     },
+    "pixiv": {
+        "description": "Pixiv 设置",
+        "type": "object",
+        "hint": "Pixiv 解析需要 Cookie 才能获取原图；无 Cookie 也能解析但可能仅返回缩略图。",
+        "items": {
+            "cookie": {
+                "description": "Pixiv Cookie",
+                "type": "string",
+                "hint": "包含 PHPSESSID 的完整 Cookie 字符串；仅本地使用，不要公开分享。登录 pixiv.net 后从浏览器开发者工具复制。",
+                "default": ""
+            }
+        }
+    },
     "proxy": {
         "description": "代理设置",
         "type": "object",
@@ -871,8 +871,14 @@
             "address": {
                 "description": "代理地址",
                 "type": "string",
-                "hint": "格式：http://host:port 或 socks5://host:port",
+                "hint": "格式：http://host:port 或 https://host:port",
                 "default": ""
+            },
+            "xiaoheihe_video": {
+                "description": "直接解析小黑盒的视频下载使用代理",
+                "type": "bool",
+                "hint": "需要先填写“代理地址”；Steam 的小黑盒路径由“Steam 代理”中的开关控制。",
+                "default": true
             },
             "tiktok": {
                 "description": "TikTok 解析与下载使用代理",
@@ -880,10 +886,10 @@
                 "hint": "需要先填写“代理地址”。",
                 "default": false
             },
-            "xiaoheihe_video": {
-                "description": "小黑盒视频下载使用代理",
+            "youtube": {
+                "description": "YouTube 解析与视频下载使用代理",
                 "type": "bool",
-                "hint": "需要先填写“代理地址”。",
+                "hint": "需要先填写“代理地址”；YouTube 在部分网络环境下必须使用代理。",
                 "default": true
             },
             "steam": {
@@ -908,24 +914,6 @@
                     }
                 }
             },
-            "pixiv": {
-                "description": "Pixiv 解析与图片下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”。",
-                "default": false
-            },
-            "youtube": {
-                "description": "YouTube 解析与视频下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”；YouTube 在部分网络环境下必须使用代理。",
-                "default": true
-            },
-            "wechat": {
-                "description": "微信公众号 / 视频号解析与媒体下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”。",
-                "default": false
-            },
             "twitter": {
                 "description": "Twitter 代理",
                 "type": "object",
@@ -947,6 +935,12 @@
                         "default": true
                     }
                 }
+            },
+            "pixiv": {
+                "description": "Pixiv 解析与图片下载使用代理",
+                "type": "bool",
+                "hint": "需要先填写“代理地址”。",
+                "default": false
             }
         }
     },

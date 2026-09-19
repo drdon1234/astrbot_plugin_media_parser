@@ -46,7 +46,7 @@ class TwitterParser(BaseVideoParser):
             use_parse_proxy: 解析时是否使用代理
             use_image_proxy: 图片下载是否使用代理
             use_video_proxy: 视频下载是否使用代理
-            proxy_url: 代理地址（格式：http://host:port 或 socks5://host:port）
+            proxy_url: 代理地址（格式：http://host:port 或 https://host:port）
         """
         super().__init__("twitter")
         self.use_parse_proxy = use_parse_proxy
