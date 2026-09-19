@@ -26,6 +26,7 @@
 - YouTube：支持 视频 / 文本；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
 - AcFun：支持 视频 / 图片 / 文本；覆盖视频、动态和番剧页面，从服务端页面状态提取 HLS 与图片候选。
 - 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
+- 知乎：支持 图片 / 文本；覆盖指定回答和专栏文章，回答使用匿名 API，文章使用匿名访客 `d_c0` 与接口签名。
 
 ### 1.2 核心模块结构
 
@@ -71,9 +72,12 @@ astrbot_plugin_media_parser/
     │       ├── xueqiu.py            # 雪球帖子/长文解析器
     │       ├── youtube.py           # YouTube 视频解析器
     │       ├── acfun.py             # AcFun 视频/动态/番剧解析器
-    │       └── wechat/              # 微信子包
-    │           ├── parser.py       # 公众号与视频号路由、HTTP 请求
-    │           └── article.py      # 公众号文章 HTML 图文提取
+    │       ├── wechat/              # 微信子包
+    │       │   ├── parser.py        # 公众号与视频号路由、HTTP 请求
+    │       │   └── article.py        # 公众号文章 HTML 图文提取
+    │       └── zhihu/              # 知乎子包
+    │           ├── parser.py        # 回答/文章路由与匿名接口请求
+    │           └── sign.py          # 专栏文章接口签名
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range

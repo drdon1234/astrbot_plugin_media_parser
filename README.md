@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.5.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.6.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -36,6 +36,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **YouTube** | 视频 / 文本 | 支持 watch、Shorts、短链接、嵌入、旧式 v/e 链接和分享跳转；直链受地区、登录和反爬策略影响 |
 | **AcFun** | 视频 / 图片 / 文本 | 支持横竖视频、多 P 指定分段、文章/动态及番剧分集和花絮，兼容移动分享链接；HLS 视频需要可用缓存目录，不支持直播 |
 | **微信** | 视频 / 图片 / 文本 | 公众号文章可匿名解析正文与图片；视频号短链需要腾讯元宝 Cookie，视频需要可用缓存目录 |
+| **知乎** | 图片 / 文本 | 支持指定回答和专栏文章的匿名解析；受知乎风控、访问权限和接口变化影响 |
 
 ---
 
@@ -127,6 +128,19 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ---
 
+## 🧭 知乎解析
+
+支持知乎指定回答和专栏文章链接，例如：
+
+- `https://www.zhihu.com/question/{问题ID}/answer/{回答ID}`
+- `https://zhuanlan.zhihu.com/p/{文章ID}`
+
+回答和文章均采用匿名访问，不需要填写知乎 Cookie。文章会自动获取匿名访客会话并请求完整正文；正文图片需要可用缓存目录。输出模式可在 `解析器与输出模式 → 知乎` 中单独调整。
+
+纯问题页不包含指定回答，因此不会解析。知乎的匿名接口仍可能受到风控、限流、登录限制或接口变化影响；文章正文被截断或要求登录时会返回解析失败提示。
+
+---
+
 ## 💬 微信解析
 
 公众号文章可直接发送 `https://mp.weixin.qq.com/s/...` 或带文章参数的长链接，无需填写 Cookie。解析结果包括标题、公众号与作者署名、发布日期、正文及正文图片；图片发送需要可用缓存目录。遇到验证码、访问限制或文章删除时会返回相应提示。公众号内嵌视频暂不支持。
@@ -167,6 +181,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境
 - **Pixiv**：受地区限制时需同时代理解析请求和图片下载
 - **YouTube**：使用 YouTube 内置播放器接口提取短时效直链；支持常见单视频分享链接和隐私增强嵌入，部分网络环境需要开启 `proxy.youtube`，高画质自适应流需要可用缓存目录和 ffmpeg，私有、年龄限制、直播或机器人校验视频可能无法解析
+- **知乎**：支持指定回答和专栏文章，不解析纯问题页；文章正文需要匿名访客接口返回完整内容，遇到风控、限流或需要登录的内容会提示解析失败
 - **AcFun**：页面状态或公开播放接口变化、内容访问限制和 CDN 鉴权可能导致解析失败；HLS 视频需要可用缓存目录，直播链接会自动跳过
 - **图片格式**：非 JPG/PNG 图片会尝试用 ffmpeg 转换；缺少 ffmpeg 时保留原格式
 - 插件会跳过机器人自身消息以防重复解析；直播链接会自动跳过

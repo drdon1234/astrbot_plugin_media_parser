@@ -738,7 +738,17 @@ window.videoInfo / window.articleInfo / window.bangumiData
 
 当前只处理链接指定的单个播放单元或文章正文，不批量抓取整季、全部分 P，不支持直播、个人空间、独立音频或应用私有协议。页面和接口均属于上游网页协议，登录、地区与内容访问限制仍可能导致解析失败。
 
-## 十九、维护原则
+## 十九、知乎
+
+支持指定回答和专栏文章：回答使用 `https://api.zhihu.com/v4/answers/{answer_id}?include=content,author,question`，文章使用 `https://zhuanlan.zhihu.com/api/articles/{article_id}?ws_qiangzhisafe=0`。纯问题页不解析，避免在问题下误选回答。
+
+回答请求不携带登录 Cookie，只校验返回的回答 ID、问题 ID 和非空正文。回答正文按 HTML 结构提取文本，`br` 与块级标签转换为换行，正文图片优先使用懒加载原图属性，并保留知乎图片下载所需的 User-Agent 和 Referer。
+
+文章请求先访问 `https://www.zhihu.com/explore` 获取匿名访客 `d_c0`，再按当前接口路径、`d_c0` 和 `x-zse-93` 生成 `x-zse-96` 签名。访客 Cookie 只保存在解析器实例内，短期缓存并使用独立 Cookie 会话，避免把其他平台的登录态带给知乎。文章返回 `content_need_truncated` 或 `force_login_when_click_read_more` 时直接失败，不把登录摘要当作完整正文。
+
+知乎解析器将自身并发限制为最多 2 个请求。文章接口遇到 403 或 429 时会使当前 `d_c0` 缓存失效，并在 1 秒后最多重新取访客值重试一次；匿名接口仍受知乎上游风控和限流影响，不能通过无限重试规避。接口字段、签名规则或匿名访问策略变化时需要重新验证。
+
+## 二十、维护原则
 
 改平台解析逻辑前，过一遍这些问题：
 

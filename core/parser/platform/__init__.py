@@ -15,6 +15,7 @@ from .xueqiu import XueqiuParser
 from .youtube import YoutubeParser
 from .acfun import AcfunParser
 from .wechat import WechatParser
+from .zhihu import ZhihuParser
 from .base import BaseVideoParser
 
 __all__ = [
@@ -34,6 +35,6 @@ __all__ = [
     'YoutubeParser',
     'AcfunParser',
     'WechatParser',
+    'ZhihuParser',
     'BaseVideoParser'
 ]
-

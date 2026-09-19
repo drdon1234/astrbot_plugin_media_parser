@@ -57,6 +57,7 @@ PARSER_DISCOVERY_ORDER = (
     "youtube",
     "acfun",
     "wechat",
+    "zhihu",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {
     module_name: index for index, module_name in enumerate(PARSER_DISCOVERY_ORDER)

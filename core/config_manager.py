@@ -26,6 +26,7 @@ from .parser.platform import (
     YoutubeParser,
     AcfunParser,
     WechatParser,
+    ZhihuParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -61,6 +62,7 @@ PARSER_OUTPUT_KEYS = (
     "youtube",
     "acfun",
     "wechat",
+    "zhihu",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -601,6 +603,7 @@ class ConfigManager:
         self._enable_youtube = self._parser_enabled("youtube")
         self._enable_acfun = self._parser_enabled("acfun")
         self._enable_wechat = self._parser_enabled("wechat")
+        self._enable_zhihu = self._parser_enabled("zhihu")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -1243,6 +1246,8 @@ class ConfigManager:
                     proxy_url=proxy_addr,
                 )
             )
+        if self._enable_zhihu:
+            parsers.append(ZhihuParser())
 
         return parsers
 
