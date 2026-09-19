@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import aiohttp
 
@@ -16,10 +16,18 @@ from ..utils import build_request_headers
 from .base import BaseVideoParser
 
 
-YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
+YOUTUBE_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtube-nocookie.com",
+    "www.youtube-nocookie.com",
+}
+YOUTUBE_NOCOOKIE_HOSTS = {"youtube-nocookie.com", "www.youtube-nocookie.com"}
 YOUTU_BE_HOSTS = {"youtu.be", "www.youtu.be"}
 YOUTUBE_URL_PATTERN = re.compile(
-    r"https?://(?:(?:www|m|music)\.youtube\.com/[^\s<>\"'()]+|(?:www\.)?youtu\.be/[^\s<>\"'()]+)",
+    r"(?<![A-Za-z0-9_.:/@-])https?://(?:(?:(?:www|m|music)\.)?youtube\.com|(?:www\.)?youtube-nocookie\.com|(?:www\.)?youtu\.be)/[^\s<>\"'()]+",
     re.IGNORECASE,
 )
 YOUTUBE_VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{6,32}$")
@@ -38,7 +46,7 @@ MAX_MUXED_CANDIDATES = 4
 
 
 class YoutubeParser(BaseVideoParser):
-    """解析 YouTube 视频页、Shorts、短链接和嵌入链接。"""
+    """解析 YouTube 常见单视频页、短链接、嵌入链接和分享跳转。"""
 
     def __init__(
         self,
@@ -56,8 +64,8 @@ class YoutubeParser(BaseVideoParser):
         self.proxy_url = proxy_url if self.use_proxy else None
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 
-    @staticmethod
-    def _video_id_from_url(url: str) -> Optional[str]:
+    @classmethod
+    def _video_id_from_url(cls, url: str, _depth: int = 0) -> Optional[str]:
         """从 YouTube URL 提取视频 ID，并拒绝非 YouTube 主机。"""
         if not isinstance(url, str) or not url.strip():
             return None
@@ -75,16 +83,29 @@ class YoutubeParser(BaseVideoParser):
         path_parts = [part for part in (parsed.path or "").split("/") if part]
         video_id = ""
         if host in YOUTU_BE_HOSTS:
-            if path_parts:
+            if len(path_parts) == 1:
                 video_id = path_parts[0]
         elif host in YOUTUBE_HOSTS:
-            if path_parts and path_parts[0].lower() == "watch":
+            route = path_parts[0].lower() if path_parts else ""
+            if host in YOUTUBE_NOCOOKIE_HOSTS and route != "embed":
+                return None
+            if route == "watch":
                 video_id = (parse_qs(parsed.query).get("v") or [""])[0]
-            elif len(path_parts) >= 2 and path_parts[0].lower() in {
+            elif len(path_parts) >= 2 and route in {
                 "shorts",
                 "embed",
+                "v",
+                "e",
             }:
                 video_id = path_parts[1]
+            elif route == "attribution_link" and _depth == 0:
+                nested_url = (parse_qs(parsed.query).get("u") or [""])[0].strip()
+                nested_url = unquote(nested_url)
+                if nested_url.startswith("//"):
+                    nested_url = f"https:{nested_url}"
+                elif nested_url.startswith("/"):
+                    nested_url = f"https://www.youtube.com{nested_url}"
+                return cls._video_id_from_url(nested_url, _depth=1)
 
         video_id = video_id.strip()
         return video_id if YOUTUBE_VIDEO_ID_PATTERN.fullmatch(video_id) else None

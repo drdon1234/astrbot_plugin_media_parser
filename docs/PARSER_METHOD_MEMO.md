@@ -603,12 +603,12 @@ api.xueqiu.com/statuses/show.json?id={status_id}
 
 支持能力：视频 / 文本
 
-当前支持 `youtube.com/watch?v=...`、`youtube.com/shorts/...`、`youtu.be/...` 和 `youtube.com/embed/...`。直播、私有、年龄限制、地区限制或触发机器人校验的内容不保证可解析。
+当前支持常见的单视频链接：`youtube.com/watch?v=...`、`youtube.com/shorts/...`、`youtu.be/...`、`youtube.com/embed/...`、`youtube-nocookie.com/embed/...`、旧式 `youtube.com/v/...` / `youtube.com/e/...`，以及可解包到上述链接的 `attribution_link` 分享跳转。直播、`clip`、播放列表、频道、私有、年龄限制、地区限制或触发机器人校验的内容不保证可解析。
 
 YouTube 页面本身经常只返回没有媒体 URL 的自适应格式，因此解析器分两步取数：先读取页面中的 `ytInitialPlayerResponse`、`INNERTUBE_API_KEY` 和访客信息，再调用 YouTube 内置 Android 播放接口获取带签名的格式 URL。播放器客户端版本目前固定为 `20.10.38`，该接口属于未公开协议，版本或返回结构变化时可能需要调整。
 
 ```text
-watch / shorts / youtu.be / embed
+watch / shorts / youtu.be / embed / nocookie embed / v / attribution_link
   ↓
 规范为 youtube.com/watch?v={video_id}
   ↓

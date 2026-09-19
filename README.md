@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.3.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.3.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -33,7 +33,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **Twitter/X** | 视频 / 图片 / 文本 | 视频需要可用缓存目录 |
 | **Pixiv** | 图片 / 文本 | 支持插画、漫画多页解析 |
 | **雪球** | 视频 / 图片 / 文本 | 支持普通帖、长文和转发帖；HLS 视频需要可用缓存目录 |
-| **YouTube** | 视频 / 文本 | 支持 watch、Shorts、短链接和嵌入链接；直链受地区、登录和反爬策略影响 |
+| **YouTube** | 视频 / 文本 | 支持 watch、Shorts、短链接、嵌入、旧式 v/e 链接和分享跳转；直链受地区、登录和反爬策略影响 |
 
 ---
 
@@ -138,7 +138,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 - **小黑盒**：游戏预览视频下载速度不佳（Steam CDN）时建议启用代理
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境
 - **Pixiv**：受地区限制时需同时代理解析请求和图片下载
-- **YouTube**：使用 YouTube 内置播放器接口提取短时效直链；部分网络环境需要开启 `proxy.youtube`，高画质自适应流需要可用缓存目录和 ffmpeg，私有、年龄限制、直播或机器人校验视频可能无法解析
+- **YouTube**：使用 YouTube 内置播放器接口提取短时效直链；支持常见单视频分享链接和隐私增强嵌入，部分网络环境需要开启 `proxy.youtube`，高画质自适应流需要可用缓存目录和 ffmpeg，私有、年龄限制、直播或机器人校验视频可能无法解析
 - **图片格式**：非 JPG/PNG 图片会尝试用 ffmpeg 转换；缺少 ffmpeg 时保留原格式
 - 插件会跳过机器人自身消息以防重复解析；直播链接会自动跳过
 
