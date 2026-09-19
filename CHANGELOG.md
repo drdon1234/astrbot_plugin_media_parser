@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0] - 2026-09-19
+
+### YouTube 视频解析
+
+- 新增 YouTube 解析器，支持 `watch`、`shorts`、`youtu.be` 和 `embed` 链接。
+- 仅复用现有 `aiohttp` 与下载器，通过 YouTube 内置播放器接口获取带签名的短时效直链；不新增 Python 第三方依赖。
+- 普通 muxed MP4 可直接发送；自适应音视频流复用现有 DASH 下载和 ffmpeg 合并，解析失败时明确提示地区、登录或反爬限制。
+
+### 文档与配置
+
+- 更新 README、架构说明和平台解析备忘，补充 YouTube 的代理、缓存、短时效直链和已知限制。
+- 新增 `parsers.youtube` 与 `proxy.youtube` 配置说明，并同步插件版本到 `1.3.0`。
+
 ## [1.2.2] - 2026-09-19
 
 ### B 站封面与抖音回退

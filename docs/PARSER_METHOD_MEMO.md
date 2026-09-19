@@ -553,7 +553,7 @@ image_urls = [
 
 ## 十四、雪球
 
-支持能力：图片 / 文本
+支持能力：视频 / 图片 / 文本
 
 稳定入口是帖子 ID。分享链形如 `xueqiu.com/{user_id}/{status_id}`，查询串里常挂 `md5__1038` 等 WAF/CDN 参数，只取路径即可，不需要展开重定向。
 
@@ -599,7 +599,34 @@ api.xueqiu.com/statuses/show.json?id={status_id}
 
 图文路径已按普通帖、长文、多图长文、转发帖和表情帖实测通过；视频路径按上述字段防御性实现，暂未取到公开视频帖样本验证。
 
-## 十五、NGA
+## 十五、YouTube
+
+支持能力：视频 / 文本
+
+当前支持 `youtube.com/watch?v=...`、`youtube.com/shorts/...`、`youtu.be/...` 和 `youtube.com/embed/...`。直播、私有、年龄限制、地区限制或触发机器人校验的内容不保证可解析。
+
+YouTube 页面本身经常只返回没有媒体 URL 的自适应格式，因此解析器分两步取数：先读取页面中的 `ytInitialPlayerResponse`、`INNERTUBE_API_KEY` 和访客信息，再调用 YouTube 内置 Android 播放接口获取带签名的格式 URL。播放器客户端版本目前固定为 `20.10.38`，该接口属于未公开协议，版本或返回结构变化时可能需要调整。
+
+```text
+watch / shorts / youtu.be / embed
+  ↓
+规范为 youtube.com/watch?v={video_id}
+  ↓
+读取页面启动配置和初始播放信息
+  ↓
+/youtubei/v1/player?key={INNERTUBE_API_KEY}
+  └─ Android 客户端播放响应
+       ├─ muxed MP4 -> 直接视频候选
+       └─ 视频 + 音频 -> dash:video_url||audio_url
+```
+
+每条媒体只保留一个候选组。若播放器同时返回视频和音频自适应流，最高兼容性的视频和音频会组成 `dash:` 候选，后面追加 muxed MP4 作为回退。缓存目录可用时下载器优先走 DASH 并调用现有 ffmpeg 合并；缓存目录不可用时会剔除 DASH 候选，改用普通 muxed MP4 直发。
+
+YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长期缓存复用。解析与下载应保持相同的代理出口，部分消息协议端无法携带请求头或代理时，建议配置缓存目录后发送本地文件。`proxy.youtube` 同时控制页面、播放器接口和视频下载请求。
+
+当前实现不解析 `signatureCipher`、播放器 JavaScript 中的 `s`/`n` 变换或 SABR 分段协议；遇到这些返回形态、登录要求、DRM 或机器人挑战时会返回可见的解析失败信息。
+
+## 十六、NGA
 
 当前未提供解析器。
 
@@ -607,7 +634,7 @@ NGA 已关闭访客浏览：`read.php?tid=...` 直接返回 `ERROR:1 未登录`�
 
 也就是说取数必须依赖 `ngaPassportUid` + `ngaPassportCid` 登录 Cookie。若之后决定支持，需要先引入用户提供 Cookie 的配置项，并注意页面是 GBK/GB18030 编码。
 
-## 十六、维护原则
+## 十七、维护原则
 
 改平台解析逻辑前，过一遍这些问题：
 

@@ -23,6 +23,7 @@ from .parser.platform import (
     TwitterParser,
     PixivParser,
     XueqiuParser,
+    YoutubeParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -55,6 +56,7 @@ PARSER_OUTPUT_KEYS = (
     "twitter",
     "pixiv",
     "xueqiu",
+    "youtube",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -442,6 +444,7 @@ class ProxyConfig:
     twitter_use_video_proxy: bool = True
     tiktok_use_proxy: bool = False
     pixiv_use_proxy: bool = False
+    youtube_use_proxy: bool = True
 
 
 @dataclass
@@ -583,6 +586,7 @@ class ConfigManager:
         self._enable_twitter = self._parser_enabled("twitter")
         self._enable_pixiv = self._parser_enabled("pixiv")
         self._enable_xueqiu = self._parser_enabled("xueqiu")
+        self._enable_youtube = self._parser_enabled("youtube")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -1062,6 +1066,11 @@ class ConfigManager:
                 False,
                 "proxy.pixiv",
             ),
+            youtube_use_proxy=self._parse_bool(
+                proxy_raw.get("youtube", True),
+                True,
+                "proxy.youtube",
+            ),
         )
 
         # --- admin ---
@@ -1192,6 +1201,13 @@ class ConfigManager:
             )
         if self._enable_xueqiu:
             parsers.append(XueqiuParser())
+        if self._enable_youtube:
+            parsers.append(
+                YoutubeParser(
+                    use_proxy=self.proxy.youtube_use_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
 
         return parsers
 
@@ -1204,9 +1220,17 @@ class ConfigManager:
 
         normalized: Dict[str, str] = {}
         valid_modes = set(OUTPUT_MODE_FLAGS)
+        missing_mode = OUTPUT_MODE_ALL
+        known_values = [values[key] for key in PARSER_OUTPUT_KEYS if key in values]
+        if len(known_values) >= len(PARSER_OUTPUT_KEYS) - 1 and all(
+            str(raw_mode or "").strip() == OUTPUT_MODE_DISABLED
+            for raw_mode in known_values
+        ):
+            # 旧配置显式关闭全部已知平台时，新增平台也保持关闭，避免意外启用。
+            missing_mode = OUTPUT_MODE_DISABLED
         for key in PARSER_OUTPUT_KEYS:
             if key not in values:
-                normalized[key] = OUTPUT_MODE_ALL
+                normalized[key] = missing_mode
                 continue
             raw_mode = values.get(key)
             mode = str(raw_mode).strip() if raw_mode is not None else ""

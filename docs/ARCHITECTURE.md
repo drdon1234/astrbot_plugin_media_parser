@@ -23,6 +23,7 @@
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
 - 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
+- YouTube：支持 视频 / 文本；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
 
 ### 1.2 核心模块结构
 
@@ -65,7 +66,8 @@ astrbot_plugin_media_parser/
     │       ├── steam.py             # Steam 游戏详情页解析器
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
     │       ├── pixiv.py             # Pixiv 插画/漫画解析器
-    │       └── xueqiu.py            # 雪球帖子/长文解析器
+    │       ├── xueqiu.py            # 雪球帖子/长文解析器
+    │       └── youtube.py           # YouTube 视频解析器
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range
@@ -183,7 +185,7 @@ cache/runtime_manager/bilibili/cookie.json
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
-- `ProxyConfig`：全局代理、TikTok、小黑盒、Steam、Twitter/X、Pixiv 代理开关。
+- `ProxyConfig`：全局代理、TikTok、小黑盒、Steam、Twitter/X、Pixiv、YouTube 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录与主动更新指令。
 - `PixivConfig`：Pixiv Web Ajax API 使用的可选 Cookie。
 - `SteamConfig`：Steam 游戏页是否改用小黑盒完整路径解析。
@@ -634,6 +636,7 @@ proxy.pixiv
 proxy.twitter.parse
 proxy.twitter.image
 proxy.twitter.video
+proxy.youtube
 ```
 
 解析器初始化时接收代理配置：
@@ -643,6 +646,7 @@ proxy.twitter.video
 - `SteamParser`：Steam 官方接口解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
 - `TwitterParser`：Twitter/X 解析、图片、视频代理。
 - `PixivParser`：Pixiv Web Ajax API 解析和图片下载共用同一代理开关。
+- `YoutubeParser`：YouTube 页面和播放器接口解析，以及视频下载共用 `proxy.youtube` 开关。
 
 解析结果写入：
 

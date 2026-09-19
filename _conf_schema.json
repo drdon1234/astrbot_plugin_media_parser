@@ -146,6 +146,17 @@
                     "仅富媒体"
                 ],
                 "default": "全部发送"
+            },
+            "youtube": {
+                "description": "YouTube",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },
@@ -854,6 +865,12 @@
                 "type": "bool",
                 "hint": "需要先填写“代理地址”。",
                 "default": false
+            },
+            "youtube": {
+                "description": "YouTube 解析与视频下载使用代理",
+                "type": "bool",
+                "hint": "需要先填写“代理地址”；YouTube 在部分网络环境下必须使用代理。",
+                "default": true
             },
             "twitter": {
                 "description": "Twitter 代理",

@@ -12,6 +12,7 @@ from .steam import SteamParser
 from .twitter import TwitterParser
 from .pixiv import PixivParser
 from .xueqiu import XueqiuParser
+from .youtube import YoutubeParser
 from .base import BaseVideoParser
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     'TwitterParser',
     'PixivParser',
     'XueqiuParser',
+    'YoutubeParser',
     'BaseVideoParser'
 ]
 
