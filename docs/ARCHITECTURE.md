@@ -24,6 +24,7 @@
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
 - 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
 - YouTube：支持 视频 / 文本；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
+- 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
 
 ### 1.2 核心模块结构
 
@@ -67,7 +68,10 @@ astrbot_plugin_media_parser/
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
     │       ├── pixiv.py             # Pixiv 插画/漫画解析器
     │       ├── xueqiu.py            # 雪球帖子/长文解析器
-    │       └── youtube.py           # YouTube 视频解析器
+    │       ├── youtube.py           # YouTube 视频解析器
+    │       └── wechat/              # 微信子包
+    │           ├── parser.py       # 公众号与视频号路由、HTTP 请求
+    │           └── article.py      # 公众号文章 HTML 图文提取
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range
@@ -221,6 +225,16 @@ cache/runtime_manager/bilibili/cookie.json
 - 平台辅助模块：只被 1 个平台解析器引用的传输层、签名等模块，放在该平台的子包内，模块名只描述职责。
 - 不新建跨平台共享位置：不存在被 2 个及以上平台解析器共同继承的类或共同导入的模块（`base.py` 与 `utils.py` 除外）。2 个及以上平台需要等价辅助逻辑时各自持有一份实现——抖音与 TikTok 的 URL / 时间戳 / JSON 辅助方法即按此规则各存一份，代价是两份实现可能随时间产生差异，收益是单平台调整不会波及另一平台。
 - 新增平台需要修改 3 处登记点：`platform/__init__.py` 的 `__all__`、`config_manager.py` 的 `PARSER_OUTPUT_KEYS` 与 `create_parsers()`、`_conf_schema.json` 的平台配置项。
+
+#### 微信解析
+
+`wechat/parser.py` 将 `mp.weixin.qq.com/s` 长短链接路由到匿名 GET。`article.py` 使用标准库 `HTMLParser`，限定 `#js_content` 提取正文和 `data-src/src` 图片，并读取标题、帐号、作者署名及本页发布时间；不读取正文外的头像与控件。验证码、删除和缺少正文的页面抛出明确异常，不把通用页面元标签当作文章解析成功。不解析公众号内嵌视频，不引入浏览器或额外依赖。
+
+视频号借鉴 [astrbot_plugin_parser 的方案](https://github.com/Zhalslar/astrbot_plugin_parser/blob/main/core/parsers/shipinhao.py)：未带完整 `token/eid` 的分享链接先以 `wechat.yuanbao_cookie` 请求腾讯元宝 `api/weixin/get_parse_result`，从 `playable_url` 与 `wx_export_id` 读取播放令牌和作品标识，再请求视频号 `finder-preview/api/feed/get_feed_info`。已有令牌的预览长链直接进入第二步。
+
+解析器优先使用 H.264 视频直链，其次使用 H.265；封面、作者、描述、时间和互动统计映射到 `MediaMetadata`，时长从秒转换为毫秒。视频强制缓存下载，请求头保留视频号 Referer；元宝 Cookie 仅用于元宝请求。`proxy.wechat` 控制解析与媒体下载是否使用代理。HTTP、JSON、内容不可访问和无视频直链错误抛给 `ParserManager` 统一处理。
+
+本地调试通过环境变量 `YUANBAO_COOKIE` 向自动发现的微信解析器注入视频号所需的 Cookie，无需修改源码；公众号解析无需此变量。公众号与视频号共用 `parsers.wechat` 输出模式和 `proxy.wechat` 代理开关，不创建独立鉴权运行时。
 
 ### 2.4 B站运行时与管理员交互
 

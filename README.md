@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.3.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.4.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -34,6 +34,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **Pixiv** | 图片 / 文本 | 支持插画、漫画多页解析 |
 | **雪球** | 视频 / 图片 / 文本 | 支持普通帖、长文和转发帖；HLS 视频需要可用缓存目录 |
 | **YouTube** | 视频 / 文本 | 支持 watch、Shorts、短链接、嵌入、旧式 v/e 链接和分享跳转；直链受地区、登录和反爬策略影响 |
+| **微信** | 视频 / 图片 / 文本 | 公众号文章可匿名解析正文与图片；视频号短链需要腾讯元宝 Cookie，视频需要可用缓存目录 |
 
 ---
 
@@ -79,6 +80,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - B站 Cookie 高画质（DASH 音视频流需本地合并）
 - 微博视频、小黑盒视频/BBS 媒体、Twitter/X 视频、Steam 预告片
 - 雪球 HLS 视频（分片需本地拼接后发送）
+- 微信视频号视频（下载后发送）
 
 **建议缓存目录可用的场景**：
 
@@ -112,6 +114,22 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 3. Cookie 失效时自动向管理员发送确认请求，扫码后 Cookie 自动更新
 
 也可以在管理员私聊发送 `主动更新 Cookie 指令`（默认 `B站更新Cookie`）立即发起更新。
+
+---
+
+## 💬 微信解析
+
+公众号文章可直接发送 `https://mp.weixin.qq.com/s/...` 或带文章参数的长链接，无需填写 Cookie。解析结果包括标题、公众号与作者署名、发布日期、正文及正文图片；图片发送需要可用缓存目录。遇到验证码、访问限制或文章删除时会返回相应提示。公众号内嵌视频暂不支持。
+
+视频号按以下方式配置：
+
+1. 登录 [腾讯元宝网页版](https://yuanbao.tencent.com/)，打开浏览器开发者工具的 `Network` 面板，刷新页面后复制发往该站点请求的完整 `Cookie` 请求头值。
+2. 在插件配置的 `微信设置 → 腾讯元宝 Cookie` 中填写，保存配置；Cookie 失效后需重新登录并手动更新。
+3. 确保媒体缓存目录可用，再发送视频号分享短链（`https://weixin.qq.com/sph/...`）。输出模式可在解析器设置中独立调整。
+
+已带有效 `token` 和 `eid` 的 `channels.weixin.qq.com/finder-preview/pages/sph` 或 `feed` 预览长链可直接解析，无需配置元宝 Cookie。视频号能力依赖腾讯元宝与微信的非公开接口，接口或内容权限变化可能导致解析失败；当前不支持直播及视频号图文。
+
+公众号与视频号共用 `解析器与输出模式 → 微信（公众号 / 视频号）` 输出模式。需要代理时，在 `代理设置` 中填写代理地址并开启 `微信公众号 / 视频号解析与媒体下载使用代理`。
 
 ---
 
@@ -149,6 +167,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - B站解析端点
 - [FxEmbed](https://github.com/FxEmbed/FxEmbed) - Twitter/X 解析服务
 - [ParseHub](https://github.com/z-mio/ParseHub) - 小黑盒 BBS 帖子解析方法
+- [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser) - 微信视频号解析方案，参考腾讯元宝换取播放令牌与视频号预览接口的实现
 - [tianger-mckz](https://github.com/drdon1234/astrbot_plugin_bilibili_bot/issues/1#issuecomment-3517087034) | [ScryAbu](https://github.com/drdon1234/astrbot_plugin_media_parser/issues/16#issuecomment-3726729850) | [WWWA7](https://github.com/drdon1234/astrbot_plugin_media_parser/pull/17#issue-3799325283) - QQ小程序卡片链接提取方法
 - [CSDN 博客](https://blog.csdn.net/qq_53153535/article/details/141297614) - 抖音解析方法
 - [astrbot_plugin_media_parser_yaya](https://github.com/xiaoxi2760/astrbot_plugin_media_parser_yaya) - 抖音备用解析方式与小红书无水印解析方式的参考实现

@@ -626,7 +626,79 @@ YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长�
 
 当前实现不解析 `signatureCipher`、播放器 JavaScript 中的 `s`/`n` 变换或 SABR 分段协议；遇到这些返回形态、登录要求、DRM 或机器人挑战时会返回可见的解析失败信息。
 
-## 十六、NGA
+## 十六、微信
+
+支持能力：公众号图片 / 公众号正文 / 视频号视频 / 视频号文本
+
+公众号与视频号共用 `wechat` 平台开关，取数链路分开。公众号读取匿名文章页，视频号通过带令牌的预览接口取得视频。实现位于 `core/parser/platform/wechat/`：`parser.py` 负责链接分流和请求，`article.py` 只负责公众号 HTML 字段提取。
+
+### 公众号文章
+
+支持 `mp.weixin.qq.com/s/{文章标识}` 短链接，以及同时带有 `__biz`、`mid`、`idx`、`sn` 的 `mp.weixin.qq.com/s?...` 参数链接。提链时还原 HTML 实体，保留文章标识和查询参数的大小写。
+
+```text
+mp.weixin.qq.com/s/...
+  ↓
+匿名 GET 文章页，允许正常重定向
+  ↓
+确认 HTTP 状态与最终页面不是验证码入口
+  ↓
+读取 js_content 正文容器
+  ├─ 按段落提取正文文本
+  └─ 按出现顺序提取 img 图片
+  ↓
+组合标题、公众号署名和发布日期
+```
+
+正文和图片只从 `js_content` 容器提取，忽略 `script`、`style`、`noscript`、`template` 内容，不把正文外的公众号头像和页面控件收为配图。HTML 实体由标准库 `HTMLParser` 解码；文本整理空白并保留段落换行。图片优先读 `data-src`，缺失时读 `src`，相对地址按文章链接补全；只保留不含用户信息的 HTTP/HTTPS 地址，按完整地址去重并保持顺序，每张图片独立存为一个候选组。
+
+文本字段来源：
+
+- 标题优先读 `activity-name`，缺失时读 `og:title`。
+- 公众号名称读 `js_name`，署名读 `author` 或 `og:article:author` 元标签；两者不同则组合为“公众号（署名）”。
+- 正文写入 `desc`；有正文图片但没有正文文本时，使用 `description` 或 `og:description` 摘要补充。
+- 日期优先读 `publish_time` 节点。节点没有日期时，按 `ct`、`create_time`、`oriCreateTime` 顺序读取本页明确声明的秒级 JS 时间变量，以东八区转换为日期；不使用关联文章对象中的同名发布时间字段。
+
+公众号页面和图片请求携带桌面 User-Agent，Referer 为 `https://mp.weixin.qq.com/`，不携带配置中的腾讯元宝 Cookie。纯文本文章和纯图片文章均可返回结果，但必须存在 `js_content` 且至少提取到正文或图片，不能仅凭标题或摘要判成功。
+
+HTTP 200 仍可能是验证码或错误页。最终 URL 为 `/mp/wappoc_appmsgcaptcha` 时直接报告需要验证；页面没有有效正文和图片时，再按可见提示区分验证/访问频繁、删除/失效及普通空页面。正常文章即使讨论“验证码”等词语，也不会因此被误判。当前只处理文章图文，不提取内嵌视频；验证、登录或访问限制不会被绕过。
+
+### 视频号
+
+支持 `weixin.qq.com/sph/{短链标识}`，以及 `channels.weixin.qq.com/finder-preview/pages/sph?...`、`.../pages/feed?...` 预览长链。视频号链路参考 [Zhalslar/astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser) 的 `ShipinhaoParser` 方案。
+
+```text
+视频号短链 / 预览长链
+  ↓
+读取查询参数 token 与 eid（也接受 exportId）
+  ├─ 两者齐全 -> 直接请求预览接口
+  └─ 缺少任一项 -> 腾讯元宝 get_parse_result
+                    └─ playable_url -> token + eid
+  ↓
+finder-preview/api/feed/get_feed_info
+  ↓
+data.feedInfo + data.authorInfo
+  ↓
+视频直链、封面、作者、发布时间与互动统计
+```
+
+第一步 POST `https://yuanbao.tencent.com/api/weixin/get_parse_result`，携带元宝 Cookie、元宝站点 Origin/Referer 和网页客户端请求头；请求体为 `type=video_channel_url`、原始分享链接 `url`、`scene=1`。从 `data.playable_url` 的查询参数提取 `token` 和 `eid`，其中 `eid` 缺失时使用 `data.wx_export_id`。必须同时取得有效的 `token` 和 `eid` 才进入下一步，HTTP 401 提示元宝 Cookie 失效。
+
+第二步 POST `https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info`，请求体为 `baseReq.generalToken=token`、`exportId=eid`，Referer 使用携带同一组令牌的预览页地址，查询参数通过 URL 编码构建。元宝 Cookie 不传给预览接口或媒体 CDN；两个 POST 都不跟随重定向。响应先检查顶层 `errCode`，再检查 `data.errMsg.type` 表示的内容访问错误。
+
+视频地址按 `data.feedInfo.h264VideoInfo.videoUrl`、`h265VideoInfo.videoUrl`、`videoUrl` 顺序选择。`coverUrl` 只作为 `video_cover_urls` 封面；标题取 `feedInfo.description`，作者取 `authorInfo.nickname`，日期取 `feedInfo.createtime`，点赞/收藏/评论/转发的格式化计数写入 `desc`。编码信息中的 `duration` 按秒换算为 `timelength_ms`；没有可用视频地址则报错，不把封面当作视频或成功的图集结果。
+
+预览接口给出的可播直链交给普通视频下载器，不引入抓包或解密流程。视频设置 `video_force_download=True`，下载携带 `https://channels.weixin.qq.com/` Referer 和对应 User-Agent；视频号视频及公众号图片均依赖可用缓存目录。
+
+### 配置与边界
+
+`parsers.wechat` 控制关闭、全部发送、仅文本或仅富媒体，默认全部发送。`wechat.yuanbao_cookie` 仅供视频号换取令牌，公众号无需填写；配置项默认为空，元宝 Cookie 失效后需要手动更新。已有有效 `token` 和 `eid` 的预览长链可跳过元宝请求。`proxy.wechat` 默认关闭，开启后配合 `proxy.address` 同时覆盖公众号页面、视频号接口与媒体下载；本地调试通过 `YUANBAO_COOKIE` 环境变量提供元宝 Cookie。
+
+两个分支均使用现有 aiohttp 会话和解析并发限制，页面/API 单次请求超时为 30 秒。公众号是否返回可读正文、元宝是否接受分享链接以及视频号令牌的有效性都由上游决定；不支持视频号图集、直播或公众号内嵌视频，也不在解析失败时将受限内容伪装成媒体成功结果。
+
+公众号图文已通过两篇真实文章匿名验证，并抽样确认图片可访问。视频号已覆盖两步请求、结果字段和异常分支的模拟验证，尚未使用有效元宝 Cookie 验证真实视频下载全流程。
+
+## 十七、NGA
 
 当前未提供解析器。
 
@@ -634,7 +706,7 @@ NGA 已关闭访客浏览：`read.php?tid=...` 直接返回 `ERROR:1 未登录`�
 
 也就是说取数必须依赖 `ngaPassportUid` + `ngaPassportCid` 登录 Cookie。若之后决定支持，需要先引入用户提供 Cookie 的配置项，并注意页面是 GBK/GB18030 编码。
 
-## 十七、维护原则
+## 十八、维护原则
 
 改平台解析逻辑前，过一遍这些问题：
 

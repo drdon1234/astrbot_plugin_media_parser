@@ -55,6 +55,7 @@ PARSER_DISCOVERY_ORDER = (
     "pixiv",
     "xueqiu",
     "youtube",
+    "wechat",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {
     module_name: index for index, module_name in enumerate(PARSER_DISCOVERY_ORDER)
@@ -143,6 +144,7 @@ def _build_local_parser_kwargs(
     local_values = {
         "cookie_runtime_enabled": cache_dir_available,
         "configured_cookie": "",
+        "yuanbao_cookie": os.environ.get("YUANBAO_COOKIE", "").strip(),
         "admin_assist_enabled": False,
         "credential_path": bilibili_cookie_runtime_file,
         "max_quality": 0,

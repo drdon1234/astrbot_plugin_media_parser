@@ -24,6 +24,7 @@ from .parser.platform import (
     PixivParser,
     XueqiuParser,
     YoutubeParser,
+    WechatParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -57,6 +58,7 @@ PARSER_OUTPUT_KEYS = (
     "pixiv",
     "xueqiu",
     "youtube",
+    "wechat",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -445,6 +447,7 @@ class ProxyConfig:
     tiktok_use_proxy: bool = False
     pixiv_use_proxy: bool = False
     youtube_use_proxy: bool = True
+    wechat_use_proxy: bool = False
 
 
 @dataclass
@@ -464,6 +467,13 @@ class BilibiliEnhancedConfig:
 @dataclass
 class PixivConfig:
     cookie: str = ""
+
+
+@dataclass
+class WechatConfig:
+    """微信视频号换取播放令牌所需的配置。"""
+
+    yuanbao_cookie: str = ""
 
 
 @dataclass
@@ -587,6 +597,7 @@ class ConfigManager:
         self._enable_pixiv = self._parser_enabled("pixiv")
         self._enable_xueqiu = self._parser_enabled("xueqiu")
         self._enable_youtube = self._parser_enabled("youtube")
+        self._enable_wechat = self._parser_enabled("wechat")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -1003,6 +1014,12 @@ class ConfigManager:
             cookie=str(pixiv_raw.get("cookie", "") or "").strip(),
         )
 
+        # ── 微信视频号 ──────────────────────────────
+        wechat_raw = self._as_dict(config.get("wechat"))
+        self.wechat = WechatConfig(
+            yuanbao_cookie=str(wechat_raw.get("yuanbao_cookie", "") or "").strip(),
+        )
+
         # --- steam ---
         steam_raw = config.get("steam", {})
         if not isinstance(steam_raw, dict):
@@ -1070,6 +1087,11 @@ class ConfigManager:
                 proxy_raw.get("youtube", True),
                 True,
                 "proxy.youtube",
+            ),
+            wechat_use_proxy=self._parse_bool(
+                proxy_raw.get("wechat", False),
+                False,
+                "proxy.wechat",
             ),
         )
 
@@ -1205,6 +1227,14 @@ class ConfigManager:
             parsers.append(
                 YoutubeParser(
                     use_proxy=self.proxy.youtube_use_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
+        if self._enable_wechat:
+            parsers.append(
+                WechatParser(
+                    yuanbao_cookie=self.wechat.yuanbao_cookie,
+                    use_proxy=self.proxy.wechat_use_proxy,
                     proxy_url=proxy_addr,
                 )
             )

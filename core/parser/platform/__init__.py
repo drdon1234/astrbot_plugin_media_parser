@@ -13,6 +13,7 @@ from .twitter import TwitterParser
 from .pixiv import PixivParser
 from .xueqiu import XueqiuParser
 from .youtube import YoutubeParser
+from .wechat import WechatParser
 from .base import BaseVideoParser
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     'PixivParser',
     'XueqiuParser',
     'YoutubeParser',
+    'WechatParser',
     'BaseVideoParser'
 ]
 

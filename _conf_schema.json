@@ -157,6 +157,18 @@
                     "仅富媒体"
                 ],
                 "default": "全部发送"
+            },
+            "wechat": {
+                "description": "微信（公众号 / 视频号）",
+                "type": "string",
+                "hint": "公众号图文可匿名解析；视频号短链需要在微信设置中填写腾讯元宝 Cookie。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },
@@ -803,6 +815,19 @@
             }
         }
     },
+    "wechat": {
+        "description": "微信设置",
+        "type": "object",
+        "hint": "支持公众号文章及视频号分享链接。公众号图文无需 Cookie；图片和视频号视频下载需要可用缓存目录。",
+        "items": {
+            "yuanbao_cookie": {
+                "description": "腾讯元宝 Cookie",
+                "type": "string",
+                "hint": "仅供视频号使用，公众号无需填写。登录 yuanbao.tencent.com 后，从浏览器开发者工具 Network 中复制该站点请求的完整 Cookie 头；用于视频号短链解析，失效后需手动更新。已带有效 token 和 eid 的预览长链可不填写。",
+                "default": ""
+            }
+        }
+    },
     "steam": {
         "description": "Steam 设置",
         "type": "object",
@@ -871,6 +896,12 @@
                 "type": "bool",
                 "hint": "需要先填写“代理地址”；YouTube 在部分网络环境下必须使用代理。",
                 "default": true
+            },
+            "wechat": {
+                "description": "微信公众号 / 视频号解析与媒体下载使用代理",
+                "type": "bool",
+                "hint": "需要先填写“代理地址”。",
+                "default": false
             },
             "twitter": {
                 "description": "Twitter 代理",
