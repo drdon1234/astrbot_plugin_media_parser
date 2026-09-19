@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.6.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.6.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -30,7 +30,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **今日头条** | 视频 / 图片 / 文本 | 文章、视频、微头条 |
 | **小黑盒** | 视频 / 图片 / 文本 | 游戏、帖子、视频 |
 | **雪球** | 视频 / 图片 / 文本 | 帖子、长文、视频 |
-| **微信** | 视频 / 图片 / 文本 | 公众号文章、视频号 |
+| **微信** | 视频 / 图片 / 文本 | 公众号文章、纯图集、视频号 |
 | **知乎** | 图片 / 文本 | 回答、专栏文章 |
 | **TikTok** | 视频 / 图片 / 文本 | 视频、图集 |
 | **YouTube** | 视频 / 文本 | 视频、Shorts |

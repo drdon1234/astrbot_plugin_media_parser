@@ -1,7 +1,8 @@
-"""公众号文章页面提取，读取服务端返回的正文、图片和元数据。"""
+"""公众号文章页面提取，读取服务端返回的正文、图集和元数据。"""
 
 import re
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -26,12 +27,337 @@ FIELD_IDS = {
     "publish_time": "timestamp",
 }
 CHINA_TIMEZONE = timezone(timedelta(hours=8))
+JS_BRACKET_PAIRS = {"{": "}", "[": "]", "(": ")"}
+JS_SIMPLE_ESCAPES = {
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
 
 
 def _clean_text(text: str) -> str:
     """整理段落空白，保留正文中的换行。"""
     lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
     return "\n".join(line for line in lines if line)
+
+
+# ── 图集脚本数据提取 ──────────────────────────
+
+
+def _append_js_escape(source: str, index: int, value: List[str]) -> int:
+    """解码反斜杠起始的单个 JavaScript 转义。"""
+    if index + 1 >= len(source):
+        value.append("\\")
+        return len(source)
+    escaped = source[index + 1]
+    if escaped in JS_SIMPLE_ESCAPES:
+        value.append(JS_SIMPLE_ESCAPES[escaped])
+        return index + 2
+    hex_digits = source[index + 2:index + 4]
+    if escaped == "x" and re.fullmatch(r"[0-9A-Fa-f]{2}", hex_digits):
+        value.append(chr(int(hex_digits, 16)))
+        return index + 4
+    unicode_digits = source[index + 2:index + 6]
+    if escaped == "u" and re.fullmatch(r"[0-9A-Fa-f]{4}", unicode_digits):
+        codepoint = int(unicode_digits, 16)
+        next_escape = source[index + 6:index + 8]
+        next_digits = source[index + 8:index + 12]
+        if (
+            0xD800 <= codepoint <= 0xDBFF
+            and next_escape == "\\u"
+            and re.fullmatch(r"[0-9A-Fa-f]{4}", next_digits)
+        ):
+            low = int(next_digits, 16)
+            if 0xDC00 <= low <= 0xDFFF:
+                codepoint = (
+                    0x10000 + ((codepoint - 0xD800) << 10) + low - 0xDC00
+                )
+                value.append(chr(codepoint))
+                return index + 12
+        value.append(chr(codepoint))
+        return index + 6
+    if escaped == "\r":
+        return index + 3 if source[index + 2:index + 3] == "\n" else index + 2
+    if escaped == "\n":
+        return index + 2
+    value.append(escaped)
+    return index + 2
+
+
+def _read_js_string(source: str, start: int) -> Tuple[Optional[str], int]:
+    """读取一个 JavaScript 字符串，并有限解码常见转义。"""
+    if start >= len(source) or source[start] not in {"'", '"', "`"}:
+        return None, start
+    quote = source[start]
+    value: List[str] = []
+    index = start + 1
+    while index < len(source):
+        character = source[index]
+        if character == quote:
+            return "".join(value), index + 1
+        if character != "\\":
+            value.append(character)
+            index += 1
+            continue
+        if index + 1 >= len(source):
+            return None, len(source)
+        index = _append_js_escape(source, index, value)
+    return None, len(source)
+
+
+def _decode_js_escapes(source: str) -> str:
+    """有限解码不带外围引号的 JavaScript 转义文本。"""
+    value: List[str] = []
+    index = 0
+    while index < len(source):
+        if source[index] != "\\":
+            value.append(source[index])
+            index += 1
+            continue
+        index = _append_js_escape(source, index, value)
+    return "".join(value)
+
+
+def _skip_js_space(source: str, start: int) -> int:
+    """跳过 JavaScript 空白和注释。"""
+    index = start
+    while index < len(source):
+        if source[index].isspace():
+            index += 1
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index + 2)
+            return len(source) if newline < 0 else _skip_js_space(source, newline + 1)
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            return len(source) if end < 0 else _skip_js_space(source, end + 2)
+        break
+    return index
+
+
+def _balanced_end(source: str, start: int) -> Optional[int]:
+    """返回括号结构结束位置，忽略字符串和注释中的括号。"""
+    if start >= len(source) or source[start] not in JS_BRACKET_PAIRS:
+        return None
+    stack = [JS_BRACKET_PAIRS[source[start]]]
+    index = start + 1
+    while index < len(source):
+        character = source[index]
+        if character in {"'", '"', "`"}:
+            value, index = _read_js_string(source, index)
+            if value is None:
+                return None
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index + 2)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            if end < 0:
+                return None
+            index = end + 2
+            continue
+        if character in JS_BRACKET_PAIRS:
+            stack.append(JS_BRACKET_PAIRS[character])
+        elif character == stack[-1]:
+            stack.pop()
+            if not stack:
+                return index + 1
+        index += 1
+    return None
+
+
+def _find_value_end(source: str, start: int, closing: str) -> int:
+    """查找对象属性或数组成员的顶层结束位置。"""
+    stack: List[str] = []
+    index = start
+    while index < len(source):
+        character = source[index]
+        if character in {"'", '"', "`"}:
+            value, index = _read_js_string(source, index)
+            if value is None:
+                return len(source)
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index + 2)
+            index = len(source) if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            index = len(source) if end < 0 else end + 2
+            continue
+        if character in JS_BRACKET_PAIRS:
+            stack.append(JS_BRACKET_PAIRS[character])
+        elif stack and character == stack[-1]:
+            stack.pop()
+        elif not stack and character in {",", closing}:
+            return index
+        index += 1
+    return len(source)
+
+
+def _top_level_property(source: str, property_name: str) -> Optional[str]:
+    """从 JavaScript 对象读取指定顶层属性的原始值。"""
+    if not source.startswith("{"):
+        return None
+    index = 1
+    while index < len(source):
+        index = _skip_js_space(source, index)
+        while index < len(source) and source[index] == ",":
+            index = _skip_js_space(source, index + 1)
+        if index >= len(source) or source[index] == "}":
+            return None
+        if source[index] in {"'", '"'}:
+            key, key_end = _read_js_string(source, index)
+            if key is None:
+                return None
+        else:
+            match = re.match(r"[A-Za-z_$][A-Za-z0-9_$]*", source[index:])
+            if not match:
+                value_end = _find_value_end(source, index, "}")
+                index = value_end + 1
+                continue
+            key = match.group(0)
+            key_end = index + len(key)
+        colon = _skip_js_space(source, key_end)
+        if colon >= len(source) or source[colon] != ":":
+            value_end = _find_value_end(source, colon, "}")
+            index = value_end + 1
+            continue
+        value_start = _skip_js_space(source, colon + 1)
+        value_end = _find_value_end(source, value_start, "}")
+        if key == property_name:
+            return source[value_start:value_end].strip()
+        index = value_end + 1
+    return None
+
+
+def _assigned_object(page: str, name: str) -> str:
+    """读取页面中明确赋值的 JavaScript 对象。"""
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*(\{{)", page)
+    if not match:
+        return ""
+    start = match.start(1)
+    end = _balanced_end(page, start)
+    return page[start:end] if end is not None else ""
+
+
+def _property_string(source: str, property_name: str) -> str:
+    """读取对象顶层字符串属性，并解码 HTML 实体。"""
+    raw_value = _top_level_property(source, property_name)
+    if not raw_value:
+        return ""
+    start = _skip_js_space(raw_value, 0)
+    value, _ = _read_js_string(raw_value, start)
+    return unescape(value) if value is not None else ""
+
+
+def _property_scalar(source: str, property_name: str) -> str:
+    """读取对象顶层字符串或数字标量。"""
+    raw_value = _top_level_property(source, property_name)
+    if not raw_value:
+        return ""
+    start = _skip_js_space(raw_value, 0)
+    if start < len(raw_value) and raw_value[start] in {"'", '"'}:
+        value, _ = _read_js_string(raw_value, start)
+        return value or ""
+    match = re.match(r"[-+]?\d+", raw_value[start:])
+    return match.group(0) if match else ""
+
+
+def _normalize_image_url(source_url: str, value: str) -> str:
+    """校验并补全文章图片地址。"""
+    try:
+        image_url = urljoin(source_url, unescape(value.strip())) if value.strip() else ""
+        parsed = urlparse(image_url)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    if parsed.username or parsed.password:
+        return ""
+    return image_url
+
+
+def _gallery_images(cgi_data: str, source_url: str) -> List[List[str]]:
+    """按顺序读取纯图集列表中每个对象的顶层 CDN 地址。"""
+    raw_list = _top_level_property(cgi_data, "picture_page_info_list")
+    if not raw_list:
+        return []
+    start = _skip_js_space(raw_list, 0)
+    if start >= len(raw_list) or raw_list[start] != "[":
+        return []
+    end = _balanced_end(raw_list, start)
+    if end is None:
+        return []
+    images: List[List[str]] = []
+    seen = set()
+    index = start + 1
+    while index < end - 1:
+        index = _skip_js_space(raw_list, index)
+        while index < end - 1 and raw_list[index] == ",":
+            index = _skip_js_space(raw_list, index + 1)
+        if index >= end - 1:
+            break
+        if raw_list[index] != "{":
+            index = _find_value_end(raw_list, index, "]") + 1
+            continue
+        object_end = _balanced_end(raw_list, index)
+        if object_end is None or object_end > end:
+            return []
+        item = raw_list[index:object_end]
+        image_url = _normalize_image_url(
+            source_url, _property_string(item, "cdn_url")
+        )
+        if image_url and image_url not in seen:
+            seen.add(image_url)
+            images.append([image_url])
+        index = object_end
+    return images
+
+
+# ── HTML 文本与元数据提取 ──────────────────────
+
+
+class _SummaryHTMLParser(HTMLParser):
+    """将公众号摘要中的转义标签还原为纯文本。"""
+
+    def __init__(self) -> None:
+        """初始化摘要文本缓冲区。"""
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
+    ) -> None:
+        """保留块标签和换行标签的文本边界。"""
+        if tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        """在块标签和相邻链接之间补充分隔。"""
+        if tag in BLOCK_TAGS or tag == "a":
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        """收集摘要可见文本。"""
+        self.parts.append(data)
+
+
+def _clean_summary(summary: str) -> str:
+    """解码公众号摘要中的 JavaScript 转义与 HTML 标签。"""
+    parser = _SummaryHTMLParser()
+    parser.feed(unescape(_decode_js_escapes(summary)))
+    parser.close()
+    return _clean_text("".join(parser.parts))
 
 
 class _ArticleHTMLParser(HTMLParser):
@@ -133,20 +459,14 @@ class _ArticleHTMLParser(HTMLParser):
     def _add_image(self, attributes: Dict[str, Optional[str]]) -> None:
         """优先保留正文懒加载图片地址，跳过内嵌占位图。"""
         value = attributes.get("data-src") or attributes.get("src") or ""
-        try:
-            image_url = urljoin(self.source_url, value.strip()) if value.strip() else ""
-            parsed = urlparse(image_url)
-        except ValueError:
-            return
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return
-        if parsed.username or parsed.password or image_url in self._seen_images:
+        image_url = _normalize_image_url(self.source_url, value)
+        if not image_url or image_url in self._seen_images:
             return
         self._seen_images.add(image_url)
         self.images.append([image_url])
 
 
-def _publication_date(page: str, visible_date: str) -> str:
+def _publication_date(page: str, visible_date: str, cgi_data: str) -> str:
     """从文章时间节点或明确的发布时间变量读取日期。"""
     date_match = re.search(
         r"(\d{4})[-年/](\d{1,2})[-月/](\d{1,2})日?", visible_date
@@ -155,6 +475,14 @@ def _publication_date(page: str, visible_date: str) -> str:
         try:
             return datetime(*map(int, date_match.groups())).strftime("%Y-%m-%d")
         except ValueError:
+            pass
+    original_timestamp = _property_scalar(cgi_data, "ori_create_time")
+    if re.fullmatch(r"\d{10}", original_timestamp):
+        try:
+            return datetime.fromtimestamp(
+                int(original_timestamp), tz=CHINA_TIMEZONE
+            ).strftime("%Y-%m-%d")
+        except (ValueError, OverflowError, OSError):
             pass
     # publish_time 也出现在关联文章的数据中，只匹配本页明确的 JS 变量。
     for variable in ("ct", "create_time", "oriCreateTime"):
@@ -187,8 +515,13 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
     parser = _ArticleHTMLParser(source_url)
     parser.feed(page)
     parser.close()
+    cgi_data = _assigned_object(page, "window.cgiDataNew")
     content = _clean_text("".join(parser.fields["content"]))
-    if not parser.has_content or not (content or parser.images):
+    is_gallery = _property_scalar(cgi_data, "item_show_type") == "8"
+    gallery_images = _gallery_images(cgi_data, source_url) if is_gallery else []
+    has_standard_content = parser.has_content and bool(content or parser.images)
+    has_gallery_content = is_gallery and bool(gallery_images)
+    if not (has_standard_content or has_gallery_content):
         visible_text = _clean_text("".join(parser.visible_text))
         if any(
             phrase in visible_text
@@ -205,23 +538,33 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
             raise RuntimeError("微信公众号文章已删除、失效或无法查看")
         raise RuntimeError("微信公众号页面未返回可解析的正文或图片")
 
-    title = _clean_text("".join(parser.fields["title"])) or parser.meta.get(
-        "og:title", ""
+    title = (
+        _clean_text("".join(parser.fields["title"]))
+        or parser.meta.get("og:title", "")
+        or _property_string(cgi_data, "title")
     )
-    account = _clean_text("".join(parser.fields["account"]))
+    account = (
+        _clean_text("".join(parser.fields["account"]))
+        or _property_string(cgi_data, "nick_name")
+    )
     byline = parser.meta.get("author") or parser.meta.get("og:article:author", "")
     author = (
         f"{account}（{byline}）"
         if account and byline and account != byline
         else account or byline
     )
-    summary = parser.meta.get("description") or parser.meta.get("og:description", "")
-    summary = re.sub(r"\\x0[dDaA]|\\[nr]", "\n", summary)
+    summary = (
+        parser.meta.get("description")
+        or parser.meta.get("og:description", "")
+        or _property_string(cgi_data, "desc")
+    )
     return {
         "url": source_url,
         "title": title,
         "author": author,
-        "desc": content or _clean_text(summary),
-        "timestamp": _publication_date(page, "".join(parser.fields["timestamp"])),
-        "image_urls": parser.images,
+        "desc": content or _clean_summary(summary),
+        "timestamp": _publication_date(
+            page, "".join(parser.fields["timestamp"]), cgi_data
+        ),
+        "image_urls": gallery_images if has_gallery_content else parser.images,
     }

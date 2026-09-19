@@ -267,7 +267,7 @@ class WechatParser(BaseVideoParser):
                 timeout=aiohttp.ClientTimeout(total=30),
                 allow_redirects=False,
             ) as response:
-                if response.status != 200:
+                if not 200 <= response.status < 300:
                     raise RuntimeError(
                         f"视频号预览接口请求失败（HTTP {response.status}）"
                     )

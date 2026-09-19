@@ -243,7 +243,7 @@ AcFun 不设置全局强制下载标记；HLS 候选通过 `m3u8:` 前缀交给�
 
 #### 微信解析
 
-`wechat/parser.py` 将 `mp.weixin.qq.com/s` 长短链接路由到匿名 GET。`article.py` 使用标准库 `HTMLParser`，限定 `#js_content` 提取正文和 `data-src/src` 图片，并读取标题、帐号、作者署名及本页发布时间；不读取正文外的头像与控件。验证码、删除和缺少正文的页面抛出明确异常，不把通用页面元标签当作文章解析成功。不解析公众号内嵌视频，不引入浏览器或额外依赖。
+`wechat/parser.py` 将 `mp.weixin.qq.com/s` 长短链接路由到匿名 GET。`article.py` 使用标准库 `HTMLParser`，从 `#js_content` 提取普通文章正文和 `data-src/src` 图片；`item_show_type=8` 的纯图集则从页面 `cgiDataNew.picture_page_info_list` 依次读取每项的顶层 `cdn_url`，排除封面、水印和原图临时地址。两类页面均读取标题、帐号、作者署名及本页发布时间，不读取正文外的头像与控件。验证码、删除和缺少有效正文或图集的页面抛出明确异常，不把通用页面元标签当作文章解析成功。不解析公众号内嵌视频，不引入浏览器或额外依赖。
 
 视频号借鉴 [astrbot_plugin_parser 的方案](https://github.com/Zhalslar/astrbot_plugin_parser/blob/main/core/parsers/shipinhao.py)：未带完整 `token/eid` 的分享链接先以 `wechat.yuanbao_cookie` 请求腾讯元宝 `api/weixin/get_parse_result`，从 `playable_url` 与 `wx_export_id` 读取播放令牌和作品标识，再请求视频号 `finder-preview/api/feed/get_feed_info`。已有令牌的预览长链直接进入第二步。
 
