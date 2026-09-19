@@ -12,21 +12,21 @@ from .downloader.utils import check_cache_dir_available
 from .parser.platform import (
     BilibiliParser,
     DouyinParser,
-    TikTokParser,
     KuaishouParser,
+    AcfunParser,
     WeiboParser,
     XiaohongshuParser,
     XianyuParser,
     ToutiaoParser,
     XiaoheiheParser,
+    XueqiuParser,
+    WechatParser,
+    ZhihuParser,
+    TikTokParser,
+    YoutubeParser,
     SteamParser,
     TwitterParser,
     PixivParser,
-    XueqiuParser,
-    YoutubeParser,
-    AcfunParser,
-    WechatParser,
-    ZhihuParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -48,21 +48,21 @@ BILIBILI_QUALITY_MAP = {
 PARSER_OUTPUT_KEYS = (
     "bilibili",
     "douyin",
-    "tiktok",
     "kuaishou",
+    "acfun",
     "weibo",
     "xiaohongshu",
     "xianyu",
     "toutiao",
     "xiaoheihe",
+    "xueqiu",
+    "wechat",
+    "zhihu",
+    "tiktok",
+    "youtube",
     "steam",
     "twitter",
     "pixiv",
-    "xueqiu",
-    "youtube",
-    "acfun",
-    "wechat",
-    "zhihu",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -589,21 +589,21 @@ class ConfigManager:
         )
         self._enable_bilibili = self._parser_enabled("bilibili")
         self._enable_douyin = self._parser_enabled("douyin")
-        self._enable_tiktok = self._parser_enabled("tiktok")
         self._enable_kuaishou = self._parser_enabled("kuaishou")
+        self._enable_acfun = self._parser_enabled("acfun")
         self._enable_weibo = self._parser_enabled("weibo")
         self._enable_xiaohongshu = self._parser_enabled("xiaohongshu")
         self._enable_xianyu = self._parser_enabled("xianyu")
         self._enable_toutiao = self._parser_enabled("toutiao")
         self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
+        self._enable_xueqiu = self._parser_enabled("xueqiu")
+        self._enable_wechat = self._parser_enabled("wechat")
+        self._enable_zhihu = self._parser_enabled("zhihu")
+        self._enable_tiktok = self._parser_enabled("tiktok")
+        self._enable_youtube = self._parser_enabled("youtube")
         self._enable_steam = self._parser_enabled("steam")
         self._enable_twitter = self._parser_enabled("twitter")
         self._enable_pixiv = self._parser_enabled("pixiv")
-        self._enable_xueqiu = self._parser_enabled("xueqiu")
-        self._enable_youtube = self._parser_enabled("youtube")
-        self._enable_acfun = self._parser_enabled("acfun")
-        self._enable_wechat = self._parser_enabled("wechat")
-        self._enable_zhihu = self._parser_enabled("zhihu")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -1170,15 +1170,10 @@ class ConfigManager:
             parsers.append(self.bilibili_parser)
         if self._enable_douyin:
             parsers.append(DouyinParser())
-        if self._enable_tiktok:
-            parsers.append(
-                TikTokParser(
-                    use_proxy=self.proxy.tiktok_use_proxy,
-                    proxy_url=proxy_addr,
-                )
-            )
         if self._enable_kuaishou:
             parsers.append(KuaishouParser())
+        if self._enable_acfun:
+            parsers.append(AcfunParser())
         if self._enable_weibo:
             parsers.append(WeiboParser(hot_comment_count=weibo_hc))
         if self._enable_xiaohongshu:
@@ -1197,6 +1192,32 @@ class ConfigManager:
             parsers.append(
                 XiaoheiheParser(
                     use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
+        if self._enable_xueqiu:
+            parsers.append(XueqiuParser())
+        if self._enable_wechat:
+            parsers.append(
+                WechatParser(
+                    yuanbao_cookie=self.wechat.yuanbao_cookie,
+                    use_proxy=self.proxy.wechat_use_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
+        if self._enable_zhihu:
+            parsers.append(ZhihuParser())
+        if self._enable_tiktok:
+            parsers.append(
+                TikTokParser(
+                    use_proxy=self.proxy.tiktok_use_proxy,
+                    proxy_url=proxy_addr,
+                )
+            )
+        if self._enable_youtube:
+            parsers.append(
+                YoutubeParser(
+                    use_proxy=self.proxy.youtube_use_proxy,
                     proxy_url=proxy_addr,
                 )
             )
@@ -1227,28 +1248,6 @@ class ConfigManager:
                     proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
                 )
             )
-        if self._enable_xueqiu:
-            parsers.append(XueqiuParser())
-        if self._enable_youtube:
-            parsers.append(
-                YoutubeParser(
-                    use_proxy=self.proxy.youtube_use_proxy,
-                    proxy_url=proxy_addr,
-                )
-            )
-        if self._enable_acfun:
-            parsers.append(AcfunParser())
-        if self._enable_wechat:
-            parsers.append(
-                WechatParser(
-                    yuanbao_cookie=self.wechat.yuanbao_cookie,
-                    use_proxy=self.proxy.wechat_use_proxy,
-                    proxy_url=proxy_addr,
-                )
-            )
-        if self._enable_zhihu:
-            parsers.append(ZhihuParser())
-
         return parsers
 
     # ── 静态辅助 ────────────────────────────────────────

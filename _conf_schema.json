@@ -26,8 +26,8 @@
                 ],
                 "default": "全部发送"
             },
-            "tiktok": {
-                "description": "TikTok",
+            "kuaishou": {
+                "description": "快手",
                 "type": "string",
                 "options": [
                     "关闭",
@@ -37,8 +37,8 @@
                 ],
                 "default": "全部发送"
             },
-            "kuaishou": {
-                "description": "快手",
+            "acfun": {
+                "description": "AcFun",
                 "type": "string",
                 "options": [
                     "关闭",
@@ -103,63 +103,8 @@
                 ],
                 "default": "全部发送"
             },
-            "steam": {
-                "description": "Steam",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体"
-                ],
-                "default": "全部发送"
-            },
-            "twitter": {
-                "description": "Twitter/X",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体"
-                ],
-                "default": "全部发送"
-            },
-            "pixiv": {
-                "description": "Pixiv",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体"
-                ],
-                "default": "全部发送"
-            },
             "xueqiu": {
                 "description": "雪球",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体"
-                ],
-                "default": "全部发送"
-            },
-            "youtube": {
-                "description": "YouTube",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体"
-                ],
-                "default": "全部发送"
-            },
-            "acfun": {
-                "description": "AcFun",
                 "type": "string",
                 "options": [
                     "关闭",
@@ -185,6 +130,61 @@
                 "description": "知乎",
                 "type": "string",
                 "hint": "支持知乎指定回答和专栏文章的匿名解析；文章使用自动访客会话与接口签名。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "tiktok": {
+                "description": "TikTok",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "youtube": {
+                "description": "YouTube",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "steam": {
+                "description": "Steam",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "twitter": {
+                "description": "Twitter/X",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "pixiv": {
+                "description": "Pixiv",
+                "type": "string",
                 "options": [
                     "关闭",
                     "全部发送",

@@ -12,21 +12,21 @@
 
 - B站：支持 视频 / 图片 / 文本 / 热评；覆盖普通视频、番剧、动态 / opus，支持 Cookie 增强和扫码登录运行时。
 - 抖音：支持 视频 / 图片 / 文本；覆盖短链、视频、图集和 slides 多分段分享页。
-- TikTok：支持 视频 / 图片 / 文本；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
 - 快手：支持 视频 / 图片 / 文本；覆盖短链和作品分享页。
+- AcFun：支持 视频 / 图片 / 文本；覆盖视频、动态和番剧页面，从服务端页面状态提取 HLS 与图片候选。
 - 微博：支持 视频 / 图片 / 文本 / 热评；覆盖桌面详情、移动详情和视频组件页。
 - 小红书：支持 视频 / 图片 / 文本 / 热评；覆盖短链、移动端和 PC 端笔记页。
 - 闲鱼：支持 视频 / 图片 / 文本；覆盖短链、H5 商品页和 PC 商品页。
 - 今日头条：支持 视频 / 图片 / 文本；覆盖文章、微头条、视频、短链跳转页和 `message.meta.news.jumpUrl` 小程序卡片。
 - 小黑盒：支持 视频 / 图片 / 文本；覆盖游戏详情页和 BBS/link 帖子。
+- 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
+- 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
+- 知乎：支持 图片 / 文本；覆盖指定回答和专栏文章，回答使用匿名 API，文章使用匿名访客 `d_c0` 与接口签名。
+- TikTok：支持 视频 / 图片 / 文本；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
+- YouTube：支持 视频 / 文本；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
 - Steam：支持 视频 / 图片 / 文本；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
-- 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
-- YouTube：支持 视频 / 文本；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
-- AcFun：支持 视频 / 图片 / 文本；覆盖视频、动态和番剧页面，从服务端页面状态提取 HLS 与图片候选。
-- 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
-- 知乎：支持 图片 / 文本；覆盖指定回答和专栏文章，回答使用匿名 API，文章使用匿名访客 `d_c0` 与接口签名。
 
 ### 1.2 核心模块结构
 
@@ -54,30 +54,30 @@ astrbot_plugin_media_parser/
     │   │   └── bilibili/auth.py     # BilibiliAuthRuntime，Cookie 校验与扫码登录
     │   └── platform/                # 各平台解析器
     │       ├── base.py              # BaseVideoParser 接口定义与共用方法
+    │       ├── bilibili.py          # B站视频/番剧/动态解析器
     │       ├── douyin/              # 抖音子包
     │       │   ├── parser.py        # 抖音视频/图集解析器
     │       │   ├── sign.py          # 抖音 a_bogus 签名
     │       │   └── web.py           # 抖音 Web 详情接口与会话管理
-    │       ├── bilibili.py          # B站视频/番剧/动态解析器
-    │       ├── tiktok.py            # TikTok 视频/图集解析器
     │       ├── kuaishou.py          # 快手视频/图集解析器
+    │       ├── acfun.py             # AcFun 视频/动态/番剧解析器
     │       ├── weibo.py             # 微博桌面/移动/视频组件解析器
     │       ├── xiaohongshu.py       # 小红书笔记解析器
     │       ├── xianyu.py            # 闲鱼商品页解析器
     │       ├── toutiao.py           # 今日头条文章/微头条/视频解析器
     │       ├── xiaoheihe.py         # 小黑盒游戏详情/BBS 帖子解析器
-    │       ├── steam.py             # Steam 游戏详情页解析器
-    │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
-    │       ├── pixiv.py             # Pixiv 插画/漫画解析器
     │       ├── xueqiu.py            # 雪球帖子/长文解析器
-    │       ├── youtube.py           # YouTube 视频解析器
-    │       ├── acfun.py             # AcFun 视频/动态/番剧解析器
     │       ├── wechat/              # 微信子包
     │       │   ├── parser.py        # 公众号与视频号路由、HTTP 请求
     │       │   └── article.py        # 公众号文章 HTML 图文提取
-    │       └── zhihu/              # 知乎子包
-    │           ├── parser.py        # 回答/文章路由与匿名接口请求
-    │           └── sign.py          # 专栏文章接口签名
+    │       ├── zhihu/              # 知乎子包
+    │       │   ├── parser.py        # 回答/文章路由与匿名接口请求
+    │       │   └── sign.py          # 专栏文章接口签名
+    │       ├── tiktok.py            # TikTok 视频/图集解析器
+    │       ├── youtube.py           # YouTube 视频解析器
+    │       ├── steam.py             # Steam 游戏详情页解析器
+    │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
+    │       └── pixiv.py             # Pixiv 插画/漫画解析器
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range

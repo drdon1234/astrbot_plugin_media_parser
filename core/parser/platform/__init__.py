@@ -1,40 +1,40 @@
 """平台解析器导出入口。"""
 from .bilibili import BilibiliParser
 from .douyin import DouyinParser
-from .tiktok import TikTokParser
 from .kuaishou import KuaishouParser
+from .acfun import AcfunParser
 from .weibo import WeiboParser
 from .xiaohongshu import XiaohongshuParser
 from .xianyu import XianyuParser
 from .toutiao import ToutiaoParser
 from .xiaoheihe import XiaoheiheParser
+from .xueqiu import XueqiuParser
+from .wechat import WechatParser
+from .zhihu import ZhihuParser
+from .tiktok import TikTokParser
+from .youtube import YoutubeParser
 from .steam import SteamParser
 from .twitter import TwitterParser
 from .pixiv import PixivParser
-from .xueqiu import XueqiuParser
-from .youtube import YoutubeParser
-from .acfun import AcfunParser
-from .wechat import WechatParser
-from .zhihu import ZhihuParser
 from .base import BaseVideoParser
 
 __all__ = [
     'BilibiliParser',
     'DouyinParser',
-    'TikTokParser',
     'KuaishouParser',
+    'AcfunParser',
     'WeiboParser',
     'XiaohongshuParser',
     'XianyuParser',
     'ToutiaoParser',
     'XiaoheiheParser',
+    'XueqiuParser',
+    'WechatParser',
+    'ZhihuParser',
+    'TikTokParser',
+    'YoutubeParser',
     'SteamParser',
     'TwitterParser',
     'PixivParser',
-    'XueqiuParser',
-    'YoutubeParser',
-    'AcfunParser',
-    'WechatParser',
-    'ZhihuParser',
     'BaseVideoParser'
 ]

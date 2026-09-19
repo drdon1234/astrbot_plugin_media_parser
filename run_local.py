@@ -43,21 +43,21 @@ PARSER_DISCOVERY_SKIP_MODULES = {"base"}
 PARSER_DISCOVERY_ORDER = (
     "bilibili",
     "douyin",
-    "tiktok",
     "kuaishou",
+    "acfun",
     "weibo",
     "xiaohongshu",
     "xianyu",
     "toutiao",
     "xiaoheihe",
+    "xueqiu",
+    "wechat",
+    "zhihu",
+    "tiktok",
+    "youtube",
     "steam",
     "twitter",
     "pixiv",
-    "xueqiu",
-    "youtube",
-    "acfun",
-    "wechat",
-    "zhihu",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {
     module_name: index for index, module_name in enumerate(PARSER_DISCOVERY_ORDER)

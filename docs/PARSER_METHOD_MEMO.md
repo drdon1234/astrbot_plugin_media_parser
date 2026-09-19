@@ -146,38 +146,7 @@ HEAD 展开，失败再 GET 展开
 
 视频地址有一层转换：平台可能返回完整 URL，也可能只返回资源 ID，这时需要按播放接口格式补成可访问地址。图文图片结构可能多层嵌套，递归寻找常见 URL 字段，保留同一张图片的多个候选。slides 的 `images` 条目可能内嵌分段视频，必须先识别视频 URL 和封面 URL；只有确认是纯图片条目时才加入图片列表，避免把多分段视频误解析成图片。
 
-## 四、TikTok
-
-支持能力：视频 / 图片 / 文本
-
-独立解析器模块，取数路线与抖音完全不同。作品页数据主要在 rehydration 脚本里，普通 HTTP 客户端容易拿到防护页或不完整页面。
-
-```text
-tiktok.com / vm.tiktok.com / vt.tiktok.com
-  ↓
-优先用系统 curl 拉取页面
-  ↓
-确认不是防护页
-  ↓
-读取 __UNIVERSAL_DATA_FOR_REHYDRATION__
-  ↓
-失败时读取 SIGI_STATE
-  ↓
-按新旧结构寻找 itemStruct
-```
-
-主路径是 `__UNIVERSAL_DATA_FOR_REHYDRATION__`，新版页面的作品结构在 `webapp.video-detail.itemInfo.itemStruct`。旧页面可能用 `SIGI_STATE`，或者把作品结构散在更深层对象里，需要递归搜索 `itemStruct`、`video`、`imagePost` 等线索。
-
-oEmbed 只适合补充标题、作者等文本，媒体资源以页面脚本中的作品结构为主。
-
-视频和图集区分：
-
-- 视频从 `playAddr`、`downloadAddr`、`PlayAddrStruct`、`bitrateInfo` 找候选。
-- 图集从 `imagePostInfo` 或相近结构收集图片。
-
-结构化脚本全部失败时，最后从 HTML 里直接查找 `playAddr` 兜底。
-
-## 五、快手
+## 四、快手
 
 支持能力：视频 / 图片 / 文本
 
@@ -207,6 +176,38 @@ v.kuaishou.com / kuaishou.com / gifshow.com / chenzhongtech.com
 旧页面兼容很重要。历史链接不一定提供完整 SSR 状态，但页面里可能还有 `photoUrl`、`videoUrl`、`srcNoMark`、`window.rawData` 等字段，不如结构化状态稳定，但能覆盖旧链接和非标准分享页。用这些兜底字段时要避免把不完整结果误判为成功。
 
 快手图集的图片地址经常不是完整 URL，而是 CDN 前缀加路径。先组合，再去重，保持候选顺序。
+
+## 五、AcFun
+
+支持能力：视频 / 图片 / 文本。
+
+支持 `acfun.cn`、`www.acfun.cn`、`m.acfun.cn` 上的视频 `/v/ac{ID}`、多 P `/v/ac{ID}_{P}`、文章/动态 `/a/ac{ID}`、番剧 `/bangumi/aa{ID}` 和指定集 `/bangumi/aa{ID}_36188_{itemId}`，以及移动分享 `/v/?ac={ID}`（含分 P）。消息中的无协议链接和中文标点相邻链接也会提取。所有入口规范化为 HTTPS 桌面链接，移除追踪参数，保留决定内容的分 P、分集信息；同一作品的不同分 P 和同一番剧的不同集分别解析。
+
+移动分享入口可能把多 P 链接跳回第一 P，因此在请求前主动规范化。视频和文章共用 ac 编号，`/v/` 分享入口可能返回文章，按实际页面类型处理。番剧路径中间的 `36188` 为官方脚本使用的固定路由段，真正决定集数的是末尾 `itemId`。
+
+番剧的 `?ac={序号}` 选择花絮，必须保留。按番剧状态的 `sidelights` 清单查找花絮，再读取对应投稿页面，并交叉校验清单与投稿的视频 ID；返回投稿规范链接。无效索引或身份不符直接报错，不能误发同页正片。
+
+取数链路：
+
+```text
+规范链接
+  ↓
+window.videoInfo / window.articleInfo / window.bangumiData
+  ↓
+核对作品 ID、当前视频 ID 和指定分 P / itemId
+  ├─ 视频 / 番剧 → currentVideoInfo.ksPlayJson / ksPlayJsonHevc
+  └─ 文章 / 动态 → parts[].content
+```
+
+页面请求失败或缺少可解码状态时，没有选集信息的 ac 链接可以尝试 `GET /rest/pc-direct/article/info?articleId=...`。接口必须同时通过业务 `result=0` 和返回 `articleId` 校验。已解码但身份不符的页面直接报错，不通过回退掩盖错误；不存在的分 P、集数即使返回 HTTP 200，也不能取第一条视频代替。
+
+页面身份有效但播放数据缺失时，调用 `GET /rest/pc-direct/play/playInfo/ksPlayJson`。携带当前 `videoId`、页面 `mkey`、作品 `resourceId` 和 `resourceType`（投稿为 2、番剧为 1），由接口校验视频归属。只补充播放数据，不覆盖页面原有的毫秒时长。
+
+同一视频的流按 H.264 优先、清晰度降序排列，每档保留主地址与备用 CDN，随后保留 HEVC 候选。所有候选属于一个 `video_urls` 项，现有下载器负责失败回退；`m3u8Slice` 只是片头分片，不作为完整视频。HLS 地址加 `m3u8:` 前缀，由下载器逐项决定本地拼接，无需设置整条作品的强制下载开关。
+
+文章正文按 HTML 结构读取：图片优先使用懒加载原图，同一 `<video>` 下的 `<source>` 合并为候选组，脚本与样式不进入正文。封面仅在正文没有图片和视频时补充。视频封面单独放入 `video_cover_urls`，不混入图集。
+
+当前只处理链接指定的单个播放单元或文章正文，不批量抓取整季、全部分 P，不支持直播、个人空间、独立音频或应用私有协议。页面和接口均属于上游网页协议，登录、地区与内容访问限制仍可能导致解析失败。
 
 ## 六、微博
 
@@ -445,113 +446,7 @@ game_introduction?steam_appid=...
 
 游戏详情响应中的 `about_the_game`、`screenshots`、`image`、`user_num`、`game_award` 等字段直接用于构建文本和媒体候选，不依赖页面 HTML、Nuxt 注入数据或浏览器执行 JavaScript。`user_num.game_data` 提供当前在线、昨日峰值在线、全球销量排行、平均游戏时间等统计；统计值由小黑盒接口实时决定，接口返回 `-` 时按接口原值展示。
 
-## 十一、Steam
-
-支持能力：视频 / 图片 / 文本
-
-Steam 游戏页 URL 的稳定标识是 `/app/{appid}`。末尾的 slug（例如 `/_/`）只是页面路由占位，不参与游戏识别；以下两种 URL 会解析为同一个 appid：
-
-```text
-https://store.steampowered.com/app/3998900/_/
-https://store.steampowered.com/app/3998900
-```
-
-默认调用 Steam 商店的 `api/appdetails` 接口：
-
-```text
-store.steampowered.com/app/{appid}/...
-  ↓
-store.steampowered.com/api/appdetails/?appids={appid}&l=schinese&cc=cn
-  ├─ 标题、简介、发行日期、开发商、发行商、类型和价格
-  ├─ screenshots / header_image 图片
-  └─ movies HLS、简介内嵌视频和封面
-```
-
-开启 `steam.use_xiaoheihe` 后，Steam 解析器会把相同 appid 转交给小黑盒完整游戏接口；结果仍保留原始 Steam 链接，因此可以获得小黑盒评分、在线人数、峰值、销量排行和平均游戏时间等额外统计。该选项不请求 Steam HTML 页面。
-
-Steam 代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情接口，`image` 控制截图/封面下载，`video` 控制预告片下载。
-
-每个 Steam 预告片保留一个候选组，优先使用 `m3u8:` HLS 地址，失败时按 MP4/WebM 候选降级；解析结果会标记 `video_force_download`，因此预告片必须进入本地缓存后发送。截图、封面和预告片继续携带 Steam 商店页 Referer。
-
-## 十二、Twitter/X
-
-支持能力：视频 / 图片 / 文本
-
-稳定入口是 tweet ID，只处理包含 `/status/{tweet_id}` 的链接。
-
-```text
-twitter.com / x.com
-  ↓
-提取 tweet_id
-  ↓
-优先请求 FxTwitter
-  ├─ 成功 -> 使用公开聚合结构
-  ├─ 目标不可用 -> 不回退
-  └─ 服务不可用 -> 回退 Guest GraphQL
-```
-
-FxTwitter 能直接给推文、作者、引用推文和媒体结构，是优先路径。回退条件要收紧：FxTwitter 明确返回目标不可用时，通常说明内容本身不可访问，不应该再用官方接口绕；只有网络错误、超时或服务端错误才进入 Guest GraphQL。
-
-Guest GraphQL 链路：
-
-```text
-guest/activate.json
-  ↓
-TweetResultByRestId
-  ↓
-递归遍历响应树
-  ↓
-寻找匹配 tweet 节点
-```
-
-Twitter 响应嵌套很深，不能假设固定路径永远在。递归找带有 tweet legacy 信息的节点。正文优先取长文结构，普通文本看 `full_text`，按显示范围裁掉回复前缀。
-
-媒体提取：
-
-- 图片取原图地址。
-- 视频和动图从 variants 中选质量较高的 MP4。
-- 引用推文作为正文补充，不丢弃。
-
-一条推文没有图片和视频但有正文，仍然是可解析内容。
-
-## 十三、Pixiv
-
-支持能力：图片 / 文本
-
-稳定入口是作品 ID。支持 `artworks/{id}`、`i/{id}` 以及带 `/en/` 前缀的链接；提链时保留原始匹配文本，按作品 ID 去重，避免规范化链接后无法在原消息中定位。
-
-```text
-pixiv.net/artworks/{illust_id} / pixiv.net/i/{illust_id}
-  ↓
-提取 illust_id
-  ↓
-/ajax/illust/{illust_id}
-  └─ 标题、作者、标签、访问限制、AI 类型
-  ↓
-/ajax/illust/{illust_id}/pages?lang=zh
-  └─ 每页 original / regular / small 图片地址
-```
-
-元信息接口的 `body` 提供 `illustTitle`、`userName`、`userId`、`tags`、`xRestrict`、`aiType` 和 `sl`。标签最多取前 20 个用于文本描述；`xRestrict` 映射为 R-18 或 R-18G，`aiType=2` 标记为 AI 生成。
-
-分页接口按作品页返回图片 URL。每一页必须保持为一个独立候选组：
-
-```text
-image_urls = [
-  [original_page_0, regular_or_small_page_0],
-  [original_page_1, regular_or_small_page_1],
-]
-```
-
-下载管理器按组内顺序尝试，原图失败后降级较低分辨率，不同页面不能合并成一个候选组。
-
-请求头需要桌面 User-Agent、Accept-Language 和指向当前作品页的 Referer。公开作品可不带 Cookie；登录或年龄限制作品需要配置包含 `PHPSESSID` 的完整 Cookie。API 返回 HTML 时要先识别 Cloudflare 防护页，再处理 HTTP 状态和 JSON，避免把拦截页面误报为普通 JSON 错误。
-
-代理开关同时覆盖 Web Ajax API 和 `i.pximg.net` 图片下载。解析结果写入 `use_image_proxy` 与 `proxy_url`，图片下载继续携带作品页 Referer。图片只能缓存后发送，缓存目录不可用时标记为 `skip`。
-
-单个作品依次请求元信息和分页接口；多个作品并发解析时由 `Config.PARSER_MAX_CONCURRENT` 限制，避免大量链接形成无界请求突发。
-
-## 十四、雪球
+## 十一、雪球
 
 支持能力：视频 / 图片 / 文本
 
@@ -599,34 +494,7 @@ api.xueqiu.com/statuses/show.json?id={status_id}
 
 图文路径已按普通帖、长文、多图长文、转发帖和表情帖实测通过；视频路径按上述字段防御性实现，暂未取到公开视频帖样本验证。
 
-## 十五、YouTube
-
-支持能力：视频 / 文本
-
-当前支持常见的单视频链接：`youtube.com/watch?v=...`、`youtube.com/shorts/...`、`youtu.be/...`、`youtube.com/embed/...`、`youtube-nocookie.com/embed/...`、旧式 `youtube.com/v/...` / `youtube.com/e/...`，以及可解包到上述链接的 `attribution_link` 分享跳转。直播、`clip`、播放列表、频道、私有、年龄限制、地区限制或触发机器人校验的内容不保证可解析。
-
-YouTube 页面本身经常只返回没有媒体 URL 的自适应格式，因此解析器分两步取数：先读取页面中的 `ytInitialPlayerResponse`、`INNERTUBE_API_KEY` 和访客信息，再调用 YouTube 内置 Android 播放接口获取带签名的格式 URL。播放器客户端版本目前固定为 `20.10.38`，该接口属于未公开协议，版本或返回结构变化时可能需要调整。
-
-```text
-watch / shorts / youtu.be / embed / nocookie embed / v / attribution_link
-  ↓
-规范为 youtube.com/watch?v={video_id}
-  ↓
-读取页面启动配置和初始播放信息
-  ↓
-/youtubei/v1/player?key={INNERTUBE_API_KEY}
-  └─ Android 客户端播放响应
-       ├─ muxed MP4 -> 直接视频候选
-       └─ 视频 + 音频 -> dash:video_url||audio_url
-```
-
-每条媒体只保留一个候选组。若播放器同时返回视频和音频自适应流，最高兼容性的视频和音频会组成 `dash:` 候选，后面追加 muxed MP4 作为回退。缓存目录可用时下载器优先走 DASH 并调用现有 ffmpeg 合并；缓存目录不可用时会剔除 DASH 候选，改用普通 muxed MP4 直发。
-
-YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长期缓存复用。解析与下载应保持相同的代理出口，部分消息协议端无法携带请求头或代理时，建议配置缓存目录后发送本地文件。`proxy.youtube` 同时控制页面、播放器接口和视频下载请求。
-
-当前实现不解析 `signatureCipher`、播放器 JavaScript 中的 `s`/`n` 变换或 SABR 分段协议；遇到这些返回形态、登录要求、DRM 或机器人挑战时会返回可见的解析失败信息。
-
-## 十六、微信
+## 十二、微信
 
 支持能力：公众号图片 / 公众号正文 / 视频号视频 / 视频号文本
 
@@ -698,55 +566,187 @@ data.feedInfo + data.authorInfo
 
 公众号图文已通过两篇真实文章匿名验证，并抽样确认图片可访问。视频号已覆盖两步请求、结果字段和异常分支的模拟验证，尚未使用有效元宝 Cookie 验证真实视频下载全流程。
 
-## 十七、NGA
+## 十三、知乎
+
+支持指定回答和专栏文章：回答使用 `https://api.zhihu.com/v4/answers/{answer_id}?include=content,author,question`，文章使用 `https://zhuanlan.zhihu.com/api/articles/{article_id}?ws_qiangzhisafe=0`。纯问题页不解析，避免在问题下误选回答。
+
+回答请求不携带登录 Cookie，只校验返回的回答 ID、问题 ID 和非空正文。回答正文按 HTML 结构提取文本，`br` 与块级标签转换为换行，正文图片优先使用懒加载原图属性，并保留知乎图片下载所需的 User-Agent 和 Referer。
+
+文章请求先访问 `https://www.zhihu.com/explore` 获取匿名访客 `d_c0`，再按当前接口路径、`d_c0` 和 `x-zse-93` 生成 `x-zse-96` 签名。签名算法参考 [RSSHub](https://github.com/DIYgod/RSSHub) 的知乎专栏实现。访客 Cookie 只保存在解析器实例内，短期缓存并使用独立 Cookie 会话，避免把其他平台的登录态带给知乎。文章返回 `content_need_truncated` 或 `force_login_when_click_read_more` 时直接失败，不把登录摘要当作完整正文。
+
+知乎解析器将自身并发限制为最多 2 个请求。文章接口遇到 403 或 429 时会使当前 `d_c0` 缓存失效，并在 1 秒后最多重新取访客值重试一次；匿名接口仍受知乎上游风控和限流影响，不能通过无限重试规避。接口字段、签名规则或匿名访问策略变化时需要重新验证。
+
+## 十四、TikTok
+
+支持能力：视频 / 图片 / 文本
+
+独立解析器模块，取数路线与抖音完全不同。作品页数据主要在 rehydration 脚本里，普通 HTTP 客户端容易拿到防护页或不完整页面。
+
+```text
+tiktok.com / vm.tiktok.com / vt.tiktok.com
+  ↓
+优先用系统 curl 拉取页面
+  ↓
+确认不是防护页
+  ↓
+读取 __UNIVERSAL_DATA_FOR_REHYDRATION__
+  ↓
+失败时读取 SIGI_STATE
+  ↓
+按新旧结构寻找 itemStruct
+```
+
+主路径是 `__UNIVERSAL_DATA_FOR_REHYDRATION__`，新版页面的作品结构在 `webapp.video-detail.itemInfo.itemStruct`。旧页面可能用 `SIGI_STATE`，或者把作品结构散在更深层对象里，需要递归搜索 `itemStruct`、`video`、`imagePost` 等线索。
+
+oEmbed 只适合补充标题、作者等文本，媒体资源以页面脚本中的作品结构为主。
+
+视频和图集区分：
+
+- 视频从 `playAddr`、`downloadAddr`、`PlayAddrStruct`、`bitrateInfo` 找候选。
+- 图集从 `imagePostInfo` 或相近结构收集图片。
+
+结构化脚本全部失败时，最后从 HTML 里直接查找 `playAddr` 兜底。
+
+## 十五、YouTube
+
+支持能力：视频 / 文本
+
+当前支持常见的单视频链接：`youtube.com/watch?v=...`、`youtube.com/shorts/...`、`youtu.be/...`、`youtube.com/embed/...`、`youtube-nocookie.com/embed/...`、旧式 `youtube.com/v/...` / `youtube.com/e/...`，以及可解包到上述链接的 `attribution_link` 分享跳转。直播、`clip`、播放列表、频道、私有、年龄限制、地区限制或触发机器人校验的内容不保证可解析。
+
+YouTube 页面本身经常只返回没有媒体 URL 的自适应格式，因此解析器分两步取数：先读取页面中的 `ytInitialPlayerResponse`、`INNERTUBE_API_KEY` 和访客信息，再调用 YouTube 内置 Android 播放接口获取带签名的格式 URL。播放器客户端版本目前固定为 `20.10.38`，该接口属于未公开协议，版本或返回结构变化时可能需要调整。
+
+```text
+watch / shorts / youtu.be / embed / nocookie embed / v / attribution_link
+  ↓
+规范为 youtube.com/watch?v={video_id}
+  ↓
+读取页面启动配置和初始播放信息
+  ↓
+/youtubei/v1/player?key={INNERTUBE_API_KEY}
+  └─ Android 客户端播放响应
+       ├─ muxed MP4 -> 直接视频候选
+       └─ 视频 + 音频 -> dash:video_url||audio_url
+```
+
+每条媒体只保留一个候选组。若播放器同时返回视频和音频自适应流，最高兼容性的视频和音频会组成 `dash:` 候选，后面追加 muxed MP4 作为回退。缓存目录可用时下载器优先走 DASH 并调用现有 ffmpeg 合并；缓存目录不可用时会剔除 DASH 候选，改用普通 muxed MP4 直发。
+
+YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长期缓存复用。解析与下载应保持相同的代理出口，部分消息协议端无法携带请求头或代理时，建议配置缓存目录后发送本地文件。`proxy.youtube` 同时控制页面、播放器接口和视频下载请求。
+
+当前实现不解析 `signatureCipher`、播放器 JavaScript 中的 `s`/`n` 变换或 SABR 分段协议；遇到这些返回形态、登录要求、DRM 或机器人挑战时会返回可见的解析失败信息。
+
+## 十六、Steam
+
+支持能力：视频 / 图片 / 文本
+
+Steam 游戏页 URL 的稳定标识是 `/app/{appid}`。末尾的 slug（例如 `/_/`）只是页面路由占位，不参与游戏识别；以下两种 URL 会解析为同一个 appid：
+
+```text
+https://store.steampowered.com/app/3998900/_/
+https://store.steampowered.com/app/3998900
+```
+
+默认调用 Steam 商店的 `api/appdetails` 接口：
+
+```text
+store.steampowered.com/app/{appid}/...
+  ↓
+store.steampowered.com/api/appdetails/?appids={appid}&l=schinese&cc=cn
+  ├─ 标题、简介、发行日期、开发商、发行商、类型和价格
+  ├─ screenshots / header_image 图片
+  └─ movies HLS、简介内嵌视频和封面
+```
+
+开启 `steam.use_xiaoheihe` 后，Steam 解析器会把相同 appid 转交给小黑盒完整游戏接口；结果仍保留原始 Steam 链接，因此可以获得小黑盒评分、在线人数、峰值、销量排行和平均游戏时间等额外统计。该选项不请求 Steam HTML 页面。
+
+Steam 代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情接口，`image` 控制截图/封面下载，`video` 控制预告片下载。
+
+每个 Steam 预告片保留一个候选组，优先使用 `m3u8:` HLS 地址，失败时按 MP4/WebM 候选降级；解析结果会标记 `video_force_download`，因此预告片必须进入本地缓存后发送。截图、封面和预告片继续携带 Steam 商店页 Referer。
+
+## 十七、Twitter/X
+
+支持能力：视频 / 图片 / 文本
+
+稳定入口是 tweet ID，只处理包含 `/status/{tweet_id}` 的链接。
+
+```text
+twitter.com / x.com
+  ↓
+提取 tweet_id
+  ↓
+优先请求 FxTwitter
+  ├─ 成功 -> 使用公开聚合结构
+  ├─ 目标不可用 -> 不回退
+  └─ 服务不可用 -> 回退 Guest GraphQL
+```
+
+FxTwitter 能直接给推文、作者、引用推文和媒体结构，是优先路径。回退条件要收紧：FxTwitter 明确返回目标不可用时，通常说明内容本身不可访问，不应该再用官方接口绕；只有网络错误、超时或服务端错误才进入 Guest GraphQL。
+
+Guest GraphQL 链路：
+
+```text
+guest/activate.json
+  ↓
+TweetResultByRestId
+  ↓
+递归遍历响应树
+  ↓
+寻找匹配 tweet 节点
+```
+
+Twitter 响应嵌套很深，不能假设固定路径永远在。递归找带有 tweet legacy 信息的节点。正文优先取长文结构，普通文本看 `full_text`，按显示范围裁掉回复前缀。
+
+媒体提取：
+
+- 图片取原图地址。
+- 视频和动图从 variants 中选质量较高的 MP4。
+- 引用推文作为正文补充，不丢弃。
+
+一条推文没有图片和视频但有正文，仍然是可解析内容。
+
+## 十八、Pixiv
+
+支持能力：图片 / 文本
+
+稳定入口是作品 ID。支持 `artworks/{id}`、`i/{id}` 以及带 `/en/` 前缀的链接；提链时保留原始匹配文本，按作品 ID 去重，避免规范化链接后无法在原消息中定位。
+
+```text
+pixiv.net/artworks/{illust_id} / pixiv.net/i/{illust_id}
+  ↓
+提取 illust_id
+  ↓
+/ajax/illust/{illust_id}
+  └─ 标题、作者、标签、访问限制、AI 类型
+  ↓
+/ajax/illust/{illust_id}/pages?lang=zh
+  └─ 每页 original / regular / small 图片地址
+```
+
+元信息接口的 `body` 提供 `illustTitle`、`userName`、`userId`、`tags`、`xRestrict`、`aiType` 和 `sl`。标签最多取前 20 个用于文本描述；`xRestrict` 映射为 R-18 或 R-18G，`aiType=2` 标记为 AI 生成。
+
+分页接口按作品页返回图片 URL。每一页必须保持为一个独立候选组：
+
+```text
+image_urls = [
+  [original_page_0, regular_or_small_page_0],
+  [original_page_1, regular_or_small_page_1],
+]
+```
+
+下载管理器按组内顺序尝试，原图失败后降级较低分辨率，不同页面不能合并成一个候选组。
+
+请求头需要桌面 User-Agent、Accept-Language 和指向当前作品页的 Referer。公开作品可不带 Cookie；登录或年龄限制作品需要配置包含 `PHPSESSID` 的完整 Cookie。API 返回 HTML 时要先识别 Cloudflare 防护页，再处理 HTTP 状态和 JSON，避免把拦截页面误报为普通 JSON 错误。
+
+代理开关同时覆盖 Web Ajax API 和 `i.pximg.net` 图片下载。解析结果写入 `use_image_proxy` 与 `proxy_url`，图片下载继续携带作品页 Referer。图片只能缓存后发送，缓存目录不可用时标记为 `skip`。
+
+单个作品依次请求元信息和分页接口；多个作品并发解析时由 `Config.PARSER_MAX_CONCURRENT` 限制，避免大量链接形成无界请求突发。
+
+## 十九、NGA
 
 当前未提供解析器。
 
 NGA 已关闭访客浏览：`read.php?tid=...` 直接返回 `ERROR:1 未登录`，站点根路径返回 `ERROR:15 访客不能直接访问`。挑战页里的 `guestJs` Cookie 每次请求都会重新生成，回填后仍被拒绝；`app_api.php` 的 `post/list` 返回 `code:12 未登录`，随响应下发的 `guest_token` 无法换取内容，带 `access_token` 时改报 `code:5 签名错误`。`__output=8`、`__output=11`、`lite=js` 等输出形式只是换了错误载体，同样是 403。
 
 也就是说取数必须依赖 `ngaPassportUid` + `ngaPassportCid` 登录 Cookie。若之后决定支持，需要先引入用户提供 Cookie 的配置项，并注意页面是 GBK/GB18030 编码。
-
-## 十八、AcFun
-
-支持能力：视频 / 图片 / 文本。
-
-支持 `acfun.cn`、`www.acfun.cn`、`m.acfun.cn` 上的视频 `/v/ac{ID}`、多 P `/v/ac{ID}_{P}`、文章/动态 `/a/ac{ID}`、番剧 `/bangumi/aa{ID}` 和指定集 `/bangumi/aa{ID}_36188_{itemId}`，以及移动分享 `/v/?ac={ID}`（含分 P）。消息中的无协议链接和中文标点相邻链接也会提取。所有入口规范化为 HTTPS 桌面链接，移除追踪参数，保留决定内容的分 P、分集信息；同一作品的不同分 P 和同一番剧的不同集分别解析。
-
-移动分享入口可能把多 P 链接跳回第一 P，因此在请求前主动规范化。视频和文章共用 ac 编号，`/v/` 分享入口可能返回文章，按实际页面类型处理。番剧路径中间的 `36188` 为官方脚本使用的固定路由段，真正决定集数的是末尾 `itemId`。
-
-番剧的 `?ac={序号}` 选择花絮，必须保留。按番剧状态的 `sidelights` 清单查找花絮，再读取对应投稿页面，并交叉校验清单与投稿的视频 ID；返回投稿规范链接。无效索引或身份不符直接报错，不能误发同页正片。
-
-取数链路：
-
-```text
-规范链接
-  ↓
-window.videoInfo / window.articleInfo / window.bangumiData
-  ↓
-核对作品 ID、当前视频 ID 和指定分 P / itemId
-  ├─ 视频 / 番剧 → currentVideoInfo.ksPlayJson / ksPlayJsonHevc
-  └─ 文章 / 动态 → parts[].content
-```
-
-页面请求失败或缺少可解码状态时，没有选集信息的 ac 链接可以尝试 `GET /rest/pc-direct/article/info?articleId=...`。接口必须同时通过业务 `result=0` 和返回 `articleId` 校验。已解码但身份不符的页面直接报错，不通过回退掩盖错误；不存在的分 P、集数即使返回 HTTP 200，也不能取第一条视频代替。
-
-页面身份有效但播放数据缺失时，调用 `GET /rest/pc-direct/play/playInfo/ksPlayJson`。携带当前 `videoId`、页面 `mkey`、作品 `resourceId` 和 `resourceType`（投稿为 2、番剧为 1），由接口校验视频归属。只补充播放数据，不覆盖页面原有的毫秒时长。
-
-同一视频的流按 H.264 优先、清晰度降序排列，每档保留主地址与备用 CDN，随后保留 HEVC 候选。所有候选属于一个 `video_urls` 项，现有下载器负责失败回退；`m3u8Slice` 只是片头分片，不作为完整视频。HLS 地址加 `m3u8:` 前缀，由下载器逐项决定本地拼接，无需设置整条作品的强制下载开关。
-
-文章正文按 HTML 结构读取：图片优先使用懒加载原图，同一 `<video>` 下的 `<source>` 合并为候选组，脚本与样式不进入正文。封面仅在正文没有图片和视频时补充。视频封面单独放入 `video_cover_urls`，不混入图集。
-
-当前只处理链接指定的单个播放单元或文章正文，不批量抓取整季、全部分 P，不支持直播、个人空间、独立音频或应用私有协议。页面和接口均属于上游网页协议，登录、地区与内容访问限制仍可能导致解析失败。
-
-## 十九、知乎
-
-支持指定回答和专栏文章：回答使用 `https://api.zhihu.com/v4/answers/{answer_id}?include=content,author,question`，文章使用 `https://zhuanlan.zhihu.com/api/articles/{article_id}?ws_qiangzhisafe=0`。纯问题页不解析，避免在问题下误选回答。
-
-回答请求不携带登录 Cookie，只校验返回的回答 ID、问题 ID 和非空正文。回答正文按 HTML 结构提取文本，`br` 与块级标签转换为换行，正文图片优先使用懒加载原图属性，并保留知乎图片下载所需的 User-Agent 和 Referer。
-
-文章请求先访问 `https://www.zhihu.com/explore` 获取匿名访客 `d_c0`，再按当前接口路径、`d_c0` 和 `x-zse-93` 生成 `x-zse-96` 签名。访客 Cookie 只保存在解析器实例内，短期缓存并使用独立 Cookie 会话，避免把其他平台的登录态带给知乎。文章返回 `content_need_truncated` 或 `force_login_when_click_read_more` 时直接失败，不把登录摘要当作完整正文。
-
-知乎解析器将自身并发限制为最多 2 个请求。文章接口遇到 403 或 429 时会使当前 `d_c0` 缓存失效，并在 1 秒后最多重新取访客值重试一次；匿名接口仍受知乎上游风控和限流影响，不能通过无限重试规避。接口字段、签名规则或匿名访问策略变化时需要重新验证。
 
 ## 二十、维护原则
 
