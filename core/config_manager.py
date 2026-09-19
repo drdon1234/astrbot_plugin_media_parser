@@ -24,6 +24,7 @@ from .parser.platform import (
     PixivParser,
     XueqiuParser,
     YoutubeParser,
+    AcfunParser,
     WechatParser,
 )
 from .translation.provider_defs import (
@@ -58,6 +59,7 @@ PARSER_OUTPUT_KEYS = (
     "pixiv",
     "xueqiu",
     "youtube",
+    "acfun",
     "wechat",
 )
 
@@ -597,6 +599,7 @@ class ConfigManager:
         self._enable_pixiv = self._parser_enabled("pixiv")
         self._enable_xueqiu = self._parser_enabled("xueqiu")
         self._enable_youtube = self._parser_enabled("youtube")
+        self._enable_acfun = self._parser_enabled("acfun")
         self._enable_wechat = self._parser_enabled("wechat")
 
         # --- message ---
@@ -1230,6 +1233,8 @@ class ConfigManager:
                     proxy_url=proxy_addr,
                 )
             )
+        if self._enable_acfun:
+            parsers.append(AcfunParser())
         if self._enable_wechat:
             parsers.append(
                 WechatParser(

@@ -24,6 +24,7 @@
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
 - 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
 - YouTube：支持 视频 / 文本；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
+- AcFun：支持 视频 / 图片 / 文本；覆盖视频、动态和番剧页面，从服务端页面状态提取 HLS 与图片候选。
 - 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
 
 ### 1.2 核心模块结构
@@ -69,6 +70,7 @@ astrbot_plugin_media_parser/
     │       ├── pixiv.py             # Pixiv 插画/漫画解析器
     │       ├── xueqiu.py            # 雪球帖子/长文解析器
     │       ├── youtube.py           # YouTube 视频解析器
+    │       ├── acfun.py             # AcFun 视频/动态/番剧解析器
     │       └── wechat/              # 微信子包
     │           ├── parser.py       # 公众号与视频号路由、HTTP 请求
     │           └── article.py      # 公众号文章 HTML 图文提取
@@ -225,6 +227,14 @@ cache/runtime_manager/bilibili/cookie.json
 - 平台辅助模块：只被 1 个平台解析器引用的传输层、签名等模块，放在该平台的子包内，模块名只描述职责。
 - 不新建跨平台共享位置：不存在被 2 个及以上平台解析器共同继承的类或共同导入的模块（`base.py` 与 `utils.py` 除外）。2 个及以上平台需要等价辅助逻辑时各自持有一份实现——抖音与 TikTok 的 URL / 时间戳 / JSON 辅助方法即按此规则各存一份，代价是两份实现可能随时间产生差异，收益是单平台调整不会波及另一平台。
 - 新增平台需要修改 3 处登记点：`platform/__init__.py` 的 `__all__`、`config_manager.py` 的 `PARSER_OUTPUT_KEYS` 与 `create_parsers()`、`_conf_schema.json` 的平台配置项。
+
+#### AcFun 解析
+
+`acfun.py` 将 `/v/ac{ID}`、多 P、`/a/ac{ID}`、`/bangumi/aa{ID}` 指定集和移动分享入口统一为可信的桌面链接。页面状态分别读取 `window.videoInfo`、`window.articleInfo` 和 `window.bangumiData`，并校验作品 ID、当前视频 ID、分 P、番剧 `itemId` 及花絮清单；页面返回 HTTP 200 但没有当前播放单元时，不回退到第一 P 或第一集。番剧 `?ac={序号}` 花絮会先按 `sidelights` 清单确认对应投稿，再交叉校验投稿页的视频 ID。
+
+视频播放数据优先使用页面内嵌的 `ksPlayJson` / `ksPlayJsonHevc`；缺失时调用 AcFun 播放接口，携带已核对的 `videoId`、资源 ID 和资源类型。解析器保留 H.264 优先的清晰度排序、备用 CDN 与 HEVC 候选，统一交给下载器按媒体项回退。文章正文使用标准库 `HTMLParser` 提取图片、正文视频和文本，脚本、样式、音频源和占位图片不会进入媒体结果。
+
+AcFun 不设置全局强制下载标记；HLS 候选通过 `m3u8:` 前缀交给现有 M3U8 下载器，缓存目录不可用时按统一下载策略跳过或回退。解析器不批量抓取整季或所有分 P，也不处理直播、独立音频和应用私有协议。
 
 #### 微信解析
 

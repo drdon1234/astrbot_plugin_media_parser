@@ -55,6 +55,7 @@ PARSER_DISCOVERY_ORDER = (
     "pixiv",
     "xueqiu",
     "youtube",
+    "acfun",
     "wechat",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {

@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.4.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.5.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -34,6 +34,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **Pixiv** | 图片 / 文本 | 支持插画、漫画多页解析 |
 | **雪球** | 视频 / 图片 / 文本 | 支持普通帖、长文和转发帖；HLS 视频需要可用缓存目录 |
 | **YouTube** | 视频 / 文本 | 支持 watch、Shorts、短链接、嵌入、旧式 v/e 链接和分享跳转；直链受地区、登录和反爬策略影响 |
+| **AcFun** | 视频 / 图片 / 文本 | 支持横竖视频、多 P 指定分段、文章/动态及番剧分集和花絮，兼容移动分享链接；HLS 视频需要可用缓存目录，不支持直播 |
 | **微信** | 视频 / 图片 / 文本 | 公众号文章可匿名解析正文与图片；视频号短链需要腾讯元宝 Cookie，视频需要可用缓存目录 |
 
 ---
@@ -80,6 +81,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 - B站 Cookie 高画质（DASH 音视频流需本地合并）
 - 微博视频、小黑盒视频/BBS 媒体、Twitter/X 视频、Steam 预告片
 - 雪球 HLS 视频（分片需本地拼接后发送）
+- AcFun HLS 视频（分片需本地拼接后发送）
 - 微信视频号视频（下载后发送）
 
 **建议缓存目录可用的场景**：
@@ -114,6 +116,14 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 3. Cookie 失效时自动向管理员发送确认请求，扫码后 Cookie 自动更新
 
 也可以在管理员私聊发送 `主动更新 Cookie 指令`（默认 `B站更新Cookie`）立即发起更新。
+
+---
+
+## 🎞️ AcFun 解析
+
+支持 AcFun 视频、动态和番剧链接，包括横竖视频、多 P（`/v/ac{ID}_{P}`）、番剧指定集（`/bangumi/aa{ID}_36188_{itemId}`）以及移动分享链接。番剧页面的花絮选择参数也会按页面清单校验后解析为对应投稿，不会误发正片。
+
+视频会保留多个清晰度和备用 CDN 地址，HLS 媒体需要可用缓存目录进行分片拼接；文章正文会提取文字、图片和正文视频。当前不支持直播、整季批量抓取和独立音频。输出模式可在 `解析器与输出模式 → AcFun` 中单独调整。
 
 ---
 
@@ -157,6 +167,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境
 - **Pixiv**：受地区限制时需同时代理解析请求和图片下载
 - **YouTube**：使用 YouTube 内置播放器接口提取短时效直链；支持常见单视频分享链接和隐私增强嵌入，部分网络环境需要开启 `proxy.youtube`，高画质自适应流需要可用缓存目录和 ffmpeg，私有、年龄限制、直播或机器人校验视频可能无法解析
+- **AcFun**：页面状态或公开播放接口变化、内容访问限制和 CDN 鉴权可能导致解析失败；HLS 视频需要可用缓存目录，直播链接会自动跳过
 - **图片格式**：非 JPG/PNG 图片会尝试用 ffmpeg 转换；缺少 ffmpeg 时保留原格式
 - 插件会跳过机器人自身消息以防重复解析；直播链接会自动跳过
 
