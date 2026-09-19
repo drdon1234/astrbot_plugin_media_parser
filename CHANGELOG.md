@@ -1,13 +1,5 @@
 # Changelog
 
-## [1.3.1] - 2026-09-19
-
-### YouTube 链接兼容性修复
-
-- 修复文本提取遗漏裸 `youtube.com` 域名的问题，并拒绝 `youtu.be` 多段路径被误识别为视频 ID。
-- 支持 `youtube-nocookie.com/embed`、旧式 `youtube.com/v` 与 `youtube.com/e` 嵌入链接，以及可解包的 `attribution_link` 分享跳转。
-- 同步 README 与解析方法备忘中的 YouTube 链接范围和限制说明，不新增 Python 第三方依赖。
-
 ## [1.3.0] - 2026-09-19
 
 ### YouTube 视频解析
@@ -15,6 +7,8 @@
 - 新增 YouTube 解析器，支持 `watch`、`shorts`、`youtu.be` 和 `embed` 链接。
 - 仅复用现有 `aiohttp` 与下载器，通过 YouTube 内置播放器接口获取带签名的短时效直链；不新增 Python 第三方依赖。
 - 普通 muxed MP4 可直接发送；自适应音视频流复用现有 DASH 下载和 ffmpeg 合并，解析失败时明确提示地区、登录或反爬限制。
+- 修复文本提取遗漏裸 `youtube.com` 域名的问题，并拒绝 `youtu.be` 多段路径被误识别为视频 ID。
+- 支持 `youtube-nocookie.com/embed`、旧式 `youtube.com/v` 与 `youtube.com/e` 嵌入链接，以及可解包的 `attribution_link` 分享跳转。
 
 ### 文档与配置
 
