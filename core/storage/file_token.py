@@ -67,7 +67,7 @@ async def register_files_with_token_service(
 
     local_modes = list(metadata.get('video_modes') or []) + list(
         metadata.get('image_modes') or []
-    )
+    ) + list(metadata.get('audio_modes') or [])
     if not any(
         fp and os.path.exists(fp) and idx < len(local_modes)
         and local_modes[idx] == "local"

@@ -1,11 +1,12 @@
 """消息节点构建器，将解析结果转换为可发送消息节点。"""
 
 import os
+import re
 from typing import Dict, List, Optional, Union
 
-from ..logger import logger
+from astrbot.api.message_components import File, Image, Plain, Record, Video
 
-from astrbot.api.message_components import Plain, Image, Video
+from ..logger import logger
 
 from ..downloader.utils import strip_media_prefixes
 from ..message_text import split_message_text
@@ -25,7 +26,7 @@ def _split_plain_node(node: Optional[Plain]) -> List[Plain]:
 
 
 def collect_text_metadata(
-    all_link_nodes: List[List[Union[Plain, Image, Video]]],
+    all_link_nodes: List[List[Union[Plain, Image, Video, Record, File]]],
     translation_nodes: Optional[List[List[Plain]]] = None,
 ) -> str:
     """按当前发送顺序收集所有文本节点内容。
@@ -60,7 +61,7 @@ def collect_text_metadata(
 
 
 def strip_text_metadata_nodes(
-    all_link_nodes: List[List[Union[Plain, Image, Video]]],
+    all_link_nodes: List[List[Union[Plain, Image, Video, Record, File]]],
     translation_nodes: Optional[List[List[Plain]]] = None,
 ) -> None:
     """从节点列表移除已渲染到图片中的文本节点。"""
@@ -83,19 +84,24 @@ def _append_media_skip_summary(
     """将媒体跳过统计和逐项原因追加到文本节点。"""
     video_reasons = metadata.get("video_skip_reasons", []) or []
     image_reasons = metadata.get("image_skip_reasons", []) or []
+    audio_reasons = metadata.get("audio_skip_reasons", []) or []
     image_warnings = metadata.get("image_warnings", []) or []
     video_count = metadata.get("video_count", len(metadata.get("video_urls", [])))
     image_count = metadata.get("image_count", len(metadata.get("image_urls", [])))
+    audio_count = metadata.get("audio_count", len(metadata.get("audio_urls", [])))
     skipped_videos = [
         (idx + 1, reason) for idx, reason in enumerate(video_reasons) if reason
     ]
     skipped_images = [
         (idx + 1, reason) for idx, reason in enumerate(image_reasons) if reason
     ]
+    skipped_audios = [
+        (idx + 1, reason) for idx, reason in enumerate(audio_reasons) if reason
+    ]
     warnings = [
         (idx + 1, warning) for idx, warning in enumerate(image_warnings) if warning
     ]
-    if not skipped_videos and not skipped_images and not warnings:
+    if not skipped_videos and not skipped_images and not skipped_audios and not warnings:
         return
 
     summary_parts = []
@@ -103,6 +109,8 @@ def _append_media_skip_summary(
         summary_parts.append(f"视频 {len(skipped_videos)}/{video_count}")
     if image_count:
         summary_parts.append(f"图片 {len(skipped_images)}/{image_count}")
+    if audio_count:
+        summary_parts.append(f"音频 {len(skipped_audios)}/{audio_count}")
     if summary_parts:
         text_parts.append(f"媒体跳过：{', '.join(summary_parts)}")
 
@@ -110,6 +118,8 @@ def _append_media_skip_summary(
         text_parts.append(f"  视频[{idx}]：{reason}")
     for idx, reason in skipped_images[:5]:
         text_parts.append(f"  图片[{idx}]：{reason}")
+    for idx, reason in skipped_audios[:5]:
+        text_parts.append(f"  音频[{idx}]：{reason}")
     for idx, warning in warnings[:5]:
         text_parts.append(f"图片处理警告[{idx}]：{warning}")
 
@@ -118,9 +128,9 @@ def _mark_media_failure(
     metadata: MediaMetadata, kind: str, index: int, reason: str
 ) -> None:
     """节点构建失败时回填状态，并重新派生媒体汇总字段。"""
-    mode_key = "video_modes" if kind == "video" else "image_modes"
-    url_key = "video_urls" if kind == "video" else "image_urls"
-    reason_key = "video_skip_reasons" if kind == "video" else "image_skip_reasons"
+    mode_key = f"{kind}_modes"
+    url_key = f"{kind}_urls"
+    reason_key = f"{kind}_skip_reasons"
 
     modes = metadata.get(mode_key)
     if not isinstance(modes, list):
@@ -217,6 +227,7 @@ def build_text_node(
     has_valid_media = metadata.get("has_valid_media")
     video_urls = metadata.get("video_urls", [])
     image_urls = metadata.get("image_urls", [])
+    audio_urls = metadata.get("audio_urls", [])
 
     has_text_metadata = bool(
         (text_metadata_field_enabled(metadata, "title") and metadata.get("title"))
@@ -234,7 +245,7 @@ def build_text_node(
     timelength_ms = metadata.get("timelength_ms")
     is_preview_only = metadata.get("is_preview_only")
     if access_status and access_status != "full" and access_message:
-        text_parts.append(f"时长：{access_message}")
+        text_parts.append(f"访问提示：{access_message}")
     elif is_preview_only and available_length_ms:
         try:
             available_seconds = max(0, int(available_length_ms) // 1000)
@@ -262,7 +273,7 @@ def build_text_node(
 
     if (
         has_valid_media is False
-        and (video_urls or image_urls)
+        and (video_urls or image_urls or audio_urls)
         and has_text_metadata
         and not metadata.get("exceeds_max_size")
     ):
@@ -282,6 +293,8 @@ def build_text_node(
                 text_parts.append(
                     f"解析失败：视频大小超过限制（{actual_video_size:.1f}MB）"
                 )
+        elif any(metadata.get("audio_size_limit_flags") or []):
+            text_parts.append("解析失败：音频大小超过限制")
         elif max_video_size_mb > 0:
             text_parts.append(
                 f"解析失败：视频大小超过管理员设定的限制（{max_video_size_mb:.1f}MB）"
@@ -382,16 +395,18 @@ def build_media_nodes(
     metadata: MediaMetadata,
     use_local_files: bool = False,
     enable_rich_media: bool = True,
-) -> List[Union[Image, Video]]:
+    audio_send_mode: str = "语音",
+) -> List[Union[Image, Video, Record, File]]:
     """构建媒体节点
 
     Args:
         metadata: 元数据字典
         use_local_files: 是否使用本地文件
         enable_rich_media: 是否构建富媒体节点
+        audio_send_mode: 音频以语音或原始文件发送。
 
     Returns:
-        媒体节点列表（Image或Video节点）
+        图片、视频、语音或音频文件节点列表。
     """
     nodes = []
     url = metadata.get("url", "")
@@ -419,9 +434,11 @@ def build_media_nodes(
 
     video_urls = metadata.get("video_urls", [])
     image_urls = metadata.get("image_urls", [])
+    audio_urls = metadata.get("audio_urls", [])
     file_paths = metadata.get("file_paths", [])
     video_modes = metadata.get("video_modes") or []
     image_modes = metadata.get("image_modes") or []
+    audio_modes = metadata.get("audio_modes") or []
     use_fts = metadata.get("use_file_token_service", False)
     file_token_urls = metadata.get("file_token_urls", [])
 
@@ -432,7 +449,7 @@ def build_media_nodes(
         f"文件Token服务: {use_fts}"
     )
 
-    if not video_urls and not image_urls and not file_paths:
+    if not video_urls and not image_urls and not audio_urls and not file_paths:
         logger.debug(f"无媒体内容，跳过节点构建: {url}")
         return nodes
 
@@ -553,6 +570,33 @@ def build_media_nodes(
 
         file_idx += 1
 
+    for audio_idx, _ in enumerate(audio_urls):
+        position = len(video_urls) + len(image_urls) + audio_idx
+        mode = audio_modes[audio_idx] if audio_idx < len(audio_modes) else "skip"
+        if mode != "local":
+            continue
+        path = file_paths[position] if position < len(file_paths) else None
+        if not path or not os.path.isfile(path):
+            _mark_media_failure(metadata, "audio", audio_idx, "本地音频文件不存在或不可访问")
+            continue
+        token_url = (
+            file_token_urls[position]
+            if use_fts and position < len(file_token_urls)
+            else None
+        )
+        try:
+            if audio_send_mode == "文件":
+                title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(metadata.get("title") or "音频"))
+                name = (title.strip(" .")[:120] or "音频") + os.path.splitext(path)[1]
+                nodes.append(File(name=name, file=path, url=token_url or ""))
+            elif token_url:
+                nodes.append(Record.fromURL(token_url))
+            else:
+                nodes.append(Record.fromFileSystem(path))
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning(f"构建音频节点失败: {exc}")
+            _mark_media_failure(metadata, "audio", audio_idx, f"构建音频节点失败: {exc}")
+
     logger.debug(f"构建媒体节点完成: {url}, 共 {len(nodes)} 个节点")
     return nodes
 
@@ -563,8 +607,9 @@ def _build_node_parts_for_link(
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
     enable_rich_media: bool = True,
-) -> tuple[List[Union[Plain, Image, Video]], Optional[Plain]]:
-    nodes: List[Union[Plain, Image, Video]] = []
+    audio_send_mode: str = "语音",
+) -> tuple[List[Union[Plain, Image, Video, Record, File]], Optional[Plain]]:
+    nodes: List[Union[Plain, Image, Video, Record, File]] = []
     effective_text_metadata = _resolve_output_flag(
         metadata,
         "_enable_text_metadata",
@@ -580,6 +625,7 @@ def _build_node_parts_for_link(
         metadata,
         use_local_files,
         effective_rich_media,
+        audio_send_mode,
     )
     text_node = build_text_node(
         metadata,
@@ -600,7 +646,7 @@ def _build_node_parts_for_link(
     return nodes, metadata_text_node
 
 
-def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
+def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video, Record, File]]) -> bool:
     """判断节点列表是否是纯图片图集
 
     Args:
@@ -612,7 +658,7 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
     has_video = False
     has_image = False
     for node in nodes:
-        if isinstance(node, Video):
+        if isinstance(node, (Video, Record, File)):
             has_video = True
             break
         elif isinstance(node, Image):
@@ -621,7 +667,7 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video]]) -> bool:
 
 
 def summarize_node_counts(
-    all_link_nodes: List[List[Union[Plain, Image, Video]]],
+    all_link_nodes: List[List[Union[Plain, Image, Video, Record, File]]],
 ) -> Dict[str, int]:
     """统计最终可发送节点数量，用于条件聚合判定。"""
     image_count = 0
@@ -630,7 +676,7 @@ def summarize_node_counts(
 
     for link_nodes in all_link_nodes:
         for node in link_nodes:
-            if node is None:
+            if node is None or isinstance(node, (Record, File)):
                 continue
             node_count += 1
             if isinstance(node, Image):
@@ -651,6 +697,7 @@ def build_all_nodes(
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
     enable_rich_media: bool = True,
+    audio_send_mode: str = "语音",
 ) -> BuildAllNodesResult:
     """构建所有链接的消息节点。
 
@@ -659,7 +706,8 @@ def build_all_nodes(
         large_video_threshold_mb: 大视频阈值(MB)
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示错误信息
         enable_text_metadata: 是否发送图文文本消息
-        enable_rich_media: 是否发送图片/视频
+        enable_rich_media: 是否发送图片、视频和音频。
+        audio_send_mode: 音频以语音或原始文件发送。
 
     Returns:
         BuildAllNodesResult 命名元组
@@ -685,6 +733,7 @@ def build_all_nodes(
             max_video_size_mb,
             enable_text_metadata,
             enable_rich_media,
+            audio_send_mode,
         )
 
         max_video_size = metadata.get("largest_video_size_mb")
@@ -709,6 +758,8 @@ def build_all_nodes(
         video_count = len(video_urls)
         video_modes = metadata.get("video_modes") or []
         image_modes = metadata.get("image_modes") or []
+        audio_modes = metadata.get("audio_modes") or []
+        other_modes = list(image_modes) + list(audio_modes)
 
         for fp_idx, file_path in enumerate(link_file_paths):
             if not file_path:
@@ -719,8 +770,8 @@ def build_all_nodes(
                     link_video_files.append(file_path)
                     video_files.append(file_path)
             else:
-                img_idx = fp_idx - video_count
-                mode = image_modes[img_idx] if img_idx < len(image_modes) else ""
+                media_idx = fp_idx - video_count
+                mode = other_modes[media_idx] if media_idx < len(other_modes) else ""
                 if mode == "local":
                     link_temp_files.append(file_path)
                     temp_files.append(file_path)

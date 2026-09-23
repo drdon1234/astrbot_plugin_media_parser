@@ -14,6 +14,7 @@
 - 抖音：支持 视频 / 图片 / 文本 / 热评；覆盖短链、视频、图集和 slides 多分段分享页。
 - 快手：支持 视频 / 图片 / 文本；覆盖短链和作品分享页。
 - AcFun：支持 视频 / 图片 / 文本 / 热评；覆盖视频、动态和番剧页面，从服务端页面状态提取 HLS 与图片候选。
+- 网易云音乐：支持 音频 / 图片 / 文本 / 热评；匿名解析单曲，按当前播放权限获取音频，热评独立限量读取。
 - 微博：支持 视频 / 图片 / 文本 / 热评；覆盖桌面详情、移动详情和视频组件页。
 - 小红书：支持 视频 / 图片 / 文本 / 热评；覆盖短链、移动端和 PC 端笔记页。
 - 闲鱼：支持 视频 / 图片 / 文本 / 热评；覆盖短链、H5 商品页和 PC 商品页。
@@ -67,6 +68,7 @@ astrbot_plugin_media_parser/
     │       │   └── web.py           # 抖音 Web 详情接口与会话管理
     │       ├── kuaishou.py          # 快手视频/图集解析器
     │       ├── acfun.py             # AcFun 视频/动态/番剧解析器
+    │       ├── netease.py           # 网易云单曲、音频与热评
     │       ├── weibo.py             # 微博桌面/移动/视频组件解析器
     │       ├── xiaohongshu.py       # 小红书笔记解析器
     │       ├── xianyu.py            # 闲鱼商品页解析器
@@ -111,6 +113,7 @@ astrbot_plugin_media_parser/
     │   ├── image_format.py          # 图片格式 MIME、签名与后缀判定
     │   └── handler/
     │       ├── base.py              # 通用流式下载、Range 下载、重试
+    │       ├── audio.py             # 独立音频格式校验与有界缓存下载
     │       ├── normal_video.py      # 普通视频缓存下载
     │       ├── range_downloader.py  # range: 前缀下载封装，失败降级普通下载
     │       ├── dash.py              # DASH 音视频下载与 ffmpeg 合并
@@ -144,15 +147,15 @@ astrbot_plugin_media_parser/
 `parsers.<平台>` 同时控制解析器是否启用以及该平台的输出模式。
 
 - `关闭`：不创建该平台解析器，不提取/解析该平台链接。
-- `全部发送`：发送文本元数据节点和图片/视频节点。
+- `全部发送`：发送文本元数据节点和图片/视频/音频节点。
 - `仅文本`：解析并发送文本元数据，不进入下载处理、文件 Token 注册和富媒体节点构建。
-- `仅富媒体`：解析并发送图片/视频，不构建文本节点；热评条数会对该平台归零。
+- `仅富媒体`：解析并发送图片/视频/音频，不构建文本节点；热评条数会对该平台归零。
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
 Gitee、GitHub 和 GitLab 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况及 Issue 正文复用既有文本元数据可见性、长度限制和图片渲染链路。Gitee、GitLab 的评论开关仅作用于 Issue，仓库概况不请求评论；未知赞数省略。
 
-`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 23 个平台开关默认开启（快手、微信、博客园、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 24 个平台开关默认开启（快手、微信、博客园、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
 新增平台复用已有签名、访客会话和代理设置；优先热门或精选列表，也允许默认排序、时间排序评论及游戏评价。各解析器限制分页次数并按评论 ID 去重，接口失败保留正文及已取得评论，取消操作向上传播。`hot_comments` 中的 `likes` 可以是精确整数或平台提供的缩写字符串；未知时省略，消息节点显示 `-`。
 
@@ -309,10 +312,11 @@ AcFun 不设置全局强制下载标记；HLS 候选通过 `m3u8:` 前缀交给�
 video_urls: List[List[str]]
 video_cover_urls: List[List[str]]
 image_urls: List[List[str]]
+audio_urls: List[List[str]]
 file_paths: List[Optional[str]]
 ```
 
-三类媒体 URL 均以“一个媒体对应一组候选 URL”的二维列表表达，不接受一维 URL 列表；`image_headers` 与 `video_headers` 均为 `Dict[str, str]`。`video_cover_urls` 可缺省或为空；非空时只能包含一个供所有视频共用的封面组，或与 `video_urls` 逐项等长，且不能在没有视频时单独出现。
+媒体与视频封面 URL 均以“一个媒体对应一组候选 URL”的二维列表表达，不接受一维 URL 列表；`image_headers`、`video_headers` 与 `audio_headers` 均为 `Dict[str, str]`。`video_cover_urls` 可缺省或为空；非空时只能包含一个供所有视频共用的封面组，或与 `video_urls` 逐项等长，且不能在没有视频时单独出现。
 
 当 `message.media_display.video_cover_only=true` 时，下载器会先把视频媒体转换为图片媒体：解析结果提供唯一标准字段 `video_cover_urls` 时直接按图片下载封面；没有封面时创建本地 `video_cover` 任务。远端视频先经 `handler/video_cover.py` 的本地 HTTP 流式中继读取，按 `download.max_video_size_mb` 及下载器硬上限限制输入字节，再由 ffmpeg 截取第一帧；中继也负责让 HTTPS 来源以本地 HTTP 输入形式兼容 ffmpeg。
 
@@ -321,7 +325,12 @@ file_paths: List[Optional[str]]
 ```text
 0 .. video_count - 1                       视频
 video_count .. video_count + image_count - 1   图片
+video_count + image_count ..                  音频
 ```
+
+独立音频使用 `audio_modes`、`audio_sizes`、`audio_status_codes`、`audio_skip_reasons` 与 `audio_size_limit_flags` 回填结果，仅 `local` 或 `skip`；缓存不可用不交由聊天平台直拉源站。下载器核对音频 MIME 与签名，并执行 `download.max_audio_size_mb`（默认 30 MB）及 128 MB 硬上限。音频与图片、视频共同派生有效媒体状态，文件索引供节点、Token、ZIP 与清理统一使用。
+
+`message.media_display.audio_send_mode` 可选语音或文件，默认语音；构建 Record 或 File 后单独发送，不加入合并转发，音频节点不计入条件聚合阈值。原始音频文件发送至少保留 300 秒，中转有效期更长时采用中转有效期；ZIP 包含原音频和访问/试听状态。
 
 每个视频独立决策：
 
@@ -500,7 +509,7 @@ ParserManager.parse_text()
 ```text
 metadata
   ↓
-归一 video_urls/image_urls 为 List[List[str]]
+归一 video_urls/image_urls/audio_urls 为 List[List[str]]
   ↓
 逐视频决策 local/direct/skip
   ├─ DASH/M3U8/强制缓存 -> local 或 skip
@@ -593,8 +602,8 @@ cleanup_marked_in(cache_dir)
 ```text
 url/platform
 title/author/desc/timestamp
-video_urls/video_cover_urls/image_urls
-video_headers/image_headers
+video_urls/video_cover_urls/image_urls/audio_urls
+video_headers/image_headers/audio_headers
 image_tls_ciphers
 video_force_download
 access_status/restriction_type/restriction_label
@@ -614,7 +623,7 @@ source_url/parser_name
 
 其中 `source_url` 始终是消息中提取的输入链接，`url` 是单一规范链接；`parser_name` 始终是实际解析器名，`platform` 表示内容来源。平台解析器不得主动返回 `source_url` 或 `parser_name`。
 
-`video_urls`、`video_cover_urls` 与 `image_urls` 的值均遵循 `List[List[str]]`；内层列表按优先级保存同一媒体的候选地址。解析器返回未知字段、错阶段字段、非法类型或非法候选组时，`ParserManager` 会为该链接生成错误 metadata，不让无效结构进入下载阶段。
+`video_urls`、`video_cover_urls`、`image_urls` 与 `audio_urls` 的值均遵循 `List[List[str]]`；内层列表按优先级保存同一媒体的候选地址。解析器返回未知字段、错阶段字段、非法类型或非法候选组时，`ParserManager` 会为该链接生成错误 metadata，不让无效结构进入下载阶段。
 
 流程控制、错误与翻译层回填：
 
@@ -655,7 +664,7 @@ file_token_urls
 ```text
 _enable_text_metadata -> 文本元数据 Plain / 热评 Plain / 翻译 Plain
 _text_metadata_fields -> 标题 / 作者 / 发布时间 / 原始链接 / 简介正文的展示与翻译输入
-_enable_rich_media + video_modes/image_modes + file_paths/file_token_urls/video_urls/image_urls -> Video/Image
+_enable_rich_media + video_modes/image_modes/audio_modes + file_paths/file_token_urls -> Video/Image/Record/File
 ```
 
 ### 4.2 文件流转

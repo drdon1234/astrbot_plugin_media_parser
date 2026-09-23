@@ -67,6 +67,8 @@ class BaseVideoParser(ABC):
             - video_urls: 视频URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（可选，缺省时补为空列表）
             - video_cover_urls: 视频封面URL列表，与视频逐项对齐；单个通用封面也使用二维列表（可选）
             - image_urls: 图片URL列表，每个元素是单个媒体的可用URL列表（List[List[str]]），即使只有一条直链也要是列表的列表（可选，缺省时补为空列表）
+            - audio_urls: 独立音频URL候选组（List[List[str]]，可选，缺省时补为空列表）
+            - audio_headers: 音频下载所需的请求头字典（可选，缺省时补为空字典）
             - image_headers: dict，图片下载的完整请求头字典（可选，缺省时补为空字典）
             - image_tls_ciphers: str，平台图片请求的 TLS 加密套件列表（可选，缺省时沿用会话配置并保持证书校验）
             - video_headers: dict，视频下载的完整请求头字典（可选，缺省时补为空字典）

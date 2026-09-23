@@ -43,6 +43,8 @@ _PARSER_NULLABLE_INTEGER_FIELDS = frozenset(
 )
 _PARSER_SPECIAL_FIELDS = frozenset(
     {
+        "audio_headers",
+        "audio_urls",
         "hot_comments",
         "image_headers",
         "image_urls",
@@ -188,6 +190,9 @@ class ParserManager:
         metadata["image_urls"] = self._validate_url_groups(
             "image_urls", metadata.get("image_urls", [])
         )
+        metadata["audio_urls"] = self._validate_url_groups(
+            "audio_urls", metadata.get("audio_urls", [])
+        )
         if "video_cover_urls" in metadata:
             cover_groups = self._validate_url_groups(
                 "video_cover_urls", metadata["video_cover_urls"]
@@ -204,6 +209,9 @@ class ParserManager:
         )
         metadata["video_headers"] = self._validate_headers(
             "video_headers", metadata.get("video_headers", {})
+        )
+        metadata["audio_headers"] = self._validate_headers(
+            "audio_headers", metadata.get("audio_headers", {})
         )
         proxy_url = metadata.get("proxy_url")
         if proxy_url is not None and not isinstance(proxy_url, str):

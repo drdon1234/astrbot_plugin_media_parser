@@ -22,6 +22,8 @@ from .budget import (
     is_configured_limit_source,
     merge_limit_sources,
 )
+from .fileio import _wait_for_task_completion
+from .handler.audio import download_audio_to_cache
 from .handler.video_cover import extract_video_cover_to_cache
 from .router import download_media
 from .utils import check_cache_dir_available, strip_media_prefixes
@@ -39,6 +41,7 @@ class DownloadManager:
         cache_dir_available: Optional[bool] = None,
         max_concurrent_downloads: int = None,
         video_cover_only: bool = False,
+        max_audio_size_mb: float = 30.0,
     ):
         try:
             normalized_max_size = float(max_video_size_mb)
@@ -49,6 +52,15 @@ class DownloadManager:
             )
         except (TypeError, ValueError):
             self.max_video_size_mb = 0.0
+        try:
+            normalized_audio_size = float(max_audio_size_mb)
+            self.max_audio_size_mb = (
+                normalized_audio_size
+                if math.isfinite(normalized_audio_size) and normalized_audio_size >= 0
+                else 30.0
+            )
+        except (TypeError, ValueError):
+            self.max_audio_size_mb = 30.0
         self.cache_dir = cache_dir
         self.cache_dir_available = (
             bool(cache_dir_available)
@@ -286,6 +298,10 @@ class DownloadManager:
                     if self.max_video_size_mb > 0
                     else None
                 )
+                audio_max_bytes = (
+                    max(1, int(self.max_audio_size_mb * 1024 * 1024))
+                    if self.max_audio_size_mb > 0 else None
+                )
 
                 if not url_list:
                     return {
@@ -341,18 +357,30 @@ class DownloadManager:
 
                 for candidate in url_list:
                     try:
-                        result = await download_media(
-                            session=session,
-                            media_url=candidate,
-                            media_type="image" if kind == "image" else None,
-                            cache_dir=cache_dir,
-                            media_id=media_id,
-                            index=index,
-                            headers=headers,
-                            proxy=proxy,
-                            max_bytes=(video_max_bytes if kind != "image" else None),
-                            image_tls_ciphers=item.get("image_tls_ciphers", ""),
-                        )
+                        if kind == "audio":
+                            result = await download_audio_to_cache(
+                                session=session,
+                                audio_url=candidate,
+                                cache_dir=cache_dir,
+                                media_id=media_id,
+                                index=index,
+                                headers=headers,
+                                proxy=proxy,
+                                max_bytes=audio_max_bytes,
+                            )
+                        else:
+                            result = await download_media(
+                                session=session,
+                                media_url=candidate,
+                                media_type="image" if kind == "image" else None,
+                                cache_dir=cache_dir,
+                                media_id=media_id,
+                                index=index,
+                                headers=headers,
+                                proxy=proxy,
+                                max_bytes=(video_max_bytes if kind != "image" else None),
+                                image_tls_ciphers=item.get("image_tls_ciphers", ""),
+                            )
                         if result and result.get("file_path"):
                             return {
                                 **item,
@@ -418,6 +446,22 @@ class DownloadManager:
         self._active_tasks.update(tasks)
         try:
             raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in raw_results:
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+        except asyncio.CancelledError:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            # 结果尚未交给元数据；等待子任务释放文件句柄后回收整批完成文件。
+            for task in tasks:
+                await _wait_for_task_completion(task)
+            for task in tasks:
+                if not task.cancelled() and task.exception() is None:
+                    result = task.result()
+                    if isinstance(result, dict) and result.get("file_path"):
+                        cleanup_file(result["file_path"])
+            raise
         finally:
             for task in tasks:
                 self._active_tasks.discard(task)
@@ -425,8 +469,6 @@ class DownloadManager:
         results: List[Dict[str, Any]] = []
         for idx, result in enumerate(raw_results):
             item = media_items[idx] if idx < len(media_items) else {}
-            if isinstance(result, asyncio.CancelledError):
-                raise result
             if isinstance(result, Exception):
                 results.append(
                     {
@@ -466,6 +508,9 @@ class DownloadManager:
         image_urls = self._copy_url_groups(
             "image_urls", metadata.get("image_urls", [])
         )
+        audio_urls = self._copy_url_groups(
+            "audio_urls", metadata.get("audio_urls", [])
+        )
         video_urls, image_urls, cover_fallbacks = (
             self._apply_video_cover_only_mode(
                 metadata,
@@ -476,12 +521,22 @@ class DownloadManager:
         )
         metadata["video_urls"] = video_urls
         metadata["image_urls"] = image_urls
+        metadata["audio_urls"] = audio_urls
         metadata.setdefault("video_headers", {})
         metadata.setdefault("image_headers", {})
+        metadata.setdefault("audio_headers", {})
 
         video_count = len(video_urls)
         image_count = len(image_urls)
-        file_paths: List[Optional[str]] = [None] * (video_count + image_count)
+        audio_count = len(audio_urls)
+        file_paths: List[Optional[str]] = [None] * (
+            video_count + image_count + audio_count
+        )
+        audio_sizes: List[Optional[float]] = [None] * audio_count
+        audio_size_limit_flags: List[bool] = [False] * audio_count
+        audio_status_codes: List[Optional[int]] = [None] * audio_count
+        audio_modes: List[str] = ["skip"] * audio_count
+        audio_skip_reasons: List[Optional[str]] = [None] * audio_count
         video_sizes: List[Optional[float]] = [None] * video_count
         video_size_limit_flags: List[bool] = [False] * video_count
         video_status_codes: List[Optional[int]] = [None] * video_count
@@ -498,7 +553,7 @@ class DownloadManager:
         local_items: List[Dict[str, Any]] = []
 
         logger.debug(
-            f"处理元数据: {url}, 视频={video_count}, 图片={image_count}, "
+            f"处理元数据: {url}, 视频={video_count}, 图片={image_count}, 音频={audio_count}, "
             f"缓存目录可用={self.cache_dir_available}"
         )
 
@@ -647,6 +702,30 @@ class DownloadManager:
                 }
             )
 
+        for idx, url_list in enumerate(audio_urls):
+            if not url_list:
+                audio_skip_reasons[idx] = "未找到音频URL"
+                continue
+            if metadata.get("_enable_rich_media") is False:
+                audio_skip_reasons[idx] = "已关闭媒体输出"
+                continue
+            if not self.cache_dir_available:
+                audio_skip_reasons[idx] = "媒体文件缓存目录不可用，音频无法发送"
+                continue
+            audio_modes[idx] = "local"
+            if on_sendable_media:
+                await on_sendable_media()
+            local_items.append(
+                {
+                    "kind": "audio",
+                    "position": video_count + image_count + idx,
+                    "index": idx,
+                    "url_list": url_list,
+                    "media_id": media_id,
+                    "headers": metadata.get("audio_headers", {}),
+                }
+            )
+
         download_results = await self._download_local_items(
             session=session, media_items=local_items, cache_dir=self.cache_dir
         )
@@ -670,6 +749,18 @@ class DownloadManager:
                     )
                     video_modes[idx] = "skip"
                     video_skip_reasons[idx] = f"缓存下载失败: {reason}"
+                elif kind == "audio":
+                    idx = position - video_count - image_count
+                    if status_code is not None:
+                        audio_status_codes[idx] = status_code
+                    size_mb = result.get("size_mb")
+                    if isinstance(size_mb, (int, float)):
+                        audio_sizes[idx] = float(size_mb)
+                    audio_size_limit_flags[idx] = is_configured_limit_source(
+                        result.get("limit_source")
+                    )
+                    audio_modes[idx] = "skip"
+                    audio_skip_reasons[idx] = f"音频缓存下载失败: {reason}"
                 else:
                     idx = position - video_count
                     if status_code is not None:
@@ -703,6 +794,12 @@ class DownloadManager:
                     )
                     video_size_limit_flags[idx] = True
                     continue
+            elif kind == "audio":
+                idx = position - video_count - image_count
+                if status_code is not None:
+                    audio_status_codes[idx] = status_code
+                if size_mb is not None:
+                    audio_sizes[idx] = size_mb
             else:
                 idx = position - video_count
                 if status_code is not None:
@@ -721,6 +818,11 @@ class DownloadManager:
         metadata["video_skip_reasons"] = video_skip_reasons
         metadata["image_skip_reasons"] = image_skip_reasons
         metadata["image_warnings"] = image_warnings
+        metadata["audio_modes"] = audio_modes
+        metadata["audio_sizes"] = audio_sizes
+        metadata["audio_status_codes"] = audio_status_codes
+        metadata["audio_skip_reasons"] = audio_skip_reasons
+        metadata["audio_size_limit_flags"] = audio_size_limit_flags
         refresh_media_state(metadata)
 
         has_valid_media = metadata["has_valid_media"]
@@ -731,6 +833,7 @@ class DownloadManager:
             has_access_denied
             or any(code == 403 for code in video_status_codes)
             or any(code == 403 for code in image_status_codes)
+            or any(code == 403 for code in audio_status_codes)
         )
         return metadata
 

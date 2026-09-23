@@ -177,6 +177,32 @@ def get_video_suffix(content_type: str = None, url: str = None) -> str:
     return ".mp4"
 
 
+def get_audio_suffix(content_type: str) -> str:
+    """按已经验证的音频类型返回真实文件后缀。
+
+    Args:
+        content_type: 音频内容探测得到的标准 MIME 类型。
+
+    Returns:
+        对应的音频文件后缀。
+
+    Raises:
+        ValueError: 类型不受支持。
+    """
+    suffixes = {
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/aac": ".aac",
+        "audio/flac": ".flac",
+        "audio/ogg": ".ogg",
+        "audio/wav": ".wav",
+    }
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized not in suffixes:
+        raise ValueError("无法确定受支持的音频文件格式")
+    return suffixes[normalized]
+
+
 def strip_media_prefixes(url: str) -> str:
     """剥离媒体URL前缀，返回可直接访问的URL。
 
@@ -251,7 +277,7 @@ def generate_cache_file_path(
     Args:
         cache_dir: 缓存目录路径
         media_id: 媒体ID
-        media_type: 媒体类型，'video' 或 'image'
+        media_type: 媒体类型，'video'、'image' 或 'audio'
         index: 媒体索引
         content_type: HTTP Content-Type头（可选）
         url: 媒体URL（可选）
@@ -262,6 +288,9 @@ def generate_cache_file_path(
     if media_type == "video":
         suffix = get_video_suffix(content_type, url)
         filename = f"video_{index}{suffix}"
+    elif media_type == "audio":
+        suffix = get_audio_suffix(content_type)
+        filename = f"audio_{index}{suffix}"
     else:
         suffix = get_image_suffix(content_type, url)
         filename = f"image_{index}{suffix}"

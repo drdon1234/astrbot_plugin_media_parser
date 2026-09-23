@@ -75,6 +75,7 @@ class VideoParserPlugin(Star):
 
         self.download_manager = DownloadManager(
             max_video_size_mb=cfg.download.max_video_size_mb,
+            max_audio_size_mb=cfg.download.max_audio_size_mb,
             large_video_threshold_mb=cfg.download.large_video_threshold_mb,
             cache_dir=cfg.download.cache_dir,
             cache_dir_available=cfg.download.cache_dir_available,
@@ -479,7 +480,7 @@ class VideoParserPlugin(Star):
 
         text_enabled = bool(metadata.get("_enable_text_metadata", True))
         rich_enabled = bool(metadata.get("_enable_rich_media", True))
-        has_media = bool(metadata.get("video_urls")) or bool(metadata.get("image_urls"))
+        has_media = any(metadata.get(key) for key in ("video_urls", "image_urls", "audio_urls"))
         has_text = (
             self._has_text_metadata(metadata)
             or bool(metadata.get("access_message"))
@@ -650,6 +651,7 @@ class VideoParserPlugin(Star):
                 cfg.download.max_video_size_mb,
                 True,
                 True,
+                audio_send_mode=cfg.message.media_display.audio_send_mode,
             )
 
             translation_nodes = await self._build_translation_nodes_after_task(
@@ -777,8 +779,23 @@ class VideoParserPlugin(Star):
                     [text_metadata_image_path] if text_metadata_image_path else [],
                 )
                 if all_files:
-                    if relay_registered and not zip_requested:
-                        delay = cfg.relay.file_token_ttl
+                    has_audio_files = bool(
+                        not zip_requested and build_result is not None
+                        and cfg.message.media_display.audio_send_mode == "文件"
+                        and any(
+                            any((metadata.get("file_paths") or [])[
+                                len(metadata.get("video_urls") or [])
+                                + len(metadata.get("image_urls") or []):
+                            ])
+                            for metadata in processed_metadata_list
+                        )
+                    )
+                    if not zip_requested and (relay_registered or has_audio_files):
+                        # 同一缓存目录共用过期标记，音频文件与封面须采用同一个有效期。
+                        delay = (
+                            max(300, cfg.relay.file_token_ttl)
+                            if has_audio_files else cfg.relay.file_token_ttl
+                        )
                         self._schedule_delayed_cleanup(all_files, delay)
                     else:
                         await self._run_blocking_to_completion(

@@ -37,8 +37,10 @@ def refresh_media_state(metadata: MediaMetadata) -> None:
     """
     video_urls = metadata.get("video_urls")
     image_urls = metadata.get("image_urls")
+    audio_urls = metadata.get("audio_urls")
     video_count = len(video_urls) if isinstance(video_urls, list) else 0
     image_count = len(image_urls) if isinstance(image_urls, list) else 0
+    audio_count = len(audio_urls) if isinstance(audio_urls, list) else 0
 
     video_modes = metadata.get("video_modes")
     if not isinstance(video_modes, list):
@@ -46,6 +48,9 @@ def refresh_media_state(metadata: MediaMetadata) -> None:
     image_modes = metadata.get("image_modes")
     if not isinstance(image_modes, list):
         image_modes = []
+    audio_modes = metadata.get("audio_modes")
+    if not isinstance(audio_modes, list):
+        audio_modes = []
     file_paths = metadata.get("file_paths")
     if not isinstance(file_paths, list):
         file_paths = []
@@ -55,6 +60,9 @@ def refresh_media_state(metadata: MediaMetadata) -> None:
     size_limit_flags = metadata.get("video_size_limit_flags")
     if not isinstance(size_limit_flags, list):
         size_limit_flags = []
+    audio_size_limit_flags = metadata.get("audio_size_limit_flags")
+    if not isinstance(audio_size_limit_flags, list):
+        audio_size_limit_flags = []
 
     sendable_video_sizes = [
         float(size)
@@ -67,14 +75,18 @@ def refresh_media_state(metadata: MediaMetadata) -> None:
 
     metadata["video_count"] = video_count
     metadata["image_count"] = image_count
+    metadata["audio_count"] = audio_count
     metadata["failed_video_count"] = sum(
         1 for mode in video_modes if mode == "skip"
     )
     metadata["failed_image_count"] = sum(
         1 for mode in image_modes if mode == "skip"
     )
+    metadata["failed_audio_count"] = sum(
+        1 for mode in audio_modes if mode == "skip"
+    )
     has_valid_media = any(
-        mode in _SENDABLE_MODES for mode in (*video_modes, *image_modes)
+        mode in _SENDABLE_MODES for mode in (*video_modes, *image_modes, *audio_modes)
     )
     metadata["has_valid_media"] = has_valid_media
     metadata["use_local_files"] = any(
@@ -85,6 +97,11 @@ def refresh_media_state(metadata: MediaMetadata) -> None:
         and video_count + index < len(file_paths)
         and bool(file_paths[video_count + index])
         for index, mode in enumerate(image_modes)
+    ) or any(
+        mode == "local"
+        and video_count + image_count + index < len(file_paths)
+        and bool(file_paths[video_count + image_count + index])
+        for index, mode in enumerate(audio_modes)
     )
     metadata["largest_video_size_mb"] = (
         max(sendable_video_sizes) if sendable_video_sizes else None
@@ -93,5 +110,6 @@ def refresh_media_state(metadata: MediaMetadata) -> None:
         sum(sendable_video_sizes) if sendable_video_sizes else 0.0
     )
     metadata["exceeds_max_size"] = bool(
-        not has_valid_media and any(flag is True for flag in size_limit_flags)
+        not has_valid_media
+        and any(flag is True for flag in (*size_limit_flags, *audio_size_limit_flags))
     )

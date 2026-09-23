@@ -14,6 +14,7 @@ from .parser.platform import (
     DouyinParser,
     KuaishouParser,
     AcfunParser,
+    NeteaseParser,
     WeiboParser,
     XiaohongshuParser,
     XianyuParser,
@@ -61,6 +62,7 @@ PARSER_OUTPUT_KEYS = (
     "douyin",
     "kuaishou",
     "acfun",
+    "netease",
     "weibo",
     "xiaohongshu",
     "xianyu",
@@ -328,6 +330,7 @@ class ArchiveConfig:
 @dataclass
 class MediaDisplayConfig:
     video_cover_only: bool = False
+    audio_send_mode: str = "语音"
 
 
 @dataclass
@@ -360,6 +363,7 @@ class HotCommentConfig:
     bilibili: bool = True
     douyin: bool = True
     acfun: bool = True
+    netease: bool = True
     weibo: bool = True
     xiaohongshu: bool = True
     xianyu: bool = True
@@ -440,6 +444,7 @@ class PermissionConfig:
 @dataclass
 class DownloadConfig:
     max_video_size_mb: float = 1000.0
+    max_audio_size_mb: float = 30.0
     large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
     cache_dir: str = ""
     cache_dir_available: bool = False
@@ -633,6 +638,7 @@ class ConfigManager:
         self._enable_douyin = self._parser_enabled("douyin")
         self._enable_kuaishou = self._parser_enabled("kuaishou")
         self._enable_acfun = self._parser_enabled("acfun")
+        self._enable_netease = self._parser_enabled("netease")
         self._enable_weibo = self._parser_enabled("weibo")
         self._enable_xiaohongshu = self._parser_enabled("xiaohongshu")
         self._enable_xianyu = self._parser_enabled("xianyu")
@@ -723,6 +729,10 @@ class ConfigManager:
                 ),
             ),
             media_display=MediaDisplayConfig(
+                audio_send_mode=(
+                    "文件" if str(media_display.get("audio_send_mode", "语音")).strip() == "文件"
+                    else "语音"
+                ),
                 video_cover_only=self._parse_bool(
                     media_display.get("video_cover_only", False),
                     False,
@@ -798,6 +808,11 @@ class ConfigManager:
                     hot_comments.get("acfun", True),
                     True,
                     "message.hot_comments.acfun",
+                ),
+                netease=self._parse_bool(
+                    hot_comments.get("netease", True),
+                    True,
+                    "message.hot_comments.netease",
                 ),
                 weibo=self._parse_bool(
                     hot_comments.get("weibo", True),
@@ -1065,6 +1080,9 @@ class ConfigManager:
 
         self.download = DownloadConfig(
             max_video_size_mb=max_video_size_mb,
+            max_audio_size_mb=self._parse_non_negative_float(
+                download_raw.get("max_audio_size_mb", 30.0), 30.0
+            ),
             large_video_threshold_mb=large_video_threshold_mb,
             cache_dir=cache_dir,
             cache_dir_available=cache_dir_available,
@@ -1323,6 +1341,10 @@ class ConfigManager:
         if self._enable_acfun:
             parsers.append(
                 AcfunParser(hot_comment_count=hot_comment_counts["acfun"])
+            )
+        if self._enable_netease:
+            parsers.append(
+                NeteaseParser(hot_comment_count=hot_comment_counts["netease"])
             )
         if self._enable_weibo:
             parsers.append(

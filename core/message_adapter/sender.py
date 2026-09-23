@@ -1,10 +1,11 @@
 """消息发送封装，统一不同会话场景下的发送行为。"""
 
+import asyncio
 from pathlib import Path
 from typing import Any, List, Optional
 
 from astrbot.api.event import AstrMessageEvent
-from astrbot.api.message_components import Nodes, Plain, Image, Node, Reply
+from astrbot.api.message_components import File, Nodes, Plain, Image, Node, Record, Reply
 
 from ..logger import logger
 
@@ -117,6 +118,15 @@ class MessageSender:
         normal_link_nodes = [
             meta["link_nodes"] for meta in normal_metadata if meta.get("link_nodes")
         ]
+        audio_nodes = [
+            node for link_nodes in normal_link_nodes for node in link_nodes
+            if isinstance(node, (Record, File))
+        ]
+        normal_link_nodes = [
+            [node for node in link_nodes if not isinstance(node, (Record, File))]
+            for link_nodes in normal_link_nodes
+        ]
+        normal_link_nodes = [nodes for nodes in normal_link_nodes if nodes]
         large_media_link_nodes = [
             meta["link_nodes"] for meta in large_media_metadata if meta.get("link_nodes")
         ]
@@ -175,6 +185,21 @@ class MessageSender:
                 except Exception as exc:
                     errors.append(exc)
                     logger.warning(f"发送聚合消息失败: {exc}")
+
+        # 语音与音频文件始终独立发送，不依赖客户端对转发内音频的支持。
+        for node in audio_nodes:
+            expected += 1
+            # 适配器异常类型不固定，逐项收集发送结果，并保持发送顺序和取消传播。
+            result, = await asyncio.gather(
+                self._send_single_node(event, node), return_exceptions=True
+            )
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                errors.append(result)
+                logger.warning(f"发送音频失败: {result}")
+            else:
+                succeeded += 1
 
         if large_media_link_nodes:
             (

@@ -45,6 +45,7 @@ PARSER_DISCOVERY_ORDER = (
     "douyin",
     "kuaishou",
     "acfun",
+    "netease",
     "weibo",
     "xiaohongshu",
     "xianyu",
@@ -312,6 +313,13 @@ def print_metadata(
         if len(image_urls) > 5:
             print(f"  ... 还有 {len(image_urls) - 5} 张")
 
+    audio_urls = metadata.get("audio_urls") or []
+    if audio_urls:
+        print(f"音频: {len(audio_urls)} 个")
+        for index, candidates in enumerate(audio_urls, 1):
+            if candidates:
+                print(f"  [{index}] {candidates[0]}")
+
     if metadata.get("platform") == "twitter" and metadata.get("video_urls"):
         print("标记: Twitter视频")
     if metadata.get("platform") == "tiktok":
@@ -344,6 +352,12 @@ def print_download_result(metadata: Dict[str, Any], url: str):
     print("\n媒体统计:")
     print(f"  视频: {video_count} 个 (失败: {failed_video_count})")
     print(f"  图片: {image_count} 张 (失败: {failed_image_count})")
+    print(f"  音频: {metadata.get('audio_count', 0)} 个 (失败: {metadata.get('failed_audio_count', 0)})")
+    for index, mode in enumerate(metadata.get("audio_modes") or [], 1):
+        print(f"  音频[{index}]模式: {mode}")
+    for index, reason in enumerate(metadata.get("audio_skip_reasons") or [], 1):
+        if reason:
+            print(f"  音频[{index}]跳过: {reason}")
     if video_modes:
         print(f"  视频模式: {', '.join(video_modes)}")
     if image_modes:
@@ -619,6 +633,8 @@ async def parse_and_confirm_download(
     total_video_fail = 0
     total_image_success = 0
     total_image_fail = 0
+    total_audio_success = 0
+    total_audio_fail = 0
 
     for processed_metadata in processed_metadata_list:
         if processed_metadata.get("error"):
@@ -633,6 +649,8 @@ async def parse_and_confirm_download(
         total_video_fail += failed_video_count
         total_image_success += image_count - failed_image_count
         total_image_fail += failed_image_count
+        total_audio_success += processed_metadata.get("audio_count", 0) - processed_metadata.get("failed_audio_count", 0)
+        total_audio_fail += processed_metadata.get("failed_audio_count", 0)
 
     print("\n" + "=" * 80)
     print("统计汇总")
@@ -646,6 +664,8 @@ async def parse_and_confirm_download(
     print(f"  视频失败: {total_video_fail} 个")
     print(f"  图片成功: {total_image_success} 张")
     print(f"  图片失败: {total_image_fail} 张")
+    print(f"  音频成功: {total_audio_success} 个")
+    print(f"  音频失败: {total_audio_fail} 个")
     print("=" * 80)
 
     return processed_metadata_list

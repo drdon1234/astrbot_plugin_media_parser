@@ -2,7 +2,7 @@
     "parsers": {
         "description": "解析器与输出模式",
         "type": "object",
-        "hint": "关闭=不解析该平台；仅文本=只发送摘要文本；仅富媒体=只发送图片/视频。仅文本仍受“消息输出 → 文本元数据”开关控制。",
+        "hint": "关闭=不解析该平台；仅文本=只发送摘要文本；仅富媒体=只发送图片/视频/音频。仅文本仍受“消息输出 → 文本元数据”开关控制。",
         "items": {
             "bilibili": {
                 "description": "B站",
@@ -46,6 +46,18 @@
                     "仅文本",
                     "仅富媒体"
                 ],
+                "default": "全部发送"
+            },
+            "netease": {
+                "description": "网易云音乐",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "hint": "支持单曲信息、当前可播放音频及热评；不获取会员权限外的完整歌曲。",
                 "default": "全部发送"
             },
             "weibo": {
@@ -495,6 +507,16 @@
                         "type": "bool",
                         "hint": "开启后不发送视频节点；每个视频会改为发送封面图片。解析结果有封面时直接使用封面，否则通过本地流式中继尝试截取视频第一帧；需要可用缓存目录和 ffmpeg，输入受下载大小硬限制。",
                         "default": false
+                    },
+                    "audio_send_mode": {
+                        "description": "音频发送方式",
+                        "type": "string",
+                        "options": [
+                            "语音",
+                            "文件"
+                        ],
+                        "hint": "语音以聊天语音发送，格式转换可能需要 ffmpeg；文件保留原始音频。两种方式均单独发送，实际限制由聊天平台决定。",
+                        "default": "语音"
                     }
                 }
             },
@@ -521,6 +543,11 @@
                     },
                     "acfun": {
                         "description": "AcFun",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "netease": {
+                        "description": "网易云音乐",
                         "type": "bool",
                         "default": true
                     },
@@ -875,6 +902,12 @@
                 "type": "float",
                 "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；填 0 不限制。",
                 "default": 1000.0
+            },
+            "max_audio_size_mb": {
+                "description": "音频大小上限（MB）",
+                "type": "float",
+                "hint": "音频下载前和下载过程中均检查；默认 30 MB，填 0 仅保留 128 MB 安全上限。聊天平台可能有更小的大小或时长限制。",
+                "default": 30.0
             },
             "large_video_threshold_mb": {
                 "description": "大视频阈值（MB）",

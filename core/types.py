@@ -20,6 +20,8 @@ class MediaMetadata(TypedDict, total=False):
     video_urls: List[List[str]]
     video_cover_urls: List[List[str]]
     image_urls: List[List[str]]
+    audio_urls: List[List[str]]
+    audio_headers: Dict[str, str]
     image_headers: Dict[str, str]
     image_tls_ciphers: str
     video_headers: Dict[str, str]
@@ -61,21 +63,28 @@ class MediaMetadata(TypedDict, total=False):
     video_size_limit_flags: List[bool]
     video_status_codes: List[Optional[int]]
     image_status_codes: List[Optional[int]]
+    audio_status_codes: List[Optional[int]]
+    audio_sizes: List[Optional[float]]
+    audio_size_limit_flags: List[bool]
     video_modes: List[str]
     image_modes: List[str]
+    audio_modes: List[str]
     video_skip_reasons: List[Optional[str]]
     image_skip_reasons: List[Optional[str]]
+    audio_skip_reasons: List[Optional[str]]
     image_warnings: List[Optional[str]]
     largest_video_size_mb: Optional[float]
     total_video_size_mb: float
     video_count: int
     image_count: int
+    audio_count: int
     has_valid_media: bool
     use_local_files: bool
     exceeds_max_size: bool
     has_access_denied: bool
     failed_video_count: int
     failed_image_count: int
+    failed_audio_count: int
 
     # ── 中转阶段（文件 Token 服务注册后回填）──────────────
 

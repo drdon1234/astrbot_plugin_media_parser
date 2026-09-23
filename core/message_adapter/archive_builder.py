@@ -46,6 +46,7 @@ def _iter_media(
     file_paths = metadata.get("file_paths") or []
     video_urls = metadata.get("video_urls") or []
     image_urls = metadata.get("image_urls") or []
+    audio_urls = metadata.get("audio_urls") or []
     video_count = len(video_urls)
 
     for index, url_list in enumerate(video_urls):
@@ -58,6 +59,12 @@ def _iter_media(
         url = url_list[0] if isinstance(url_list, list) and url_list else ""
         path = file_paths[position] if position < len(file_paths) else None
         yield "image", index, str(url or ""), path
+
+    for index, url_list in enumerate(audio_urls):
+        position = video_count + len(image_urls) + index
+        url = url_list[0] if isinstance(url_list, list) and url_list else ""
+        path = file_paths[position] if position < len(file_paths) else None
+        yield "audio", index, str(url or ""), path
 
 
 def _media_name(kind: str, index: int, source_path: str) -> str:
@@ -132,8 +139,10 @@ def format_archive_metadata(
     _append_field(lines, "最大视频大小(MB)", metadata.get("largest_video_size_mb"))
     _append_field(lines, "有效视频数", _count_valid_media(metadata, "video"))
     _append_field(lines, "有效图片数", _count_valid_media(metadata, "image"))
+    _append_field(lines, "有效音频数", _count_valid_media(metadata, "audio"))
     _append_field(lines, "失败视频数", metadata.get("failed_video_count"))
     _append_field(lines, "失败图片数", metadata.get("failed_image_count"))
+    _append_field(lines, "失败音频数", metadata.get("failed_audio_count"))
     warnings = [
         str(value).strip()
         for value in (metadata.get("image_warnings") or [])
@@ -200,6 +209,10 @@ def _build_archive_details(
         "has_valid_media",
         "failed_video_count",
         "failed_image_count",
+        "failed_audio_count",
+        "is_preview_only",
+        "timelength_ms",
+        "available_length_ms",
         "largest_video_size_mb",
         "exceeds_max_size",
         "image_warnings",
@@ -212,6 +225,7 @@ def _build_archive_details(
     }
     details["valid_video_count"] = _count_valid_media(metadata, "video")
     details["valid_image_count"] = _count_valid_media(metadata, "image")
+    details["valid_audio_count"] = _count_valid_media(metadata, "audio")
     details["media"] = [_safe_json_value(item) for item in media]
 
     translated_fields = (
@@ -303,8 +317,8 @@ def build_zip_archive(
                         "index": media_index + 1,
                         "mode": mode,
                     }
-                    if kind == "video":
-                        sizes = metadata.get("video_sizes") or []
+                    if kind in {"video", "audio"}:
+                        sizes = metadata.get(f"{kind}_sizes") or []
                         if media_index < len(sizes) and sizes[media_index] is not None:
                             detail["size_mb"] = sizes[media_index]
                     if source_path and os.path.isfile(source_path):
