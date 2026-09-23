@@ -138,6 +138,17 @@
                 ],
                 "default": "全部发送"
             },
+            "hupu": {
+                "description": "虎扑",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "tiktok": {
                 "description": "TikTok",
                 "type": "string",
@@ -406,6 +417,11 @@
                     },
                     "xiaohongshu": {
                         "description": "小红书",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "hupu": {
+                        "description": "虎扑",
                         "type": "bool",
                         "default": true
                     }

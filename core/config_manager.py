@@ -22,6 +22,7 @@ from .parser.platform import (
     XueqiuParser,
     WechatParser,
     ZhihuParser,
+    HupuParser,
     TikTokParser,
     YoutubeParser,
     SteamParser,
@@ -59,6 +60,7 @@ PARSER_OUTPUT_KEYS = (
     "xueqiu",
     "wechat",
     "zhihu",
+    "hupu",
     "tiktok",
     "youtube",
     "steam",
@@ -340,6 +342,7 @@ class HotCommentConfig:
     bilibili: bool = True
     weibo: bool = True
     xiaohongshu: bool = True
+    hupu: bool = True
 
 
 @dataclass
@@ -601,6 +604,7 @@ class ConfigManager:
         self._enable_xueqiu = self._parser_enabled("xueqiu")
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
+        self._enable_hupu = self._parser_enabled("hupu")
         self._enable_tiktok = self._parser_enabled("tiktok")
         self._enable_youtube = self._parser_enabled("youtube")
         self._enable_steam = self._parser_enabled("steam")
@@ -748,6 +752,11 @@ class ConfigManager:
                     hot_comments.get("xiaohongshu", True),
                     True,
                     "message.hot_comments.xiaohongshu",
+                ),
+                hupu=self._parse_bool(
+                    hot_comments.get("hupu", True),
+                    True,
+                    "message.hot_comments.hupu",
                 ),
             ),
         )
@@ -1159,6 +1168,10 @@ class ConfigManager:
             self.message.hot_comments.xiaohongshu,
             "xiaohongshu",
         )
+        hupu_hc = self._effective_hot_comment_count(
+            self.message.hot_comments.hupu,
+            "hupu",
+        )
         proxy_addr = self.proxy.address or None
 
         if self._enable_bilibili:
@@ -1208,6 +1221,8 @@ class ConfigManager:
             )
         if self._enable_zhihu:
             parsers.append(ZhihuParser())
+        if self._enable_hupu:
+            parsers.append(HupuParser(hot_comment_count=hupu_hc))
         if self._enable_tiktok:
             parsers.append(
                 TikTokParser(

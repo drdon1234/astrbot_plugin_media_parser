@@ -323,10 +323,10 @@ def build_hot_comments_node(
             continue
         username = str(item.get("username", "") or "").strip() or "未知用户"
         uid = str(item.get("uid", "") or "").strip()
-        try:
-            likes = int(item.get("likes", 0) or 0)
-        except (TypeError, ValueError):
-            likes = 0
+        # 平台可能只提供缩写赞数；未知数量不能当作零赞。
+        raw_likes = item.get("likes")
+        likes = str(raw_likes).strip() if raw_likes is not None else ""
+        likes = likes or "-"
         time_text = str(item.get("time", "") or "").strip() or "-"
         message = str(item.get("message", "") or "").strip() or "（无文本内容）"
         user_label = f"{username}(uid:{uid})" if uid else username

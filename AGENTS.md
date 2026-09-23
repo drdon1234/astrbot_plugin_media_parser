@@ -56,7 +56,7 @@ core/
 平台在文档、配置、解析器导出、解析器工厂和本地发现列表中必须使用统一的固定顺序。按平台所属地区和主要内容形态分为四组，组内顺序也必须保持一致：
 
 1. 国内视频类平台：B站（`bilibili`）、抖音（`douyin`）、快手（`kuaishou`）、AcFun（`acfun`）。
-2. 国内资讯类平台：微博（`weibo`）、小红书（`xiaohongshu`）、闲鱼（`xianyu`）、今日头条（`toutiao`）、小黑盒（`xiaoheihe`）、雪球（`xueqiu`）、微信（`wechat`）、知乎（`zhihu`）。
+2. 国内资讯类平台：微博（`weibo`）、小红书（`xiaohongshu`）、闲鱼（`xianyu`）、今日头条（`toutiao`）、小黑盒（`xiaoheihe`）、雪球（`xueqiu`）、微信（`wechat`）、知乎（`zhihu`）、虎扑（`hupu`）。
 3. 国外视频类平台：TikTok（`tiktok`）、YouTube（`youtube`）。
 4. 国外资讯类平台：Steam（`steam`）、Twitter/X（`twitter`）、Pixiv（`pixiv`）、GitHub（`github`）。
 

@@ -53,6 +53,7 @@ PARSER_DISCOVERY_ORDER = (
     "xueqiu",
     "wechat",
     "zhihu",
+    "hupu",
     "tiktok",
     "youtube",
     "steam",
