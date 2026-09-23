@@ -57,6 +57,7 @@ PARSER_DISCOVERY_ORDER = (
     "nga",
     "hupu",
     "douban",
+    "v2ex",
     "tiktok",
     "youtube",
     "steam",

@@ -182,6 +182,17 @@
                 ],
                 "default": "全部发送"
             },
+            "v2ex": {
+                "description": "V2EX",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "tiktok": {
                 "description": "TikTok",
                 "type": "string",
@@ -505,6 +516,11 @@
                     },
                     "douban": {
                         "description": "豆瓣",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "v2ex": {
+                        "description": "V2EX",
                         "type": "bool",
                         "default": true
                     },

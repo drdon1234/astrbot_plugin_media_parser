@@ -26,6 +26,7 @@ from .parser.platform import (
     NgaParser,
     HupuParser,
     DoubanParser,
+    V2exParser,
     TikTokParser,
     YoutubeParser,
     SteamParser,
@@ -67,6 +68,7 @@ PARSER_OUTPUT_KEYS = (
     "nga",
     "hupu",
     "douban",
+    "v2ex",
     "tiktok",
     "youtube",
     "steam",
@@ -359,6 +361,7 @@ class HotCommentConfig:
     nga: bool = True
     hupu: bool = True
     douban: bool = True
+    v2ex: bool = True
     tiktok: bool = True
     youtube: bool = True
     steam: bool = True
@@ -628,6 +631,7 @@ class ConfigManager:
         self._enable_nga = self._parser_enabled("nga")
         self._enable_hupu = self._parser_enabled("hupu")
         self._enable_douban = self._parser_enabled("douban")
+        self._enable_v2ex = self._parser_enabled("v2ex")
         self._enable_tiktok = self._parser_enabled("tiktok")
         self._enable_youtube = self._parser_enabled("youtube")
         self._enable_steam = self._parser_enabled("steam")
@@ -830,6 +834,11 @@ class ConfigManager:
                     hot_comments.get("douban", True),
                     True,
                     "message.hot_comments.douban",
+                ),
+                v2ex=self._parse_bool(
+                    hot_comments.get("v2ex", True),
+                    True,
+                    "message.hot_comments.v2ex",
                 ),
                 tiktok=self._parse_bool(
                     hot_comments.get("tiktok", True),
@@ -1335,6 +1344,10 @@ class ConfigManager:
             parsers.append(HupuParser(hot_comment_count=hot_comment_counts["hupu"]))
         if self._enable_douban:
             parsers.append(DoubanParser(hot_comment_count=hot_comment_counts["douban"]))
+        if self._enable_v2ex:
+            parsers.append(
+                V2exParser(hot_comment_count=hot_comment_counts["v2ex"])
+            )
         if self._enable_tiktok:
             parsers.append(
                 TikTokParser(

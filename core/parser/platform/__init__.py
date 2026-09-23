@@ -15,6 +15,7 @@ from .tieba import TiebaParser
 from .nga import NgaParser
 from .hupu import HupuParser
 from .douban import DoubanParser
+from .v2ex import V2exParser
 from .tiktok import TikTokParser
 from .youtube import YoutubeParser
 from .steam import SteamParser
@@ -40,6 +41,7 @@ __all__ = [
     'NgaParser',
     'HupuParser',
     'DoubanParser',
+    'V2exParser',
     'TikTokParser',
     'YoutubeParser',
     'SteamParser',
