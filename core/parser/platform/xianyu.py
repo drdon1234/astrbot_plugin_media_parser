@@ -38,9 +38,13 @@ XIANYU_ITEM_HOSTS = frozenset({"www.goofish.com", "h5.m.goofish.com"})
 class XianyuParser(BaseVideoParser):
     """闲鱼商品页解析器。"""
 
-    def __init__(self):
+    def __init__(self, hot_comment_count: int = 0) -> None:
         super().__init__("xianyu")
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
 
     @staticmethod
     def _get_host(url: str) -> str:
@@ -711,6 +715,12 @@ class XianyuParser(BaseVideoParser):
                 item_id=item_id,
                 detail_data=detail_data,
             )
+            if self.hot_comment_count:
+                comments = await self._fetch_hot_comments(
+                    session, item_id, context["mobile_url"]
+                )
+                if comments:
+                    metadata["hot_comments"] = comments
             logger.debug(
                 f"[{self.name}] parse: 解析完成 {url}, "
                 f"title={metadata.get('title', '')[:50]}, "
@@ -718,3 +728,69 @@ class XianyuParser(BaseVideoParser):
                 f"image_count={len(metadata.get('image_urls', []))}"
             )
             return metadata
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, item_id: str, referer: str
+    ) -> List[Dict[str, Any]]:
+        """读取公开商品留言，接受平台只返回少量留言的限制。"""
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        if not self.hot_comment_count:
+            return comments
+        for page in range(1, 6):
+            try:
+                payload = await asyncio.wait_for(
+                    self._call_signed_mtop(
+                        session,
+                        api="mtop.taobao.idle.comment.list",
+                        version="5.0",
+                        data_obj={
+                            "bizType": 0, "itemId": item_id,
+                            "pageNumber": page, "roesPerPage": 10,
+                        },
+                        referer=referer,
+                    ),
+                    timeout=15,
+                )
+                items = payload.get("items")
+                if not isinstance(items, list):
+                    raise RuntimeError("闲鱼留言响应缺少列表")
+                previous_count = len(seen)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("itemId") not in (None, "", item_id) and str(
+                        item.get("itemId")
+                    ) != item_id:
+                        continue
+                    comment_id = str(item.get("commentId") or "")
+                    message = html.unescape(str(item.get("content") or "")).strip()
+                    if not comment_id or comment_id in seen or not message:
+                        continue
+                    seen.add(comment_id)
+                    favor = item.get("superFavorInfo")
+                    favor = favor if isinstance(favor, dict) else {}
+                    try:
+                        likes = max(0, int(favor.get("superFavorNum") or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        likes = 0
+                    comments.append({
+                        "id": comment_id,
+                        "username": str(item.get("reporterNick") or ""),
+                        "uid": str(item.get("reporterId") or ""),
+                        "likes": likes,
+                        "message": message,
+                        "time": str(item.get("reportTime") or ""),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                if len(seen) == previous_count or str(
+                    payload.get("nextPage", False)
+                ).lower() not in {"true", "1"}:
+                    break
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as exc:
+                logger.warning(f"[{self.name}] 留言获取失败，已保留商品正文：{exc}")
+                break
+        return comments

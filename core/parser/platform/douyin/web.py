@@ -25,6 +25,7 @@ DOUYIN_WEB_USER_AGENT = (
     "Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
 )
 DOUYIN_DETAIL_API = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
+DOUYIN_COMMENT_API = "https://www.douyin.com/aweme/v1/web/comment/list/"
 DOUYIN_TTWID_URL = "https://ttwid.bytedance.com/ttwid/union/register/"
 DOUYIN_OPEN_ORIGIN = "https://open.douyin.com"
 DOUYIN_REFERER = "https://www.douyin.com/"
@@ -439,3 +440,52 @@ class DouyinWebClient:
             item_id,
             referer=referer,
         )
+
+    async def fetch_comments(
+        self,
+        session: aiohttp.ClientSession,
+        item_id: str,
+        cursor: int = 0,
+        count: int = 20,
+    ) -> Dict[str, Any]:
+        """使用现有匿名身份和签名读取一页作品评论。
+
+        Args:
+            session: HTTP 会话。
+            item_id: 已校验的目标作品 ID。
+            cursor: 评论分页游标。
+            count: 单页请求数量。
+
+        Returns:
+            通过业务状态检查的评论响应。
+        """
+        identity = await self._get_identity(session)
+        if identity is None:
+            raise RuntimeError("抖音评论请求未取得匿名身份")
+        params = self._build_params(item_id)
+        params.update({"cursor": cursor, "count": count, "item_type": 0})
+        param_string = urlencode(params)
+        signature = generate_abogus(
+            param_string,
+            body="",
+            user_agent=DOUYIN_WEB_USER_AGENT,
+            options=[0, 1, 8],
+            fp=identity.browser_fp,
+        )
+        headers = {
+            "User-Agent": DOUYIN_WEB_USER_AGENT,
+            "Referer": f"https://www.douyin.com/video/{item_id}",
+            "Accept": "application/json, text/plain, */*",
+            "Cookie": f"ttwid={identity.ttwid}",
+        }
+        async with session.get(
+            f"{DOUYIN_COMMENT_API}?{param_string}&a_bogus={signature}",
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"抖音评论请求失败（HTTP {response.status}）")
+            data = await response.json(content_type=None)
+        if not isinstance(data, dict) or data.get("status_code") not in (0, "0"):
+            raise RuntimeError("抖音评论接口未返回有效数据")
+        return data

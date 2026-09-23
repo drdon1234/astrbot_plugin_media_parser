@@ -42,8 +42,14 @@ HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 class TikTokParser(BaseVideoParser):
     """TikTok 解析器实现。"""
 
-    def __init__(self, use_proxy: bool = False, proxy_url: str = None):
+    def __init__(
+        self, use_proxy: bool = False, proxy_url: str = None, hot_comment_count: int = 0
+    ) -> None:
         super().__init__("tiktok")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.use_proxy = bool(use_proxy)
         self.proxy_url = proxy_url
         self.tiktok_headers = {
@@ -92,7 +98,7 @@ class TikTokParser(BaseVideoParser):
             if timestamp > 10 ** 12:
                 timestamp //= 1000
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        except (TypeError, ValueError, OSError):
+        except (TypeError, ValueError, OSError, OverflowError):
             return ""
 
     @staticmethod
@@ -600,6 +606,7 @@ class TikTokParser(BaseVideoParser):
         )
         item_id = str(item_info.get("id") or "").strip()
         return {
+            "item_id": item_id,
             "title": title,
             "author": self._build_tiktok_author(nickname, unique_id),
             "timestamp": self._format_timestamp(
@@ -785,6 +792,82 @@ class TikTokParser(BaseVideoParser):
             ),
         }
 
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, item_id: str
+    ) -> List[Dict[str, Any]]:
+        """复用现有代理读取默认排序评论，失败时仅跳过后续评论。"""
+        if self.hot_comment_count <= 0 or not re.fullmatch(r"[0-9]+", item_id):
+            return []
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        cursor = 0
+        for _ in range(10):
+            try:
+                async with session.get(
+                    "https://www.tiktok.com/api/comment/list/",
+                    params={"aid": "1988", "aweme_id": item_id, "cursor": cursor, "count": 20},
+                    headers=self.tiktok_headers,
+                    proxy=self._get_proxy(),
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"TikTok 评论请求失败（HTTP {response.status}）")
+                    data = await response.json(content_type=None)
+                if not isinstance(data, dict) or data.get("status_code") not in (0, "0"):
+                    raise RuntimeError("TikTok 评论接口未返回有效数据")
+                items = data.get("comments")
+                if items is None:
+                    break
+                if not isinstance(items, list):
+                    raise RuntimeError("TikTok 评论列表格式错误")
+                previous_count = len(seen)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    comment_id = str(item.get("cid") or "")
+                    if (
+                        not comment_id or comment_id in seen
+                        or str(item.get("aweme_id") or "") != item_id
+                    ):
+                        continue
+                    seen.add(comment_id)
+                    message = str(item.get("text") or "").strip()
+                    if item.get("image_list"):
+                        message = (message + "\n[图片]").strip()
+                    if item.get("sticker"):
+                        message = (message + "\n[表情]").strip()
+                    if not message:
+                        continue
+                    user = item.get("user")
+                    user = user if isinstance(user, dict) else {}
+                    try:
+                        likes = max(0, int(item.get("digg_count") or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        likes = 0
+                    comments.append({
+                        "id": comment_id,
+                        "username": str(user.get("nickname") or user.get("unique_id") or ""),
+                        "uid": str(user.get("uid") or ""),
+                        "likes": likes,
+                        "message": message,
+                        "time": self._format_timestamp(item.get("create_time")),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                next_cursor = int(data.get("cursor") or 0)
+                if (
+                    str(data.get("has_more")) not in {"1", "True"}
+                    or next_cursor <= cursor or len(seen) == previous_count
+                ):
+                    break
+                cursor = next_cursor
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+                logger.warning(f"[{self.name}] 获取评论失败，保留正文：{exc}")
+                break
+        return comments
+
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
@@ -803,6 +886,8 @@ class TikTokParser(BaseVideoParser):
             display_url = result.get("display_url", url)
             user_agent = result.get("user_agent", TIKTOK_USER_AGENT)
             headers = self._build_result_headers(user_agent)
+            comments = await self._fetch_hot_comments(session, result.get("item_id", ""))
+            comment_fields = {"hot_comments": comments} if comments else {}
             proxy_fields = {}
             for key in ("use_image_proxy", "use_video_proxy", "proxy_url"):
                 if key in result:
@@ -824,6 +909,7 @@ class TikTokParser(BaseVideoParser):
                     "image_headers": headers["image_headers"],
                     "video_headers": headers["video_headers"],
                     **proxy_fields,
+                    **comment_fields,
                 }
 
             if not video_url_list:
@@ -842,6 +928,7 @@ class TikTokParser(BaseVideoParser):
                 "image_headers": headers["image_headers"],
                 "video_headers": headers["video_headers"],
                 **proxy_fields,
+                **comment_fields,
             }
             logger.debug(
                 f"[{self.name}] parse: 解析完成(tiktok) {url}, title={title[:50]}"

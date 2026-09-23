@@ -419,16 +419,26 @@
             "hot_comments": {
                 "description": "附加内容：热评",
                 "type": "object",
-                "hint": "仅对输出模式包含文本的支持平台生效；先将条数设为大于 0，下面的平台开关才有作用。",
+                "hint": "仅对输出模式包含文本的支持平台生效；先将条数设为大于 0。优先热门或精选评论，没有此类排序时可展示普通评论或游戏评价。",
                 "items": {
                     "count": {
                         "description": "热评条数",
                         "type": "int",
-                        "hint": "填 0 不获取热评；大于 0 后再按下面的平台开关选择来源。",
+                        "hint": "填 0 不获取热评；大于 0 后按平台开关选择来源。实际数量受平台公开范围、分页和风控限制，可能少于设置值。",
                         "default": 0
                     },
                     "bilibili": {
                         "description": "B站",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "douyin": {
+                        "description": "抖音",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "acfun": {
+                        "description": "AcFun",
                         "type": "bool",
                         "default": true
                     },
@@ -442,6 +452,36 @@
                         "type": "bool",
                         "default": true
                     },
+                    "xianyu": {
+                        "description": "闲鱼",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "toutiao": {
+                        "description": "今日头条",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "xiaoheihe": {
+                        "description": "小黑盒",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "xueqiu": {
+                        "description": "雪球",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "zhihu": {
+                        "description": "知乎",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "tieba": {
+                        "description": "百度贴吧",
+                        "type": "bool",
+                        "default": true
+                    },
                     "hupu": {
                         "description": "虎扑",
                         "type": "bool",
@@ -449,6 +489,26 @@
                     },
                     "douban": {
                         "description": "豆瓣",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "tiktok": {
+                        "description": "TikTok",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "youtube": {
+                        "description": "YouTube",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "steam": {
+                        "description": "Steam",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "pixiv": {
+                        "description": "Pixiv",
                         "type": "bool",
                         "default": true
                     }

@@ -68,13 +68,21 @@ class ToutiaoParser(BaseVideoParser):
         re.IGNORECASE,
     )
 
-    def __init__(self, article_image_refreshes: int = MAX_ARTICLE_IMAGE_REFRESHES):
+    def __init__(
+        self,
+        article_image_refreshes: int = MAX_ARTICLE_IMAGE_REFRESHES,
+        hot_comment_count: int = 0,
+    ) -> None:
         super().__init__("toutiao")
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         try:
             self.article_image_refreshes = max(1, int(article_image_refreshes))
         except (TypeError, ValueError):
             self.article_image_refreshes = MAX_ARTICLE_IMAGE_REFRESHES
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
 
     def can_parse(self, url: str) -> bool:
         """判断是否可以解析今日头条链接。"""
@@ -324,7 +332,7 @@ class ToutiaoParser(BaseVideoParser):
             if timestamp > 10**12:
                 timestamp //= 1000
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        except (TypeError, ValueError, OSError):
+        except (TypeError, ValueError, OverflowError, OSError):
             return ""
 
     @staticmethod
@@ -700,9 +708,96 @@ class ToutiaoParser(BaseVideoParser):
             else:
                 raise SkipParse("不支持的今日头条内容类型")
 
+            if self.hot_comment_count:
+                session_config = state.get("sessionConfig")
+                session_config = session_config if isinstance(session_config, dict) else {}
+                group_id = self._first_non_empty(
+                    session_config.get("groupId"),
+                    article_info.get("gid"), article_info.get("groupId"),
+                    article_info.get("group_id"),
+                    self._get_thread_base(article_info).get("groupId"),
+                    content_id,
+                )
+                comments = await self._fetch_hot_comments(session, group_id, page_url)
+                if comments:
+                    metadata["hot_comments"] = comments
+
             logger.debug(
                 f"[{self.name}] parse: 解析完成 {url}, "
                 f"video_count={len(metadata.get('video_urls', []))}, "
                 f"image_count={len(metadata.get('image_urls', []))}"
             )
             return metadata
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, group_id: str, referer: str
+    ) -> List[Dict[str, Any]]:
+        """按页面作品分组 ID 读取平台热度列表，保留返回顺序。"""
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        offset = 0
+        if not self.hot_comment_count or not re.fullmatch(r"\d+", group_id):
+            return comments
+        for _ in range(5):
+            try:
+                async with session.get(
+                    "https://api.toutiaoapi.com/article/v4/tab_comments/",
+                    params={
+                        "group_id": group_id, "tab_index": "0", "aid": "13",
+                        "count": "20", "offset": str(offset),
+                    },
+                    headers=self._build_vod_headers(referer),
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as response:
+                    response.raise_for_status()
+                    payload = await response.json(content_type=None)
+                if not isinstance(payload, dict) or str(
+                    payload.get("err_no", "0")
+                ) != "0":
+                    raise RuntimeError("今日头条评论接口返回错误")
+                group = payload.get("group")
+                if isinstance(group, dict) and group.get("group_id") not in (None, ""):
+                    if str(group["group_id"]) != group_id:
+                        raise RuntimeError("今日头条评论响应不属于当前作品")
+                items = payload.get("data")
+                if not isinstance(items, list):
+                    raise RuntimeError("今日头条评论响应缺少列表")
+                previous_count = len(seen)
+                for item in items:
+                    comment = item.get("comment") if isinstance(item, dict) else None
+                    if not isinstance(comment, dict):
+                        continue
+                    comment_id = str(comment.get("id_str") or comment.get("id") or "")
+                    message = str(comment.get("text") or "").strip()
+                    if comment.get("large_image_list") or comment.get("thumb_image_list"):
+                        message = (message + "\n[图片]").strip()
+                    if not comment_id or comment_id in seen or not message:
+                        continue
+                    seen.add(comment_id)
+                    try:
+                        likes = max(0, int(comment.get("digg_count") or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        likes = 0
+                    comments.append({
+                        "id": comment_id,
+                        "username": str(comment.get("user_name") or ""),
+                        "uid": str(comment.get("user_id") or ""),
+                        "likes": likes,
+                        "message": message,
+                        "time": self._format_timestamp(comment.get("create_time")),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                next_offset = int(payload.get("offset") or 0)
+                if (
+                    len(seen) == previous_count or next_offset <= offset
+                    or str(payload.get("has_more", False)).lower() not in {"true", "1"}
+                ):
+                    break
+                offset = next_offset
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OverflowError) as exc:
+                logger.warning(f"[{self.name}] 评论获取失败，已保留作品正文：{exc}")
+                break
+        return comments

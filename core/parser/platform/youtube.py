@@ -52,14 +52,20 @@ class YoutubeParser(BaseVideoParser):
         self,
         use_proxy: bool = False,
         proxy_url: Optional[str] = None,
-    ):
+        hot_comment_count: int = 0,
+    ) -> None:
         """初始化 YouTube 解析器。
 
         Args:
             use_proxy: 解析与视频下载是否使用代理。
             proxy_url: 代理地址。
+            hot_comment_count: 最多读取的根评论数量，0 表示关闭。
         """
         super().__init__("youtube")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.use_proxy = bool(use_proxy)
         self.proxy_url = proxy_url if self.use_proxy else None
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
@@ -265,6 +271,210 @@ class YoutubeParser(BaseVideoParser):
         if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
             return None
         return value.strip()
+
+    # ── 评论 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _page_json_objects(page: str, pattern: str) -> Iterable[Dict[str, Any]]:
+        """解码页面脚本赋值中的完整 JSON 对象。"""
+        decoder = json.JSONDecoder()
+        for match in re.finditer(pattern, page):
+            try:
+                value, _ = decoder.raw_decode(page[match.end():].lstrip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                yield value
+
+    @staticmethod
+    def _walk_dicts(value: Any) -> Iterable[Dict[str, Any]]:
+        """遍历页面状态中的字典以定位评论面板。"""
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from YoutubeParser._walk_dicts(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from YoutubeParser._walk_dicts(child)
+
+    @staticmethod
+    def _continuation_token(endpoint: Any) -> str:
+        """读取已定位的评论入口令牌。"""
+        if not isinstance(endpoint, dict):
+            return ""
+        command = endpoint.get("continuationCommand")
+        if not isinstance(command, dict):
+            return ""
+        token = command.get("token")
+        return token if isinstance(token, str) else ""
+
+    @classmethod
+    def _initial_comment_token(cls, initial: Dict[str, Any]) -> str:
+        """优先使用评论面板的热门入口，否则使用根评论默认入口。"""
+        fallback = ""
+        for node in cls._walk_dicts(initial):
+            panel = node.get("engagementPanelSectionListRenderer")
+            header = node.get("commentsHeaderRenderer")
+            if isinstance(panel, dict) and "comments-section" in str(panel.get("targetId")):
+                header = panel.get("header")
+            if isinstance(header, dict):
+                for child in cls._walk_dicts(header):
+                    menu = child.get("sortFilterSubMenuRenderer")
+                    if not isinstance(menu, dict):
+                        continue
+                    entries = menu.get("subMenuItems")
+                    if not isinstance(entries, list):
+                        continue
+                    entries = [item for item in entries if isinstance(item, dict)]
+                    preferred = [item for item in entries if re.search(
+                        r"top|热门|熱門|最佳|相关|相關", str(item.get("title") or ""), re.I
+                    )]
+                    for item in preferred + entries:
+                        token = cls._continuation_token(item.get("serviceEndpoint"))
+                        if token:
+                            return token
+            section = node.get("itemSectionRenderer")
+            if not isinstance(section, dict) or section.get("sectionIdentifier") != "comment-item-section":
+                continue
+            entries = section.get("contents")
+            for item in entries if isinstance(entries, list) else []:
+                continuation = item.get("continuationItemRenderer") if isinstance(item, dict) else None
+                if isinstance(continuation, dict) and not fallback:
+                    fallback = cls._continuation_token(continuation.get("continuationEndpoint"))
+        return fallback
+
+    @classmethod
+    def _comment_page(
+        cls, payload: Dict[str, Any]
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """按根评论呈现顺序关联实体，仅提取根列表的下一页令牌。"""
+        entities = {}
+        for node in cls._walk_dicts(payload.get("frameworkUpdates")):
+            entity = node.get("commentEntityPayload")
+            if isinstance(entity, dict) and isinstance(entity.get("key"), str):
+                entities[entity["key"]] = entity
+        items: List[Dict[str, Any]] = []
+        for key in ("onResponseReceivedEndpoints", "onResponseReceivedActions"):
+            endpoints = payload.get(key)
+            for endpoint in endpoints if isinstance(endpoints, list) else []:
+                if not isinstance(endpoint, dict):
+                    continue
+                for command_name in ("reloadContinuationItemsCommand", "appendContinuationItemsAction"):
+                    command = endpoint.get(command_name)
+                    if not isinstance(command, dict):
+                        continue
+                    if "comments-section" not in str(command.get("targetId") or ""):
+                        continue
+                    values = command.get("continuationItems")
+                    if isinstance(values, list):
+                        items.extend(item for item in values if isinstance(item, dict))
+        comments = []
+        next_token = ""
+        for item in items:
+            continuation = item.get("continuationItemRenderer")
+            if isinstance(continuation, dict):
+                next_token = cls._continuation_token(continuation.get("continuationEndpoint"))
+                continue
+            thread = item.get("commentThreadRenderer")
+            if not isinstance(thread, dict):
+                continue
+            container = thread.get("commentViewModel")
+            view = container.get("commentViewModel") if isinstance(container, dict) else None
+            if not isinstance(view, dict):
+                continue
+            entity = entities.get(view.get("commentKey"))
+            if not isinstance(entity, dict):
+                continue
+            properties = entity.get("properties")
+            if not isinstance(properties, dict) or properties.get("replyLevel", 0) != 0:
+                continue
+            comment_id = str(properties.get("commentId") or "")
+            if not comment_id or (view.get("commentId") and view["commentId"] != comment_id):
+                continue
+            content = properties.get("content")
+            message = str(content.get("content") or "").strip() if isinstance(content, dict) else ""
+            if not message:
+                continue
+            author = entity.get("author")
+            author = author if isinstance(author, dict) else {}
+            comment = {
+                "id": comment_id,
+                "uid": str(author.get("channelId") or ""),
+                "username": str(author.get("displayName") or ""),
+                "message": message,
+                "time": str(properties.get("publishedTime") or ""),
+            }
+            toolbar = entity.get("toolbar")
+            if isinstance(toolbar, dict):
+                likes = toolbar.get("likeCountNotliked")
+                if isinstance(likes, (str, int)) and str(likes).strip():
+                    comment["likes"] = likes
+            comments.append(comment)
+        return comments, next_token
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, page: str, canonical_url: str
+    ) -> List[Dict[str, Any]]:
+        """复用观看页网页客户端上下文，有限读取热门根评论。"""
+        comments: List[Dict[str, Any]] = []
+        if not self.hot_comment_count:
+            return comments
+        try:
+            config: Dict[str, Any] = {}
+            for value in self._page_json_objects(page, r"ytcfg\.set\s*\("):
+                config.update(value)
+            initial = next(self._page_json_objects(page, r"\bytInitialData\s*="), {})
+            context = config.get("INNERTUBE_CONTEXT")
+            client = context.get("client") if isinstance(context, dict) else None
+            if not isinstance(client, dict):
+                return comments
+            token = self._initial_comment_token(initial)
+            seen_tokens = set()
+            seen_ids = set()
+            headers = {
+                "User-Agent": str(client.get("userAgent") or DESKTOP_USER_AGENT),
+                "Origin": "https://www.youtube.com",
+                "Referer": canonical_url,
+                "X-Youtube-Client-Name": str(config.get("INNERTUBE_CONTEXT_CLIENT_NAME") or 1),
+                "X-Youtube-Client-Version": str(client.get("clientVersion") or ""),
+            }
+            if client.get("visitorData"):
+                headers["X-Goog-Visitor-Id"] = str(client["visitorData"])
+            params = {"prettyPrint": "false"}
+            if config.get("INNERTUBE_API_KEY"):
+                params["key"] = str(config["INNERTUBE_API_KEY"])
+            for _ in range(20):
+                if not token or token in seen_tokens:
+                    break
+                seen_tokens.add(token)
+                async with session.post(
+                    "https://www.youtube.com/youtubei/v1/next",
+                    params=params,
+                    json={"context": context, "continuation": token},
+                    headers=headers,
+                    proxy=self.proxy_url,
+                    timeout=aiohttp.ClientTimeout(total=25),
+                ) as response:
+                    response.raise_for_status()
+                    payload = await response.json(content_type=None)
+                if not isinstance(payload, dict) or payload.get("error"):
+                    raise RuntimeError("YouTube 评论接口未返回有效数据")
+                entries, token = self._comment_page(payload)
+                previous_count = len(seen_ids)
+                for comment in entries:
+                    if comment["id"] in seen_ids:
+                        continue
+                    seen_ids.add(comment["id"])
+                    comments.append(comment)
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                if entries and len(seen_ids) == previous_count:
+                    break
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, TypeError, ValueError, RecursionError) as exc:
+            logger.warning(f"[{self.name}] 评论获取失败，已保留视频：{exc}")
+        return comments
 
     @staticmethod
     def _format_number(value: Any) -> int:
@@ -499,6 +709,10 @@ class YoutubeParser(BaseVideoParser):
                 "use_video_proxy": bool(self.proxy_url),
                 "proxy_url": self.proxy_url,
             }
+            if self.hot_comment_count:
+                comments = await self._fetch_hot_comments(session, page, canonical_url)
+                if comments:
+                    metadata["hot_comments"] = comments
             logger.debug(
                 f"[{self.name}] 解析完成 video_id={video_id}, "
                 f"候选数={len(video_urls)}, title={title[:50]}"

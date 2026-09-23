@@ -100,7 +100,8 @@ def _format_hot_comments(value: Any) -> list[str]:
                     ("likes", "点赞"),
                     ("time", "时间"),
                 ):
-                    text = str(item.get(key) or "").strip()
+                    raw_value = item.get(key)
+                    text = str(raw_value).strip() if raw_value is not None else ""
                     if text:
                         attributes.append(f"{label}={text}")
                 suffix = f"（{'，'.join(attributes)}）" if attributes else ""

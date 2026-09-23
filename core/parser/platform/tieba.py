@@ -120,10 +120,14 @@ def _video_url(value: Any) -> str:
 class TiebaParser(BaseVideoParser):
     """解析百度贴吧帖子首楼，支持图文、动图与原生视频。"""
 
-    def __init__(self) -> None:
+    def __init__(self, hot_comment_count: int = 0) -> None:
         """初始化贴吧解析器及并发限制。"""
         super().__init__("tieba")
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
 
     def can_parse(self, url: str) -> bool:
         """判断是否为可解析的贴吧帖子链接。
@@ -162,17 +166,22 @@ class TiebaParser(BaseVideoParser):
         self,
         session: aiohttp.ClientSession,
         thread_id: str,
+        *,
+        hot_comments: bool = False,
+        page: int = 1,
     ) -> Dict[str, Any]:
         """请求帖子第一页，以客户端完整内容字段获取首楼。"""
         data = {
             "_client_type": "2",
             "_client_version": CLIENT_VERSION,
             "kz": thread_id,
-            "lz": "1",
-            "pn": "1",
-            "rn": "2",
+            "lz": "0" if hot_comments else "1",
+            "pn": str(page),
+            "rn": "30" if hot_comments else "2",
             "with_floor": "0",
         }
+        if hot_comments:
+            data["r"] = "2"
         signature = "".join(f"{key}={data[key]}" for key in sorted(data)) + "tiebaclient!!!"
         data["sign"] = hashlib.md5(signature.encode("utf-8")).hexdigest().upper()
         try:
@@ -287,8 +296,8 @@ class TiebaParser(BaseVideoParser):
         return list(dict.fromkeys(url for value in values if (url := _video_url(value))))
 
     @staticmethod
-    def _fragment_text(fragment: Dict[str, Any]) -> str:
-        """提取正文文字、链接卡片和表情含义。"""
+    def _fragment_text(fragment: Dict[str, Any], media_labels: bool = False) -> str:
+        """提取正文文字、链接卡片和表情含义，评论媒体仅显示类型提示。"""
         kind = str(fragment.get("type", ""))
         value = fragment.get("text")
         text = html.unescape(value) if isinstance(value, str) else ""
@@ -312,7 +321,9 @@ class TiebaParser(BaseVideoParser):
                 return f"[{html.unescape(label.strip())}]"
             return ""
         if kind == "10":
-            return "\n[语音内容请打开原帖收听]\n"
+            return "[语音]" if media_labels else "\n[语音内容请打开原帖收听]\n"
+        if media_labels and kind in {"3", "16", "20", "5"}:
+            return "[视频]" if kind == "5" else "[图片]"
         return ""
 
     @staticmethod
@@ -474,6 +485,90 @@ class TiebaParser(BaseVideoParser):
         elif len(metadata["video_urls"]) > 1:
             metadata.pop("timelength_ms", None)
 
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, thread_id: str, first_post_id: str
+    ) -> List[Dict[str, Any]]:
+        """优先请求热门回复，也接受平台回退的普通回复，保留原始顺序。"""
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        for page_number in range(1, 21):
+            if len(comments) >= self.hot_comment_count:
+                break
+            try:
+                payload = await self._fetch_thread(
+                    session, thread_id, hot_comments=True, page=page_number
+                )
+                thread = payload.get("thread")
+                if not isinstance(thread, dict) or str(thread.get("id", "")) != thread_id:
+                    raise RuntimeError("贴吧热评响应的帖子身份不一致")
+                # 部分帖子没有热门选项，接口回退的普通回复同样可以展示。
+                posts = payload.get("post_list")
+                if not isinstance(posts, list):
+                    raise RuntimeError("贴吧热评响应缺少回复列表")
+                users = payload.get("user_list")
+                users = {
+                    str(user.get("id", "")): user for user in users
+                    if isinstance(user, dict)
+                } if isinstance(users, list) else {}
+                previous_count = len(seen)
+                for post in posts:
+                    if not isinstance(post, dict):
+                        continue
+                    post_id = str(post.get("id", ""))
+                    if (
+                        not THREAD_ID_RE.fullmatch(post_id)
+                        or post_id == first_post_id or post_id in seen
+                        or str(post.get("floor", "")) == "1"
+                    ):
+                        continue
+                    seen.add(post_id)
+                    content = post.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    message = self._clean_text("".join(
+                        self._fragment_text(fragment, media_labels=True)
+                        for fragment in content if isinstance(fragment, dict)
+                    ))
+                    if not message:
+                        continue
+                    uid = str(post.get("author_id", ""))
+                    author = self._author_name({"author": users.get(uid, {})}, post, {})
+                    agree = post.get("agree")
+                    try:
+                        likes = (
+                            max(0, int(agree.get("agree_num") or 0))
+                            if isinstance(agree, dict) else 0
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        likes = 0
+                    comments.append({
+                        "id": post_id,
+                        "username": author,
+                        "uid": uid,
+                        "likes": likes,
+                        "message": message,
+                        "time": self._format_timestamp(post.get("time")),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        break
+                page_info = payload.get("page")
+                page_info = page_info if isinstance(page_info, dict) else {}
+                try:
+                    total_pages = int(page_info.get("total_page") or 1)
+                except (TypeError, ValueError, OverflowError):
+                    total_pages = 1
+                if (
+                    len(seen) == previous_count or page_number >= total_pages
+                    or str(page_info.get("has_more", "0")) != "1"
+                ):
+                    break
+            except asyncio.CancelledError:
+                raise
+            except (RuntimeError, ValueError) as exc:
+                logger.warning(f"[{self.name}] 热评获取失败，已保留帖子正文：{exc}")
+                break
+        return comments
+
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
@@ -497,6 +592,12 @@ class TiebaParser(BaseVideoParser):
             payload = await self._fetch_thread(session, thread_id)
             metadata = self._build_metadata(thread_id, payload)
             await self._append_shared_post(session, payload["thread"], metadata)
+            if self.hot_comment_count:
+                comments = await self._fetch_hot_comments(
+                    session, thread_id, str(payload["thread"].get("post_id", ""))
+                )
+                if comments:
+                    metadata["hot_comments"] = comments
             logger.debug(
                 f"[{self.name}] 解析完成：{thread_id}，"
                 f"图片 {len(metadata['image_urls'])} 张，视频 {len(metadata['video_urls'])} 个"

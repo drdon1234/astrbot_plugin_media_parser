@@ -31,8 +31,12 @@ HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 class DouyinParser(BaseVideoParser):
     """抖音解析器实现。"""
 
-    def __init__(self):
+    def __init__(self, hot_comment_count: int = 0) -> None:
         super().__init__("douyin")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.douyin_headers = {
             "User-Agent": DOUYIN_USER_AGENT,
             "Referer": ("https://www.douyin.com/?is_from_mobile_home=1&recommend=1"),
@@ -77,7 +81,7 @@ class DouyinParser(BaseVideoParser):
             if timestamp > 10 ** 12:
                 timestamp //= 1000
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        except (TypeError, ValueError, OSError):
+        except (TypeError, ValueError, OSError, OverflowError):
             return ""
 
     @staticmethod
@@ -588,6 +592,7 @@ class DouyinParser(BaseVideoParser):
         ) = self._extract_douyin_media_url_lists(item_info)
 
         return {
+            "item_id": str(item_info.get("aweme_id") or item_info.get("id") or ""),
             "title": item_info.get("desc", ""),
             "author": self._build_douyin_author(nickname, unique_id),
             "timestamp": self._format_timestamp(item_info.get("create_time")),
@@ -860,6 +865,71 @@ class DouyinParser(BaseVideoParser):
             ),
         }
 
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, item_id: str
+    ) -> List[Dict[str, Any]]:
+        """按平台默认顺序读取评论，保留成功页且限制额外请求数量。"""
+        if self.hot_comment_count <= 0 or not re.fullmatch(r"[0-9]+", item_id):
+            return []
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        cursor = 0
+        for _ in range(10):
+            try:
+                data = await self.web_client.fetch_comments(session, item_id, cursor, 20)
+                items = data.get("comments")
+                if items is None:
+                    break
+                if not isinstance(items, list):
+                    raise RuntimeError("抖音评论列表格式错误")
+                previous_count = len(seen)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    comment_id = str(item.get("cid") or "")
+                    if (
+                        not comment_id or comment_id in seen
+                        or str(item.get("aweme_id") or "") != item_id
+                    ):
+                        continue
+                    seen.add(comment_id)
+                    message = str(item.get("text") or "").strip()
+                    if item.get("image_list"):
+                        message = (message + "\n[图片]").strip()
+                    if item.get("sticker"):
+                        message = (message + "\n[表情]").strip()
+                    if not message:
+                        continue
+                    user = item.get("user")
+                    user = user if isinstance(user, dict) else {}
+                    try:
+                        likes = max(0, int(item.get("digg_count") or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        likes = 0
+                    comments.append({
+                        "id": comment_id,
+                        "username": str(user.get("nickname") or ""),
+                        "uid": str(user.get("uid") or ""),
+                        "likes": likes,
+                        "message": message,
+                        "time": self._format_timestamp(item.get("create_time")),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                next_cursor = int(data.get("cursor") or 0)
+                if (
+                    str(data.get("has_more")) not in {"1", "True"}
+                    or next_cursor <= cursor or len(seen) == previous_count
+                ):
+                    break
+                cursor = next_cursor
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+                logger.warning(f"[{self.name}] 获取评论失败，保留正文：{exc}")
+                break
+        return comments
+
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
@@ -898,6 +968,8 @@ class DouyinParser(BaseVideoParser):
             display_url = result.get("display_url", url)
             user_agent = result.get("user_agent", DOUYIN_USER_AGENT)
             headers = self._build_result_headers(user_agent)
+            comments = await self._fetch_hot_comments(session, result.get("item_id", ""))
+            comment_fields = {"hot_comments": comments} if comments else {}
 
             if is_gallery and not video_url_lists:
                 logger.debug(
@@ -915,6 +987,7 @@ class DouyinParser(BaseVideoParser):
                     "image_urls": image_url_lists,
                     "image_headers": headers["image_headers"],
                     "video_headers": headers["video_headers"],
+                    **comment_fields,
                 }
 
             if not video_url_lists:
@@ -933,6 +1006,7 @@ class DouyinParser(BaseVideoParser):
                 "image_urls": image_url_lists,
                 "image_headers": headers["image_headers"],
                 "video_headers": headers["video_headers"],
+                **comment_fields,
             }
             logger.debug(
                 f"[{self.name}] parse: 解析完成(douyin) {url}, title={title[:50]}"

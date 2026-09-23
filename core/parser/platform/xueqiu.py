@@ -81,9 +81,13 @@ def _parse_status_identity(url: str) -> Tuple[str, str]:
 class XueqiuParser(BaseVideoParser):
     """雪球帖子解析器。"""
 
-    def __init__(self):
+    def __init__(self, hot_comment_count: int = 0) -> None:
         super().__init__("xueqiu")
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
 
     # ── URL 匹配 ──────────────────────────────────────────
 
@@ -217,12 +221,28 @@ class XueqiuParser(BaseVideoParser):
         Raises:
             RuntimeError: 接口返回业务错误、身份不一致或响应不可用
         """
+        payload = await self._fetch_api(
+            session, XUEQIU_STATUS_API, {"id": status_id}, referer
+        )
+        returned_id = payload.get("id")
+        if returned_id in (None, "") or str(returned_id) != str(status_id):
+            raise RuntimeError("雪球详情接口返回了其他帖子的数据")
+        return payload
+
+    async def _fetch_api(
+        self,
+        session: aiohttp.ClientSession,
+        api_url: str,
+        params: Dict[str, str],
+        referer: str,
+    ) -> Dict[str, Any]:
+        """复用访客会话读取详情或评论，令牌失效时重新申请一次。"""
         headers = self._build_api_headers(referer)
         for attempt in range(2):
             await self._ensure_guest_token(session, force=attempt > 0)
             async with session.get(
-                XUEQIU_STATUS_API,
-                params={"id": status_id},
+                api_url,
+                params=params,
                 headers=headers,
             ) as response:
                 status_code = response.status
@@ -232,23 +252,85 @@ class XueqiuParser(BaseVideoParser):
             error_code = str(payload.get("error_code") or "").strip()
             if error_code in XUEQIU_TOKEN_ERROR_CODES and attempt == 0:
                 logger.debug(
-                    f"[{self.name}] 雪球访客令牌失效，重新申请后重试: sid={status_id}"
+                    f"[{self.name}] 雪球访客令牌失效，重新申请后重试"
                 )
                 continue
             if error_code:
                 error_desc = str(payload.get("error_description") or "").strip()
                 raise RuntimeError(
-                    f"雪球详情接口返回错误: {error_desc or '未知错误'}({error_code})"
+                    f"雪球接口返回错误: {error_desc or '未知错误'}({error_code})"
                 )
             if status_code != 200:
-                raise RuntimeError(f"雪球详情接口返回 HTTP {status_code}")
-
-            returned_id = payload.get("id")
-            if returned_id in (None, "") or str(returned_id) != str(status_id):
-                raise RuntimeError("雪球详情接口返回了其他帖子的数据")
+                raise RuntimeError(f"雪球接口返回 HTTP {status_code}")
             return payload
 
-        raise RuntimeError("雪球访客令牌失效，帖子详情获取失败")
+        raise RuntimeError("雪球访客令牌失效，接口获取失败")
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, status_id: str, referer: str
+    ) -> List[Dict[str, Any]]:
+        """先读取精选评论，再以普通评论补足，保持各来源返回顺序。"""
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        if not self.hot_comment_count:
+            return comments
+        for endpoint in ("comments_excellent", "comments"):
+            source_seen = set()
+            for page in range(1, 6):
+                try:
+                    params = {"id": status_id, "count": "20", "page": str(page)}
+                    if endpoint == "comments":
+                        params.update({"reply": "true", "asc": "false"})
+                    payload = await asyncio.wait_for(
+                        self._fetch_api(
+                            session, f"https://api.xueqiu.com/statuses/{endpoint}.json",
+                            params, referer,
+                        ),
+                        timeout=15,
+                    )
+                    items = payload.get("comments")
+                    if not isinstance(items, list):
+                        raise RuntimeError("雪球评论响应缺少列表")
+                    previous_count = len(source_seen)
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        parent_id = item.get("root_in_reply_to_status_id")
+                        if parent_id not in (None, "") and str(parent_id) != status_id:
+                            continue
+                        comment_id = str(item.get("id") or "")
+                        if comment_id:
+                            source_seen.add(comment_id)
+                        message = self._clean_html_text(str(item.get("text") or ""))
+                        if item.get("pic"):
+                            message = (message + "\n[图片]").strip()
+                        if not comment_id or comment_id in seen or not message:
+                            continue
+                        seen.add(comment_id)
+                        user = item.get("user")
+                        user = user if isinstance(user, dict) else {}
+                        try:
+                            likes = max(0, int(item.get("like_count") or 0))
+                        except (TypeError, ValueError, OverflowError):
+                            likes = 0
+                        comments.append({
+                            "id": comment_id,
+                            "username": str(user.get("screen_name") or ""),
+                            "uid": str(user.get("id") or item.get("user_id") or ""),
+                            "likes": likes,
+                            "message": message,
+                            "time": self._format_timestamp(item.get("created_at")),
+                        })
+                        if len(comments) >= self.hot_comment_count:
+                            return comments
+                    if len(source_seen) == previous_count or page >= int(payload.get("maxPage") or 1):
+                        break
+                except asyncio.CancelledError:
+                    raise
+                except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OverflowError) as exc:
+                    logger.warning(f"[{self.name}] 评论获取失败，已保留帖子正文：{exc}")
+                    break
+        return comments
 
     # ── 文本处理 ──────────────────────────────────────────
 
@@ -270,7 +352,7 @@ class XueqiuParser(BaseVideoParser):
             if timestamp > 10**12:
                 timestamp //= 1000
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        except (TypeError, ValueError, OSError):
+        except (TypeError, ValueError, OverflowError, OSError):
             return ""
 
     @staticmethod
@@ -599,6 +681,11 @@ class XueqiuParser(BaseVideoParser):
             for url_item in candidates
         ):
             metadata["video_force_download"] = True
+
+        if self.hot_comment_count:
+            comments = await self._fetch_hot_comments(session, status_id, page_url)
+            if comments:
+                metadata["hot_comments"] = comments
 
         logger.debug(
             f"[{self.name}] parse: 解析完成 sid={status_id}, "

@@ -115,7 +115,7 @@ Cookie 是增强条件，不是前提。有 Cookie 时 Web 播放接口可能返
 
 ## 三、抖音
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 分享链常见入口是短链，展开后稳定目标通常是 `/video/{id}`、`/note/{id}` 或 `/slides/{id}`，三种形态分开处理。
 
@@ -145,6 +145,10 @@ HEAD 展开，失败再 GET 展开
 - slides 从 `slidesInfoRes` 或 `slidesinfo` 接口取混排条目。
 
 视频地址有一层转换：平台可能返回完整 URL，也可能只返回资源 ID，这时需要按播放接口格式补成可访问地址。图文图片结构可能多层嵌套，递归寻找常见 URL 字段，保留同一张图片的多个候选。slides 的 `images` 条目可能内嵌分段视频，必须先识别视频 URL 和封面 URL；只有确认是纯图片条目时才加入图片列表，避免把多分段视频误解析成图片。
+
+### 评论
+
+热评复用匿名 `ttwid` 与现有 `a_bogus` 签名，请求 `/aweme/v1/web/comment/list/`，按作品 ID 和游标读取平台默认顺序评论；图片与表情以文字标记展示。
 
 ## 四、快手
 
@@ -179,7 +183,7 @@ v.kuaishou.com / kuaishou.com / gifshow.com / chenzhongtech.com
 
 ## 五、AcFun
 
-支持能力：视频 / 图片 / 文本。
+支持能力：视频 / 图片 / 文本 / 热评。
 
 支持 `acfun.cn`、`www.acfun.cn`、`m.acfun.cn` 上的视频 `/v/ac{ID}`、多 P `/v/ac{ID}_{P}`、文章/动态 `/a/ac{ID}`、番剧 `/bangumi/aa{ID}` 和指定集 `/bangumi/aa{ID}_36188_{itemId}`，以及移动分享 `/v/?ac={ID}`（含分 P）。消息中的无协议链接和中文标点相邻链接也会提取。所有入口规范化为 HTTPS 桌面链接，移除追踪参数，保留决定内容的分 P、分集信息；同一作品的不同分 P 和同一番剧的不同集分别解析。
 
@@ -208,6 +212,10 @@ window.videoInfo / window.articleInfo / window.bangumiData
 文章正文按 HTML 结构读取：图片优先使用懒加载原图，同一 `<video>` 下的 `<source>` 合并为候选组，脚本与样式不进入正文。封面仅在正文没有图片和视频时补充。视频封面单独放入 `video_cover_urls`，不混入图集。
 
 当前只处理链接指定的单个播放单元或文章正文，不批量抓取整季、全部分 P，不支持直播、个人空间、独立音频或应用私有协议。页面和接口均属于上游网页协议，登录、地区与内容访问限制仍可能导致解析失败。
+
+### 评论
+
+普通视频投稿评论通过 `/rest/pc-direct/comment/list` 的 `sourceType=3` 获取，先展示 `hotComments`，再补充 `rootComments`，按评论 ID 去重。番剧和动态尚未接入评论，不能将其页面 ID 当作普通投稿评论资源 ID。
 
 ## 六、微博
 
@@ -280,7 +288,7 @@ xhslink.com / xhslink.cn / xiaohongshu.com
 
 ## 八、闲鱼
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 关键不是直接抓页面 HTML，是先稳定拿到 `itemId`，再复现 H5 前端调的详情接口。`m.tb.cn` 只是中转页，真正的商品入口通常落到 `h5.m.goofish.com/item`；PC 链接落到 `www.goofish.com/item`。
 
@@ -319,9 +327,13 @@ mtop.taobao.idle.awesome.detail
 - 如果详情 JSON 为同一商品暴露出多条播放类 URL，当前实现把它们视为同一视频的候选链路，不是多个独立视频项。
 - 只有平台规则变了、一个商品允许挂多个视频时，才需要重新设计分组逻辑。
 
+### 评论
+
+商品留言使用 `mtop.taobao.idle.comment.list` 版本 `5.0`，复用现有 MTop 匿名签名，参数按平台使用 `roesPerPage`。保留接口顺序和打码昵称；公开列表通常只返回 3 条，即便总数非零或标记还有下一页，也可能拿不到更多留言。
+
 ## 九、今日头条
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 稳定路径不是 PC 页壳，而是移动端 `m.toutiao.com` 页面。PC 文章页、视频页和微头条 `/w/...` 页面都可以作为入口，但可复用的结构化状态和视频取数线索都在移动端页里。QQ 小程序卡片通常通过 `message.meta.news.jumpUrl` 落到 `/w/<id>/` 微头条分享页。
 
@@ -395,9 +407,13 @@ Result.Data.PlayInfoList
 - 当前实现允许在解析阶段额外刷新页面几次，用新签名 URL 补充候选列表，但不会在 `parse()` 阶段直接探测或下载图片本体；媒体访问和缓存写入延后到下载层。
 - 优先用移动端页面里的结构化状态，不依赖 PC 壳页面或浏览器执行 JS。
 
+### 评论
+
+评论使用移动前端的 `https://api.toutiaoapi.com/article/v4/tab_comments/`，优先根据页面 `sessionConfig.groupId`，再用 `articleInfo.gid` 等字段确定 `group_id`，校验响应资源身份后分页读取，保留平台排序。文章、视频与微头条的完整解析和评论分页均已在线验证。
+
 ## 十、小黑盒
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 分两类：游戏详情页和 BBS/link 帖子。入口判断优先看能否提取帖子 `link_id`，否则按游戏 `appid/game_type` 处理。
 
@@ -448,9 +464,13 @@ game_introduction?steam_appid=...
 
 `proxy.xiaoheihe_video` 仅控制直接解析小黑盒时的视频下载，帖子和游戏详情接口不使用代理。Steam 委托小黑盒时，详情请求由 `proxy.steam.parse` 控制。
 
+### 评论
+
+帖子评论复用 `/bbs/app/link/tree`，以 `owner_only=0` 获取楼层，只将每楼首项作为主评论，排除楼中楼混入。PC 游戏评价使用 `/bbs/app/link/game/comments` 的 `sort_type=4`（有用），两条路线复用现有签名及请求代理。主机、手游评价尚未接入。
+
 ## 十一、雪球
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 稳定入口是帖子 ID。分享链形如 `xueqiu.com/{user_id}/{status_id}`，查询串里常挂 `md5__1038` 等 WAF/CDN 参数，只取路径即可，不需要展开重定向。
 
@@ -495,6 +515,10 @@ api.xueqiu.com/statuses/show.json?id={status_id}
 图片直链不需要 Referer 或 Cookie 即可下载，但仍按平台惯例携带帖子页 Referer。
 
 图文路径已按普通帖、长文、多图长文、转发帖和表情帖实测通过；视频路径按上述字段防御性实现，暂未取到公开视频帖样本验证。
+
+### 评论
+
+评论复用匿名访客令牌与失效重试，先请求 `api.xueqiu.com/statuses/comments_excellent.json` 的精选，再用 `comments.json` 普通评论补足；按评论 ID 去重。评论总数字段不等于本次实际取得数量。
 
 ## 十二、微信
 
@@ -572,6 +596,8 @@ data.feedInfo + data.authorInfo
 
 ## 十三、知乎
 
+支持能力：图片 / 文本 / 热评
+
 支持指定回答和专栏文章：回答使用 `https://api.zhihu.com/v4/answers/{answer_id}?include=content,author,question`，文章使用 `https://zhuanlan.zhihu.com/api/articles/{article_id}?ws_qiangzhisafe=0`。纯问题页不解析，避免在问题下误选回答。
 
 回答请求不携带登录 Cookie，只校验返回的回答 ID、问题 ID 和非空正文。回答正文按 HTML 结构提取文本，`br` 与块级标签转换为换行，正文图片优先使用懒加载原图属性，并保留知乎图片下载所需的 User-Agent 和 Referer。
@@ -580,9 +606,13 @@ data.feedInfo + data.authorInfo
 
 知乎解析器将自身并发限制为最多 2 个请求。文章接口遇到 403 或 429 时会使当前 `d_c0` 缓存失效，并在 1 秒后最多重新取访客值重试一次；匿名接口仍受知乎上游风控和限流影响，不能通过无限重试规避。接口字段、签名规则或匿名访问策略变化时需要重新验证。
 
+### 评论
+
+回答和专栏评论分别请求 `/api/v4/comment_v5/answers/{id}/root_comment` 与 `/api/v4/comment_v5/articles/{id}/root_comment`，使用 `order=score`，复用匿名 `d_c0` 和 `x-zse-96`。根据响应下一页游标重新签名，限定当前资源路径，正文 HTML 和图片转换为评论文本。
+
 ## 十四、百度贴吧
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 支持 `tieba.baidu.com`、`tiebac.baidu.com` 和 `wapp.baidu.com` 上的帖子入口：`/p/{帖子ID}`、`/mo/q*/m?kz={帖子ID}`、`/f?kz={帖子ID}`、`/f?z={帖子ID}` 和 `/mo/q/movideo/page?thread_id={帖子ID}`。移动入口中的 `q*` 表示 `q` 及其路径参数；不同端的链接统一为 `https://tieba.baidu.com/p/{帖子ID}`，分享参数不参与帖子身份判断。
 
@@ -591,6 +621,10 @@ data.feedInfo + data.authorInfo
 图片按接口提供的原图与 CDN 地址组织候选，保留签名参数，覆盖普通图片、贴图表情、涂鸦和表情商店图片；普通内置表情还原为文字。动图优先提取动态资源，但发送遵循统一图片转换策略：ffmpeg 可用时转为首帧 PNG，不能据此保证保留动画。原生视频按清晰度保留播放候选，封面单独写入 `video_cover_urls`，不混入正文图片。
 
 首楼包含转发卡片时，根据 `origin_thread_info.tid` 额外获取一次原帖首楼，把原帖说明与媒体附加到本帖结果，不递归展开多层转发。结果仍保留本帖的标题、作者、时间与链接；原帖不可见时保留原帖链接及读取失败提示，不影响本帖解析。
+
+热评使用同一接口的 `r=2`、`lz=0` 参数，按平台热门顺序分页读取本帖回复。优先请求 `sort_type=2` 的热门响应；帖子未提供热门排序、接口退回普通正序时仍展示有效回复，保留接口顺序且最多读取 20 页。首楼和重复回复会被排除，回复媒体转换为文字标记，热评请求失败时保留已获取内容与帖子正文。转发原帖不另行抓取热评。
+
+热评复用 `message.hot_comments.count` 全局条数，默认 `0`；`message.hot_comments.tieba` 平台开关默认开启，只有条数大于 `0` 且贴吧输出模式包含文本时才请求热评。正文范围仍限于首楼与直接转发原帖，不批量抓取全部回帖或楼中楼。
 
 网页可能返回 403 或验证页面，不能把这些页面当作帖子正文；客户端接口也可能受到平台访问控制，删除、不可见或获取失败的帖子返回明确错误。
 
@@ -626,7 +660,7 @@ data.feedInfo + data.authorInfo
 
 ## 十七、TikTok
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 独立解析器模块，取数路线与抖音完全不同。作品页数据主要在 rehydration 脚本里，普通 HTTP 客户端容易拿到防护页或不完整页面。
 
@@ -655,9 +689,13 @@ oEmbed 只适合补充标题、作者等文本，媒体资源以页面脚本中�
 
 结构化脚本全部失败时，最后从 HTML 里直接查找 `playAddr` 兜底。
 
+### 评论
+
+评论调用 `/api/comment/list/`，使用作品 ID 和游标，沿用解析代理；按平台默认顺序展示，不推断为全站点赞排名。评论风控或空响应不影响已经解析成功的作品。
+
 ## 十八、YouTube
 
-支持能力：视频 / 文本
+支持能力：视频 / 文本 / 热评
 
 当前支持常见的单视频链接：`youtube.com/watch?v=...`、`youtube.com/shorts/...`、`youtu.be/...`、`youtube.com/embed/...`、`youtube-nocookie.com/embed/...`、旧式 `youtube.com/v/...` / `youtube.com/e/...`，以及可解包到上述链接的 `attribution_link` 分享跳转。直播、`clip`、播放列表、频道、私有、年龄限制、地区限制或触发机器人校验的内容不保证可解析。
 
@@ -682,9 +720,13 @@ YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长�
 
 当前实现不解析 `signatureCipher`、播放器 JavaScript 中的 `s`/`n` 变换或 SABR 分段协议；遇到这些返回形态、登录要求、DRM 或机器人挑战时会返回可见的解析失败信息。
 
+### 评论
+
+评论复用观看页 `ytInitialData` 的热门或默认入口，以及 `ytcfg` 中的 WEB 客户端上下文，请求 `/youtubei/v1/next`。按根列表的 `commentViewModel` 关联 `commentEntityPayload`，不追踪子回复游标；缩写赞数和相对时间保留平台原文。
+
 ## 十九、Steam
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 Steam 游戏页 URL 的稳定标识是 `/app/{appid}`。末尾的 slug（例如 `/_/`）只是页面路由占位，不参与游戏识别；以下两种 URL 会解析为同一个 appid：
 
@@ -709,6 +751,10 @@ store.steampowered.com/api/appdetails/?appids={appid}&l=schinese&cc=cn
 Steam 代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情接口，`image` 控制截图/封面下载，`video` 控制预告片下载。
 
 每个 Steam 预告片保留一个候选组，优先使用 `m3u8:` HLS 地址，失败时按 MP4/WebM 候选降级；解析结果会标记 `video_force_download`，因此预告片必须进入本地缓存后发送。截图、封面和预告片继续携带 Steam 商店页 Referer。
+
+### 评论
+
+玩家评测调用官方 `/appreviews/{appid}`，优先过去一年内的中文有用评测，不足时补充所有语言的近期评测；使用 Steam 解析代理。即使游戏详情委托小黑盒，评测仍取自 Steam，内部小黑盒实例不重复请求评价。
 
 ## 二十、Twitter/X
 
@@ -753,7 +799,7 @@ Twitter 响应嵌套很深，不能假设固定路径永远在。递归找带有
 
 ## 二十一、Pixiv
 
-支持能力：图片 / 文本
+支持能力：图片 / 文本 / 热评
 
 稳定入口是作品 ID。支持 `artworks/{id}`、`i/{id}` 以及带 `/en/` 前缀的链接；提链时保留原始匹配文本，按作品 ID 去重，避免规范化链接后无法在原消息中定位。
 
@@ -787,6 +833,10 @@ image_urls = [
 代理开关同时覆盖 Web Ajax API 和 `i.pximg.net` 图片下载。解析结果写入 `use_image_proxy` 与 `proxy_url`，图片下载继续携带作品页 Referer。图片只能缓存后发送，缓存目录不可用时标记为 `skip`。
 
 单个作品依次请求元信息和分页接口；多个作品并发解析时由 `Config.PARSER_MAX_CONCURRENT` 限制，避免大量链接形成无界请求突发。
+
+### 评论
+
+作品评论使用 `/ajax/illusts/comments/roots`，按 `offset` 分页并保留时间倒序；复用原有 Cookie 和代理。纯贴纸评论转换为 `[贴纸]`，缺少点赞字段时不伪造零赞。
 
 ## 二十二、GitHub
 

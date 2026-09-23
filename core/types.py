@@ -32,6 +32,7 @@ class MediaMetadata(TypedDict, total=False):
     access_message: str
     timelength_ms: Optional[int]
     available_length_ms: Optional[int]
+    # 评论字段：id、username、uid、message、time；likes 可为整数或平台缩写，未知时缺省。
     hot_comments: List[Dict[str, Any]]
 
     use_image_proxy: bool

@@ -344,10 +344,22 @@ class TextMetadataConfig:
 class HotCommentConfig:
     count: int = 0
     bilibili: bool = True
+    douyin: bool = True
+    acfun: bool = True
     weibo: bool = True
     xiaohongshu: bool = True
+    xianyu: bool = True
+    toutiao: bool = True
+    xiaoheihe: bool = True
+    xueqiu: bool = True
+    zhihu: bool = True
+    tieba: bool = True
     hupu: bool = True
     douban: bool = True
+    tiktok: bool = True
+    youtube: bool = True
+    steam: bool = True
+    pixiv: bool = True
 
 
 @dataclass
@@ -750,6 +762,16 @@ class ConfigManager:
                     True,
                     "message.hot_comments.bilibili",
                 ),
+                douyin=self._parse_bool(
+                    hot_comments.get("douyin", True),
+                    True,
+                    "message.hot_comments.douyin",
+                ),
+                acfun=self._parse_bool(
+                    hot_comments.get("acfun", True),
+                    True,
+                    "message.hot_comments.acfun",
+                ),
                 weibo=self._parse_bool(
                     hot_comments.get("weibo", True),
                     True,
@@ -760,6 +782,36 @@ class ConfigManager:
                     True,
                     "message.hot_comments.xiaohongshu",
                 ),
+                xianyu=self._parse_bool(
+                    hot_comments.get("xianyu", True),
+                    True,
+                    "message.hot_comments.xianyu",
+                ),
+                toutiao=self._parse_bool(
+                    hot_comments.get("toutiao", True),
+                    True,
+                    "message.hot_comments.toutiao",
+                ),
+                xiaoheihe=self._parse_bool(
+                    hot_comments.get("xiaoheihe", True),
+                    True,
+                    "message.hot_comments.xiaoheihe",
+                ),
+                xueqiu=self._parse_bool(
+                    hot_comments.get("xueqiu", True),
+                    True,
+                    "message.hot_comments.xueqiu",
+                ),
+                zhihu=self._parse_bool(
+                    hot_comments.get("zhihu", True),
+                    True,
+                    "message.hot_comments.zhihu",
+                ),
+                tieba=self._parse_bool(
+                    hot_comments.get("tieba", True),
+                    True,
+                    "message.hot_comments.tieba",
+                ),
                 hupu=self._parse_bool(
                     hot_comments.get("hupu", True),
                     True,
@@ -769,6 +821,26 @@ class ConfigManager:
                     hot_comments.get("douban", True),
                     True,
                     "message.hot_comments.douban",
+                ),
+                tiktok=self._parse_bool(
+                    hot_comments.get("tiktok", True),
+                    True,
+                    "message.hot_comments.tiktok",
+                ),
+                youtube=self._parse_bool(
+                    hot_comments.get("youtube", True),
+                    True,
+                    "message.hot_comments.youtube",
+                ),
+                steam=self._parse_bool(
+                    hot_comments.get("steam", True),
+                    True,
+                    "message.hot_comments.steam",
+                ),
+                pixiv=self._parse_bool(
+                    hot_comments.get("pixiv", True),
+                    True,
+                    "message.hot_comments.pixiv",
                 ),
             ),
         )
@@ -1168,26 +1240,11 @@ class ConfigManager:
     def create_parsers(self) -> List:
         """根据配置创建并返回解析器列表。"""
         parsers = []
-        bili_hc = self._effective_hot_comment_count(
-            self.message.hot_comments.bilibili,
-            "bilibili",
-        )
-        weibo_hc = self._effective_hot_comment_count(
-            self.message.hot_comments.weibo,
-            "weibo",
-        )
-        xhs_hc = self._effective_hot_comment_count(
-            self.message.hot_comments.xiaohongshu,
-            "xiaohongshu",
-        )
-        hupu_hc = self._effective_hot_comment_count(
-            self.message.hot_comments.hupu,
-            "hupu",
-        )
-        douban_hc = self._effective_hot_comment_count(
-            self.message.hot_comments.douban,
-            "douban",
-        )
+        hot_comment_counts = {
+            name: self._effective_hot_comment_count(enabled, name)
+            for name, enabled in vars(self.message.hot_comments).items()
+            if name != "count"
+        }
         proxy_addr = self.proxy.address or None
 
         if self._enable_bilibili:
@@ -1197,38 +1254,58 @@ class ConfigManager:
                 max_quality=self.bilibili.max_quality,
                 admin_assist_enabled=self.bilibili.enable_admin_assist,
                 credential_path=self.bilibili.cookie_runtime_file,
-                hot_comment_count=bili_hc,
+                hot_comment_count=hot_comment_counts["bilibili"],
             )
             parsers.append(self.bilibili_parser)
         if self._enable_douyin:
-            parsers.append(DouyinParser())
+            parsers.append(
+                DouyinParser(hot_comment_count=hot_comment_counts["douyin"])
+            )
         if self._enable_kuaishou:
             parsers.append(KuaishouParser())
         if self._enable_acfun:
-            parsers.append(AcfunParser())
+            parsers.append(
+                AcfunParser(hot_comment_count=hot_comment_counts["acfun"])
+            )
         if self._enable_weibo:
-            parsers.append(WeiboParser(hot_comment_count=weibo_hc))
+            parsers.append(
+                WeiboParser(hot_comment_count=hot_comment_counts["weibo"])
+            )
         if self._enable_xiaohongshu:
-            parsers.append(XiaohongshuParser(hot_comment_count=xhs_hc))
+            parsers.append(
+                XiaohongshuParser(hot_comment_count=hot_comment_counts["xiaohongshu"])
+            )
         if self._enable_xianyu:
-            parsers.append(XianyuParser())
+            parsers.append(
+                XianyuParser(hot_comment_count=hot_comment_counts["xianyu"])
+            )
         if self._enable_toutiao:
             _, toutiao_rich_enabled = self.parser_output.output_for_controller(
                 "toutiao"
             )
             if toutiao_rich_enabled and self.download.cache_dir_available:
-                parsers.append(ToutiaoParser())
+                parsers.append(
+                    ToutiaoParser(hot_comment_count=hot_comment_counts["toutiao"])
+                )
             else:
-                parsers.append(ToutiaoParser(article_image_refreshes=1))
+                parsers.append(
+                    ToutiaoParser(
+                        article_image_refreshes=1,
+                        hot_comment_count=hot_comment_counts["toutiao"],
+                    )
+                )
         if self._enable_xiaoheihe:
             parsers.append(
                 XiaoheiheParser(
                     use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
                     proxy_url=proxy_addr,
+                    hot_comment_count=hot_comment_counts["xiaoheihe"],
                 )
             )
         if self._enable_xueqiu:
-            parsers.append(XueqiuParser())
+            parsers.append(
+                XueqiuParser(hot_comment_count=hot_comment_counts["xueqiu"])
+            )
         if self._enable_wechat:
             parsers.append(
                 WechatParser(
@@ -1236,18 +1313,23 @@ class ConfigManager:
                 )
             )
         if self._enable_zhihu:
-            parsers.append(ZhihuParser())
+            parsers.append(
+                ZhihuParser(hot_comment_count=hot_comment_counts["zhihu"])
+            )
         if self._enable_tieba:
-            parsers.append(TiebaParser())
+            parsers.append(
+                TiebaParser(hot_comment_count=hot_comment_counts["tieba"])
+            )
         if self._enable_hupu:
-            parsers.append(HupuParser(hot_comment_count=hupu_hc))
+            parsers.append(HupuParser(hot_comment_count=hot_comment_counts["hupu"]))
         if self._enable_douban:
-            parsers.append(DoubanParser(hot_comment_count=douban_hc))
+            parsers.append(DoubanParser(hot_comment_count=hot_comment_counts["douban"]))
         if self._enable_tiktok:
             parsers.append(
                 TikTokParser(
                     use_proxy=self.proxy.tiktok_use_proxy,
                     proxy_url=proxy_addr,
+                    hot_comment_count=hot_comment_counts["tiktok"],
                 )
             )
         if self._enable_youtube:
@@ -1255,6 +1337,7 @@ class ConfigManager:
                 YoutubeParser(
                     use_proxy=self.proxy.youtube_use_proxy,
                     proxy_url=proxy_addr,
+                    hot_comment_count=hot_comment_counts["youtube"],
                 )
             )
         if self._enable_steam:
@@ -1266,6 +1349,7 @@ class ConfigManager:
                     use_video_proxy=self.proxy.steam_use_video_proxy,
                     xiaoheihe_use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
                     proxy_url=proxy_addr,
+                    hot_comment_count=hot_comment_counts["steam"],
                 )
             )
         if self._enable_twitter:
@@ -1282,6 +1366,7 @@ class ConfigManager:
                 PixivParser(
                     cookie=self.pixiv.cookie,
                     proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
+                    hot_comment_count=hot_comment_counts["pixiv"],
                 )
             )
         if self._enable_github:

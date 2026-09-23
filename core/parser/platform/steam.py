@@ -3,6 +3,7 @@
 import asyncio
 import html as html_lib
 import re
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -41,7 +42,8 @@ class SteamParser(BaseVideoParser):
         xiaoheihe_use_video_proxy: bool = True,
         xiaoheihe_use_parse_proxy: Optional[bool] = None,
         proxy_url: Optional[str] = None,
-    ):
+        hot_comment_count: int = 0,
+    ) -> None:
         """初始化 Steam 解析器。
 
         Args:
@@ -52,6 +54,7 @@ class SteamParser(BaseVideoParser):
             xiaoheihe_use_video_proxy: 小黑盒路径的视频是否使用代理。
             xiaoheihe_use_parse_proxy: 小黑盒路径的详情接口是否使用代理；省略时沿用小黑盒视频代理开关。
             proxy_url: 代理地址。
+            hot_comment_count: 附加游戏评测数量，0 表示关闭。
         """
         super().__init__("steam")
         self.use_xiaoheihe = bool(use_xiaoheihe)
@@ -59,6 +62,10 @@ class SteamParser(BaseVideoParser):
         self.use_image_proxy = bool(use_image_proxy)
         self.use_video_proxy = bool(use_video_proxy)
         self.proxy_url = proxy_url
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._default_headers = {
             "User-Agent": STEAM_USER_AGENT,
@@ -424,6 +431,113 @@ class SteamParser(BaseVideoParser):
         )
         return result
 
+    def _normalize_review(self, item: Any) -> Optional[Dict[str, Any]]:
+        """将玩家评测映射为评论，并保留推荐态度。"""
+        if not isinstance(item, dict):
+            return None
+        review_id = str(item.get("recommendationid") or "").strip()
+        message = item.get("review")
+        if not review_id or not isinstance(message, str):
+            return None
+        message = re.sub(
+            r"\[/?(?:b|i|u|strike|spoiler|h[1-6]|url|quote|list|olist|\*|code)(?:=[^\]]*)?\]",
+            "", message, flags=re.IGNORECASE,
+        )
+        message = self._strip_html(message)
+        if not message:
+            return None
+        author = item.get("author")
+        author = author if isinstance(author, dict) else {}
+        try:
+            timestamp = int(item.get("timestamp_created") or 0)
+            time_text = (
+                datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                if timestamp > 0 else ""
+            )
+        except (TypeError, ValueError, OverflowError, OSError):
+            time_text = ""
+        comment: Dict[str, Any] = {
+            "id": review_id,
+            "username": str(author.get("personaname") or "Steam 玩家"),
+            "uid": str(author.get("steamid") or ""),
+            "message": message,
+            "time": time_text,
+        }
+        if isinstance(item.get("voted_up"), bool):
+            attitude = "推荐" if item["voted_up"] else "不推荐"
+            comment["message"] = f"【游戏评测：{attitude}】\n{message}"
+        try:
+            if item.get("votes_up") is not None:
+                comment["likes"] = max(0, int(item["votes_up"]))
+        except (TypeError, ValueError, OverflowError):
+            pass
+        return comment
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, appid: str
+    ) -> List[Dict[str, Any]]:
+        """分页读取中文有用评测，不足时补充其他语言的普通评测。"""
+        comments: List[Dict[str, Any]] = []
+        if not self.hot_comment_count:
+            return comments
+        seen = set()
+        for language, sort_filter in (("schinese", "all"), ("all", "recent")):
+            cursor = "*"
+            visited_cursors = set()
+            source_seen = set()
+            for _ in range(5):
+                if len(comments) >= self.hot_comment_count:
+                    return comments
+                try:
+                    async with session.get(
+                        f"https://store.steampowered.com/appreviews/{appid}",
+                        params={
+                            "json": "1", "filter": sort_filter,
+                            "language": language, "day_range": "365",
+                            "num_per_page": str(min(100, self.hot_comment_count)),
+                            "purchase_type": "all", "cursor": cursor,
+                        },
+                        headers=self._default_headers,
+                        proxy=self.proxy_url if self.use_parse_proxy else None,
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as response:
+                        response.raise_for_status()
+                        payload = await response.json(content_type=None)
+                    if not isinstance(payload, dict) or payload.get("success") != 1:
+                        raise ValueError("Steam 评测接口未返回成功结果")
+                    rows = payload.get("reviews")
+                    if not isinstance(rows, list):
+                        raise ValueError("Steam 评测列表格式无效")
+                    if not rows:
+                        break
+                    previous_count = len(source_seen)
+                    for row in rows:
+                        comment = self._normalize_review(row)
+                        if not comment:
+                            continue
+                        source_seen.add(comment["id"])
+                        if comment["id"] in seen:
+                            continue
+                        seen.add(comment["id"])
+                        comments.append(comment)
+                        if len(comments) >= self.hot_comment_count:
+                            return comments
+                    next_cursor = payload.get("cursor")
+                    if (
+                        len(source_seen) == previous_count or not isinstance(next_cursor, str)
+                        or not next_cursor or next_cursor == cursor
+                        or next_cursor in visited_cursors
+                    ):
+                        break
+                    visited_cursors.add(cursor)
+                    cursor = next_cursor
+                except asyncio.CancelledError:
+                    raise
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError) as exc:
+                    logger.warning(f"[{self.name}] 游戏评测获取失败，已保留游戏详情：{exc}")
+                    return comments
+        return comments
+
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
@@ -436,7 +550,12 @@ class SteamParser(BaseVideoParser):
                 f"[{self.name}] parse: appid={appid}, use_xiaoheihe={self.use_xiaoheihe}"
             )
             if self.use_xiaoheihe:
-                return await self._parse_via_xiaoheihe(session, url, appid)
+                result = await self._parse_via_xiaoheihe(session, url, appid)
+                if self.hot_comment_count:
+                    comments = await self._fetch_hot_comments(session, appid)
+                    if comments:
+                        result["hot_comments"] = comments
+                return result
 
             game = await self._fetch_app_data(session, appid)
             name = str(game.get("name") or "").strip()
@@ -470,6 +589,10 @@ class SteamParser(BaseVideoParser):
             }
             if video_urls:
                 result["video_force_download"] = True
+            if self.hot_comment_count:
+                comments = await self._fetch_hot_comments(session, appid)
+                if comments:
+                    result["hot_comments"] = comments
             logger.debug(
                 f"[{self.name}] parse: 解析完成 appid={appid}, "
                 f"video_count={len(video_urls)}, image_count={len(image_urls)}"

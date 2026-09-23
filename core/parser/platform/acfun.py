@@ -38,6 +38,7 @@ BANGUMI_PATH_RE = re.compile(
 SHARE_PATH_RE = re.compile(r"^/v/?$", re.IGNORECASE)
 ARTICLE_API = "https://www.acfun.cn/rest/pc-direct/article/info"
 PLAY_API = "https://www.acfun.cn/rest/pc-direct/play/playInfo/ksPlayJson"
+COMMENT_API = "https://www.acfun.cn/rest/pc-direct/comment/list"
 
 
 def _parse_acfun_identity(url: str) -> Tuple[str, str]:
@@ -205,9 +206,13 @@ class _ArticleContent(HTMLParser):
 class AcfunParser(BaseVideoParser):
     """解析 AcFun 视频、动态和番剧页面。"""
 
-    def __init__(self) -> None:
+    def __init__(self, hot_comment_count: int = 0) -> None:
         """初始化 AcFun 解析器。"""
         super().__init__("acfun")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._headers = {
             "User-Agent": DESKTOP_UA,
@@ -606,6 +611,77 @@ class AcfunParser(BaseVideoParser):
             raise RuntimeError("AcFun 动态未解析到可用内容")
         return metadata
 
+    @staticmethod
+    def _clean_comment_text(value: Any) -> str:
+        """保留 UBB 评论正文，并为图片和表情添加文字占位。"""
+        text = value if isinstance(value, str) else ""
+        text = re.sub(r"\[img(?:=[^\]]*)?\].*?\[/img\]", "[图片]", text, flags=re.I | re.S)
+        text = re.sub(r"\[emot=[^\]]*/\]", "[表情]", text, flags=re.I)
+        text = re.sub(r"\[/?(?:b|i|u|s|color|size|font|url|at|quote)(?:=[^\]]*)?\]", "", text, flags=re.I)
+        return html.unescape(text).strip()
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, source_id: str, referer: str
+    ) -> List[Dict[str, Any]]:
+        """读取普通投稿热评及普通评论，不推测番剧和动态评论身份。"""
+        if self.hot_comment_count <= 0:
+            return []
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        for page in range(1, 11):
+            try:
+                data = await self._fetch_api(
+                    session, COMMENT_API,
+                    {"sourceId": source_id, "sourceType": "3", "page": str(page)},
+                    referer,
+                )
+                if str(data.get("sourceType", "3")) != "3":
+                    raise RuntimeError("AcFun 评论响应的内容类型不一致")
+                hot_items = data.get("hotComments") or []
+                root_items = data.get("rootComments") or []
+                if not isinstance(hot_items, list) or not isinstance(root_items, list):
+                    raise RuntimeError("AcFun 评论列表格式错误")
+                previous_count = len(seen)
+                # 后续页可能重复热评；先加入服务端热评，再保留普通列表顺序。
+                for item in hot_items + root_items:
+                    if not isinstance(item, dict):
+                        continue
+                    comment_id = str(item.get("commentId") or "")
+                    if (
+                        not comment_id or comment_id in seen
+                        or str(item.get("sourceId") or "") != source_id
+                        or str(item.get("sourceType", "3")) != "3"
+                    ):
+                        continue
+                    seen.add(comment_id)
+                    message = self._clean_comment_text(item.get("content"))
+                    if item.get("imageUrl") and "[图片]" not in message:
+                        message = (message + "\n[图片]").strip()
+                    if not message:
+                        continue
+                    try:
+                        likes = max(0, int(item.get("likeCount") or 0))
+                    except (TypeError, ValueError, OverflowError):
+                        likes = 0
+                    comments.append({
+                        "id": comment_id,
+                        "username": str(item.get("userName") or ""),
+                        "uid": str(item.get("userId") or ""),
+                        "likes": likes,
+                        "message": message,
+                        "time": self._format_timestamp(item.get("timestamp") or item.get("postDate")),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                if page >= int(data.get("totalPage") or 0) or len(seen) == previous_count:
+                    break
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+                logger.warning(f"[{self.name}] 获取评论失败，保留正文：{exc}")
+                break
+        return comments
+
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
@@ -675,7 +751,14 @@ class AcfunParser(BaseVideoParser):
                 if isinstance(play_info, dict):
                     for key in ("ksPlayJson", "ksPlayJsonHevc"):
                         current[key] = play_info.get(key)
-            return self._build_video_metadata(source_url, state, page_kind)
+            metadata = self._build_video_metadata(source_url, state, page_kind)
+            if page_kind == "video" and self.hot_comment_count > 0:
+                comments = await self._fetch_hot_comments(
+                    session, str(state["dougaId"]), source_url
+                )
+                if comments:
+                    metadata["hot_comments"] = comments
+            return metadata
 
 
 __all__ = ["AcfunParser"]

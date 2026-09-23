@@ -7,9 +7,11 @@ import time
 from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import aiohttp
+
+from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
@@ -182,9 +184,17 @@ class ZhihuParser(BaseVideoParser):
     ARTICLE_API = "https://zhuanlan.zhihu.com/api/articles/{article_id}?ws_qiangzhisafe=0"
     EXPLORE_URL = "https://www.zhihu.com/explore"
 
-    def __init__(self) -> None:
-        """初始化知乎解析器和匿名访客会话状态。"""
+    def __init__(self, hot_comment_count: int = 0) -> None:
+        """初始化知乎解析器和匿名访客会话状态。
+
+        Args:
+            hot_comment_count: 最多读取的根评论数量，0 表示关闭。
+        """
         super().__init__("zhihu")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.semaphore = asyncio.Semaphore(
             max(1, min(Config.PARSER_MAX_CONCURRENT, ZHIHU_MAX_CONCURRENT))
         )
@@ -408,15 +418,29 @@ class ZhihuParser(BaseVideoParser):
         article_id: str,
     ) -> MediaMetadata:
         """获取匿名访客签名并解析知乎专栏文章接口。"""
-        api_path = f"/api/articles/{article_id}?ws_qiangzhisafe=0"
         api_url = self.ARTICLE_API.format(article_id=article_id)
-        payload: Dict[str, Any]
+        payload = await self._get_signed_json(session, api_url, canonical_url)
+        if payload.get("type") not in (None, "article"):
+            raise RuntimeError("知乎接口返回的实体类型不是文章")
+        return self._metadata_from_payload(
+            canonical_url, payload, payload.get("content"), True
+        )
+
+    async def _get_signed_json(
+        self,
+        session: aiohttp.ClientSession,
+        api_url: str,
+        referer: str,
+    ) -> Dict[str, Any]:
+        """复用匿名访客签名请求文章或评论，并有限刷新过期访客。"""
+        parsed = urlparse(api_url)
+        api_path = parsed.path + ("?" + parsed.query if parsed.query else "")
         for attempt in range(2):
             dc0 = await self._get_guest_dc0(session)
             headers = {
                 **self._headers,
                 "Accept": "application/json, text/plain, */*",
-                "Referer": canonical_url,
+                "Referer": referer,
                 "x-api-version": "3.0.91",
                 "x-app-za": "OS=Web",
                 "x-requested-with": "fetch",
@@ -425,21 +449,91 @@ class ZhihuParser(BaseVideoParser):
                 "Cookie": f"d_c0={dc0}",
             }
             try:
-                payload = await self._get_json(session, api_url, headers)
+                return await self._get_json(session, api_url, headers)
             except RuntimeError as exc:
                 if attempt == 0 and re.search(r"HTTP (?:403|429)\b", str(exc)):
                     await self._invalidate_guest_dc0(dc0)
                     await asyncio.sleep(ZHIHU_RETRY_DELAY)
                     continue
                 raise
-            break
-        else:
-            raise RuntimeError("知乎文章接口请求失败")
-        if payload.get("type") not in (None, "article"):
-            raise RuntimeError("知乎接口返回的实体类型不是文章")
-        return self._metadata_from_payload(
-            canonical_url, payload, payload.get("content"), True
-        )
+        raise RuntimeError("知乎签名接口请求失败")
+
+    async def _fetch_hot_comments(
+        self,
+        session: aiohttp.ClientSession,
+        canonical_url: str,
+        kind: str,
+        content_id: str,
+    ) -> List[Dict[str, Any]]:
+        """按平台综合顺序读取根评论，失败时保留已取得的评论。"""
+        comments: List[Dict[str, Any]] = []
+        if not self.hot_comment_count:
+            return comments
+        resource = "answers" if kind == "answer" else "articles"
+        api_path = f"/api/v4/comment_v5/{resource}/{content_id}/root_comment"
+        offset = ""
+        seen_offsets = set()
+        seen_ids = set()
+        try:
+            for _ in range(20):
+                if offset in seen_offsets:
+                    break
+                seen_offsets.add(offset)
+                query = urlencode({"order": "score", "offset": offset, "limit": 20})
+                payload = await self._get_signed_json(
+                    session, f"https://www.zhihu.com{api_path}?{query}", canonical_url
+                )
+                entries = payload.get("data")
+                if not isinstance(entries, list):
+                    raise RuntimeError("知乎评论列表格式无效")
+                previous_count = len(seen_ids)
+                for item in entries:
+                    if not isinstance(item, dict) or item.get("is_delete"):
+                        continue
+                    comment_id = str(item.get("id") or "")
+                    if not comment_id or comment_id in seen_ids:
+                        continue
+                    seen_ids.add(comment_id)
+                    message, images = self._parse_content(str(item.get("content") or ""))
+                    if images:
+                        message = (message + "\n[图片]").strip()
+                    if not message:
+                        continue
+                    author = item.get("author")
+                    author = author if isinstance(author, dict) else {}
+                    comment = {
+                        "id": comment_id,
+                        "uid": str(author.get("id") or ""),
+                        "username": str(author.get("name") or ""),
+                        "message": message,
+                        "time": _format_timestamp(item.get("created_time")),
+                    }
+                    try:
+                        if item.get("like_count") is not None:
+                            comment["likes"] = max(0, int(item["like_count"]))
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+                    comments.append(comment)
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                paging = payload.get("paging")
+                if not isinstance(paging, dict) or paging.get("is_end"):
+                    break
+                next_url = urlparse(str(paging.get("next") or ""))
+                if (
+                    len(seen_ids) == previous_count
+                    or next_url.hostname != "www.zhihu.com"
+                    or next_url.path != api_path
+                ):
+                    break
+                offset = (parse_qs(next_url.query).get("offset") or [""])[0]
+                if not offset:
+                    break
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as exc:
+            logger.warning(f"[{self.name}] 评论获取失败，已保留正文：{exc}")
+        return comments
 
     async def parse(
         self,
@@ -459,14 +553,22 @@ class ZhihuParser(BaseVideoParser):
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as isolated_session:
                 if identity[0] == "answer":
-                    return await self._parse_answer(
+                    metadata = await self._parse_answer(
                         isolated_session,
                         canonical_url,
                         identity[1],
                         identity[2],
                     )
-                return await self._parse_article(
-                    isolated_session,
-                    canonical_url,
-                    identity[2],
-                )
+                else:
+                    metadata = await self._parse_article(
+                        isolated_session,
+                        canonical_url,
+                        identity[2],
+                    )
+                if self.hot_comment_count:
+                    comments = await self._fetch_hot_comments(
+                        isolated_session, canonical_url, identity[0], identity[2]
+                    )
+                    if comments:
+                        metadata["hot_comments"] = comments
+                return metadata

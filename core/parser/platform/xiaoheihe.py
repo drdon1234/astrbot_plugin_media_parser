@@ -10,6 +10,7 @@ import random
 import re
 import time
 import uuid
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple, Iterable
 from urllib.parse import urlparse, parse_qs
 
@@ -471,18 +472,24 @@ class XiaoheiheParser(BaseVideoParser):
         use_video_proxy: bool = False,
         proxy_url: str = None,
         use_parse_proxy: bool = False,
-    ):
+        hot_comment_count: int = 0,
+    ) -> None:
         """初始化解析器并设置并发限制与默认请求头。
 
         Args:
             use_video_proxy: 视频下载是否使用代理
             proxy_url: 代理地址（格式：http://host:port 或 https://host:port）
             use_parse_proxy: 游戏详情与帖子接口请求是否使用代理
+            hot_comment_count: 最多读取的评论条数，0 表示不请求
         """
         super().__init__("xiaoheihe")
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
         self.use_parse_proxy = bool(use_parse_proxy)
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self._default_headers = {
             "User-Agent": UA,
@@ -1241,7 +1248,124 @@ class XiaoheiheParser(BaseVideoParser):
         }
         if video_urls:
             result["video_force_download"] = True
+        if self.hot_comment_count:
+            comment_link_id = str(link.get("linkid") or link.get("link_id") or link_id)
+            comments = await self._fetch_hot_comments(session, comment_link_id)
+            if comments:
+                result["hot_comments"] = comments
         return result
+
+    def _normalize_comment(
+        self, item: Dict[str, Any], is_game: bool
+    ) -> Optional[Dict[str, Any]]:
+        """将帖子主评论或游戏评价转换为统一文本结构。"""
+        comment_id = str(item.get("linkid" if is_game else "commentid") or "")
+        if not comment_id:
+            return None
+        if is_game:
+            message = self._strip_tags(str(item.get("description") or ""))
+        else:
+            message, videos, images = self._extract_bbs_text_and_media(item)
+            message = self._strip_tags(message)
+            if images:
+                message = (message + "\n[图片]").strip()
+            if videos:
+                message = (message + "\n[视频]").strip()
+        if not message:
+            return None
+        user = item.get("user")
+        user = user if isinstance(user, dict) else {}
+        try:
+            likes = max(0, int(item.get("up") or 0))
+        except (TypeError, ValueError, OverflowError):
+            likes = 0
+        try:
+            timestamp = int(item.get("create_at") or 0)
+            date = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d") if timestamp > 0 else ""
+        except (TypeError, ValueError, OverflowError, OSError):
+            date = ""
+        return {
+            "id": comment_id,
+            "username": str(user.get("username") or user.get("nickname") or ""),
+            "uid": str(user.get("userid") or item.get("userid") or ""),
+            "likes": likes,
+            "message": message,
+            "time": date,
+        }
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, resource_id: str, is_game: bool = False
+    ) -> List[Dict[str, Any]]:
+        """读取帖子主评论或 PC 游戏有用评价，分页有界并排除重复。"""
+        comments: List[Dict[str, Any]] = []
+        seen = set()
+        offset = 0
+        if not self.hot_comment_count:
+            return comments
+        for page in range(1, 6):
+            try:
+                if is_game:
+                    path = "/bbs/app/link/game/comments"
+                    params = {
+                        "appid": resource_id, "offset": offset, "limit": 20,
+                        "api_version": "4", "sort_type": "4",
+                    }
+                else:
+                    path = "/bbs/app/link/tree"
+                    params = {
+                        "link_id": resource_id, "owner_only": 0,
+                        "is_first": 1 if page == 1 else 0,
+                        "page": page, "index": 1, "limit": 20,
+                    }
+                payload = await asyncio.wait_for(
+                    self._fetch_signed_api(session, path, params), timeout=20
+                )
+                if not is_game:
+                    link = payload.get("link")
+                    if isinstance(link, dict):
+                        returned_id = link.get("linkid") or link.get("link_id")
+                        if returned_id and str(returned_id) != resource_id:
+                            raise RuntimeError("小黑盒评论响应不属于当前帖子")
+                items = payload.get("links" if is_game else "comments")
+                if not isinstance(items, list):
+                    raise RuntimeError("小黑盒评论响应缺少列表")
+                previous_count = len(seen)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if not is_game:
+                        floor_comments = item.get("comment")
+                        if not isinstance(floor_comments, list) or not floor_comments:
+                            continue
+                        # 一楼中的其余元素是楼中楼，不能当作独立主评论。
+                        item = floor_comments[0]
+                        if not isinstance(item, dict):
+                            continue
+                    elif item.get("appid") not in (None, "") and not self._game_ids_match(
+                        item.get("appid"), resource_id
+                    ):
+                        continue
+                    comment = self._normalize_comment(item, is_game)
+                    if not comment or comment["id"] in seen:
+                        continue
+                    seen.add(comment["id"])
+                    comments.append(comment)
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                total_pages = int(payload.get("total_page") or 0)
+                if len(seen) == previous_count or (total_pages > 0 and page >= total_pages):
+                    break
+                if not is_game and str(payload.get("has_more_floors", "0")) != "1":
+                    break
+                if is_game and not total_pages and len(items) < 20:
+                    break
+                offset += len(items)
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, TypeError, OverflowError) as exc:
+                logger.warning(f"[{self.name}] 评论获取失败，已保留原始内容：{exc}")
+                break
+        return comments
 
     async def parse(
         self, session: aiohttp.ClientSession, url: str
@@ -1511,6 +1635,16 @@ class XiaoheiheParser(BaseVideoParser):
             }
             if video_urls:
                 result_dict["video_force_download"] = True
+            if self.hot_comment_count and game_type == "pc":
+                comment_appid = self._normalize_game_appid(
+                    game.get("steam_appid") or game.get("appid") or appid
+                )
+                if comment_appid:
+                    comments = await self._fetch_hot_comments(
+                        session, comment_appid, is_game=True
+                    )
+                    if comments:
+                        result_dict["hot_comments"] = comments
             logger.debug(
                 f"[{self.name}] parse: 解析完成 {url}, "
                 f"title_len={len(result_dict.get('title') or '')}, "

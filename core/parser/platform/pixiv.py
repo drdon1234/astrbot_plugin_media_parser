@@ -121,7 +121,7 @@ async def _fetch_json(
 
         try:
             data = await resp.json()
-        except Exception as e:
+        except (aiohttp.ClientError, TypeError, ValueError) as e:
             raise RuntimeError(
                 f"Pixiv Ajax JSON 解析失败：{e} body={body_preview!r}"
             ) from e
@@ -156,8 +156,20 @@ class PixivParser(BaseVideoParser):
         self,
         cookie: str = "",
         proxy: Optional[str] = None,
-    ):
+        hot_comment_count: int = 0,
+    ) -> None:
+        """初始化作品解析与可选评论读取。
+
+        Args:
+            cookie: Pixiv 登录 Cookie。
+            proxy: 作品与评论请求使用的代理地址。
+            hot_comment_count: 最多读取的根评论数量，0 表示关闭。
+        """
         super().__init__("pixiv")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError, OverflowError):
+            self.hot_comment_count = 0
         self.cookie = cookie
         self.proxy = proxy
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
@@ -171,6 +183,64 @@ class PixivParser(BaseVideoParser):
         return _extract_pixiv_links(text)
 
     # ── 解析 ──────────────────────────────────────────────
+
+    async def _fetch_hot_comments(
+        self,
+        session: aiohttp.ClientSession,
+        illust_id: str,
+    ) -> List[Dict[str, Any]]:
+        """按作品评论的最新顺序分页取数，保留无文字的贴纸评论。"""
+        comments: List[Dict[str, Any]] = []
+        if not self.hot_comment_count:
+            return comments
+        seen_ids = set()
+        offset = 0
+        try:
+            for _ in range(20):
+                url = (
+                    "https://www.pixiv.net/ajax/illusts/comments/roots"
+                    f"?illust_id={illust_id}&offset={offset}&limit=20"
+                )
+                payload = await asyncio.wait_for(
+                    _fetch_json(
+                        session, url, illust_id, "评论", self.cookie, proxy=self.proxy
+                    ),
+                    timeout=25,
+                )
+                body = payload.get("body")
+                if not isinstance(body, dict) or not isinstance(body.get("comments"), list):
+                    raise RuntimeError("Pixiv 评论列表格式无效")
+                entries = body["comments"]
+                previous_count = len(seen_ids)
+                for item in entries:
+                    if not isinstance(item, dict):
+                        continue
+                    comment_id = str(item.get("id") or "")
+                    if not comment_id or comment_id in seen_ids:
+                        continue
+                    seen_ids.add(comment_id)
+                    message = str(item.get("comment") or "").strip()
+                    if not message and item.get("stampId"):
+                        message = "[贴纸]"
+                    if not message:
+                        continue
+                    comments.append({
+                        "id": comment_id,
+                        "uid": str(item.get("userId") or ""),
+                        "username": str(item.get("userName") or ""),
+                        "message": message,
+                        "time": str(item.get("commentDate") or ""),
+                    })
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                if not body.get("hasNext") or len(seen_ids) == previous_count:
+                    break
+                offset += len(entries)
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError) as exc:
+            logger.warning(f"[{self.name}] 评论获取失败，已保留作品：{exc}")
+        return comments
 
     async def parse(
         self,
@@ -329,6 +399,10 @@ class PixivParser(BaseVideoParser):
             "use_image_proxy": bool(self.proxy),
             "proxy_url": self.proxy,
         }
+        if self.hot_comment_count:
+            comments = await self._fetch_hot_comments(session, illust_id)
+            if comments:
+                metadata["hot_comments"] = comments
 
         elapsed = time.time() - t_start
         r18_label = ""
