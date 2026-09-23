@@ -149,6 +149,17 @@
                 ],
                 "default": "全部发送"
             },
+            "douban": {
+                "description": "豆瓣",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "tiktok": {
                 "description": "TikTok",
                 "type": "string",
@@ -422,6 +433,11 @@
                     },
                     "hupu": {
                         "description": "虎扑",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "douban": {
+                        "description": "豆瓣",
                         "type": "bool",
                         "default": true
                     }

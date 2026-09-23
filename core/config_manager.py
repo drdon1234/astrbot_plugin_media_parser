@@ -23,6 +23,7 @@ from .parser.platform import (
     WechatParser,
     ZhihuParser,
     HupuParser,
+    DoubanParser,
     TikTokParser,
     YoutubeParser,
     SteamParser,
@@ -61,6 +62,7 @@ PARSER_OUTPUT_KEYS = (
     "wechat",
     "zhihu",
     "hupu",
+    "douban",
     "tiktok",
     "youtube",
     "steam",
@@ -343,6 +345,7 @@ class HotCommentConfig:
     weibo: bool = True
     xiaohongshu: bool = True
     hupu: bool = True
+    douban: bool = True
 
 
 @dataclass
@@ -605,6 +608,7 @@ class ConfigManager:
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
         self._enable_hupu = self._parser_enabled("hupu")
+        self._enable_douban = self._parser_enabled("douban")
         self._enable_tiktok = self._parser_enabled("tiktok")
         self._enable_youtube = self._parser_enabled("youtube")
         self._enable_steam = self._parser_enabled("steam")
@@ -757,6 +761,11 @@ class ConfigManager:
                     hot_comments.get("hupu", True),
                     True,
                     "message.hot_comments.hupu",
+                ),
+                douban=self._parse_bool(
+                    hot_comments.get("douban", True),
+                    True,
+                    "message.hot_comments.douban",
                 ),
             ),
         )
@@ -1172,6 +1181,10 @@ class ConfigManager:
             self.message.hot_comments.hupu,
             "hupu",
         )
+        douban_hc = self._effective_hot_comment_count(
+            self.message.hot_comments.douban,
+            "douban",
+        )
         proxy_addr = self.proxy.address or None
 
         if self._enable_bilibili:
@@ -1223,6 +1236,8 @@ class ConfigManager:
             parsers.append(ZhihuParser())
         if self._enable_hupu:
             parsers.append(HupuParser(hot_comment_count=hupu_hc))
+        if self._enable_douban:
+            parsers.append(DoubanParser(hot_comment_count=douban_hc))
         if self._enable_tiktok:
             parsers.append(
                 TikTokParser(
