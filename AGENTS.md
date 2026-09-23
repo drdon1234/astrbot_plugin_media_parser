@@ -58,7 +58,7 @@ core/
 1. 国内视频类平台：B站（`bilibili`）、抖音（`douyin`）、快手（`kuaishou`）、AcFun（`acfun`）。
 2. 国内资讯类平台：微博（`weibo`）、小红书（`xiaohongshu`）、闲鱼（`xianyu`）、今日头条（`toutiao`）、小黑盒（`xiaoheihe`）、雪球（`xueqiu`）、微信（`wechat`）、知乎（`zhihu`）。
 3. 国外视频类平台：TikTok（`tiktok`）、YouTube（`youtube`）。
-4. 国外资讯类平台：Steam（`steam`）、Twitter/X（`twitter`）、Pixiv（`pixiv`）。
+4. 国外资讯类平台：Steam（`steam`）、Twitter/X（`twitter`）、Pixiv（`pixiv`）、GitHub（`github`）。
 
 新增平台先归入上述四组之一，再同步调整所有平台列表和注册分支；不得只调整单个文件中的顺序。
 

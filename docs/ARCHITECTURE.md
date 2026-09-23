@@ -27,6 +27,7 @@
 - Steam：支持 视频 / 图片 / 文本；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
+- GitHub：支持 文本；通过官方匿名仓库接口获取公开仓库首页概况，不读取 README 或仓库子页。
 
 ### 1.2 核心模块结构
 
@@ -77,7 +78,8 @@ astrbot_plugin_media_parser/
     │       ├── youtube.py           # YouTube 视频解析器
     │       ├── steam.py             # Steam 游戏详情页解析器
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
-    │       └── pixiv.py             # Pixiv 插画/漫画解析器
+    │       ├── pixiv.py             # Pixiv 插画/漫画解析器
+    │       └── github.py            # GitHub 公开仓库概况解析器
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range
@@ -126,6 +128,8 @@ astrbot_plugin_media_parser/
 - `仅富媒体`：解析并发送图片/视频，不构建文本节点；热评条数会对该平台归零。
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
+
+GitHub 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况复用既有文本元数据可见性、长度限制和图片渲染链路。
 
 #### 消息聚合与 ZIP 归档
 
@@ -195,7 +199,7 @@ cache/runtime_manager/bilibili/cookie.json
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
-- `ProxyConfig`：全局代理、小黑盒、TikTok、YouTube、Steam、Twitter/X、Pixiv 代理开关。
+- `ProxyConfig`：全局代理、小黑盒、TikTok、YouTube、Steam、Twitter/X、Pixiv、GitHub 代理开关。
 - `BilibiliEnhancedConfig`：Cookie、最高画质、运行时文件、管理员协助登录与主动更新指令。
 - `WechatConfig`：视频号短链换取播放令牌所需的腾讯元宝 Cookie。
 - `SteamConfig`：Steam 游戏页是否改用小黑盒完整路径解析。
@@ -666,6 +670,7 @@ proxy.twitter.parse
 proxy.twitter.image
 proxy.twitter.video
 proxy.pixiv
+proxy.github
 ```
 
 解析器初始化时接收代理配置：
@@ -676,6 +681,7 @@ proxy.pixiv
 - `SteamParser`：Steam 官方接口解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
 - `TwitterParser`：Twitter/X 解析、图片、视频代理。
 - `PixivParser`：Pixiv Web Ajax API 解析和图片下载共用同一代理开关。
+- `GitHubParser`：`proxy.github` 默认关闭，仅控制官方仓库 API 请求，复用全局代理地址；不产生媒体下载代理字段。
 
 解析结果写入：
 

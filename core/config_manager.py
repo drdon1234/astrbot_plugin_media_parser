@@ -27,6 +27,7 @@ from .parser.platform import (
     SteamParser,
     TwitterParser,
     PixivParser,
+    GitHubParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -63,6 +64,7 @@ PARSER_OUTPUT_KEYS = (
     "steam",
     "twitter",
     "pixiv",
+    "github",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -451,6 +453,7 @@ class ProxyConfig:
     twitter_use_image_proxy: bool = True
     twitter_use_video_proxy: bool = True
     pixiv_use_proxy: bool = False
+    github_use_proxy: bool = False
 
 
 @dataclass
@@ -603,6 +606,7 @@ class ConfigManager:
         self._enable_steam = self._parser_enabled("steam")
         self._enable_twitter = self._parser_enabled("twitter")
         self._enable_pixiv = self._parser_enabled("pixiv")
+        self._enable_github = self._parser_enabled("github")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -1093,6 +1097,11 @@ class ConfigManager:
                 False,
                 "proxy.pixiv",
             ),
+            github_use_proxy=self._parse_bool(
+                proxy_raw.get("github", False),
+                False,
+                "proxy.github",
+            ),
         )
 
         # --- admin ---
@@ -1238,6 +1247,12 @@ class ConfigManager:
                 PixivParser(
                     cookie=self.pixiv.cookie,
                     proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
+                )
+            )
+        if self._enable_github:
+            parsers.append(
+                GitHubParser(
+                    proxy_url=proxy_addr if self.proxy.github_use_proxy else None,
                 )
             )
         return parsers

@@ -192,6 +192,18 @@
                     "仅富媒体"
                 ],
                 "default": "全部发送"
+            },
+            "github": {
+                "description": "GitHub",
+                "type": "string",
+                "hint": "支持公开仓库首页，展示仓库概况和简短介绍，不展开 README。请选择全部发送或仅文本；仅富媒体时没有可发送内容。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
             }
         }
     },
@@ -940,6 +952,12 @@
                 "description": "Pixiv 解析与图片下载使用代理",
                 "type": "bool",
                 "hint": "需要先填写“代理地址”。",
+                "default": false
+            },
+            "github": {
+                "description": "GitHub 解析使用代理",
+                "type": "bool",
+                "hint": "需要先填写“代理地址”；仅用于获取公开仓库信息。",
                 "default": false
             }
         }

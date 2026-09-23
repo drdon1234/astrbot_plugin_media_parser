@@ -744,7 +744,19 @@ image_urls = [
 
 单个作品依次请求元信息和分页接口；多个作品并发解析时由 `Config.PARSER_MAX_CONCURRENT` 限制，避免大量链接形成无界请求突发。
 
-## 十九、NGA
+## 十九、GitHub
+
+支持能力：文本
+
+仅解析 `github.com/{owner}/{repo}` 公开仓库首页，接受 `.git` 后缀、尾斜杠、查询参数和锚点；仓库身份由所有者和仓库名确定。Issue、Pull Request、Release、代码文件等子页不作为仓库首页解析。
+
+请求官方匿名接口 `GET https://api.github.com/repos/{owner}/{repo}`，提取仓库名、所有者、简短 `description`、主要语言、Star/Fork 数、许可证、归档状态和更新时间，转换为已有 `MediaMetadata` 文本字段并保留仓库链接。不读取 README、不调用大模型总结，也不请求图片、视频、评论或仓库代码。
+
+`parsers.github` 默认 `全部发送`，也可选择 `仅文本`；`仅富媒体` 没有可发送内容。文本可继续由现有消息链路渲染为图片。`proxy.github` 默认关闭，仅控制仓库 API 请求，开启后使用 `proxy.address`，解析结果不附加媒体下载代理字段。
+
+不配置登录 Cookie 或 Token；匿名接口受到 GitHub 频率限制，限流、私有或不存在的仓库会明确失败，不切换为网页抓取或重复请求规避限制。
+
+## 二十、NGA
 
 当前未提供解析器。
 
@@ -752,7 +764,7 @@ NGA 已关闭访客浏览：`read.php?tid=...` 直接返回 `ERROR:1 未登录`�
 
 也就是说取数必须依赖 `ngaPassportUid` + `ngaPassportCid` 登录 Cookie。若之后决定支持，需要先引入用户提供 Cookie 的配置项，并注意页面是 GBK/GB18030 编码。
 
-## 二十、维护原则
+## 二十一、维护原则
 
 改平台解析逻辑前，过一遍这些问题：
 

@@ -58,6 +58,7 @@ PARSER_DISCOVERY_ORDER = (
     "steam",
     "twitter",
     "pixiv",
+    "github",
 )
 PARSER_DISCOVERY_ORDER_INDEX = {
     module_name: index for index, module_name in enumerate(PARSER_DISCOVERY_ORDER)
