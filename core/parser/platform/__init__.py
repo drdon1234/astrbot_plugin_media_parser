@@ -16,12 +16,17 @@ from .nga import NgaParser
 from .hupu import HupuParser
 from .douban import DoubanParser
 from .v2ex import V2exParser
+from .juejin import JuejinParser
+from .csdn import CsdnParser
+from .cnblogs import CnblogsParser
+from .gitee import GiteeParser
 from .tiktok import TikTokParser
 from .youtube import YoutubeParser
 from .steam import SteamParser
 from .twitter import TwitterParser
 from .pixiv import PixivParser
 from .github import GitHubParser
+from .gitlab import GitLabParser
 from .base import BaseVideoParser
 
 __all__ = [
@@ -42,11 +47,16 @@ __all__ = [
     'HupuParser',
     'DoubanParser',
     'V2exParser',
+    'JuejinParser',
+    'CsdnParser',
+    'CnblogsParser',
+    'GiteeParser',
     'TikTokParser',
     'YoutubeParser',
     'SteamParser',
     'TwitterParser',
     'PixivParser',
     'GitHubParser',
+    'GitLabParser',
     'BaseVideoParser'
 ]

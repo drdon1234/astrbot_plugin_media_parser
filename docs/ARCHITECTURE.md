@@ -90,12 +90,17 @@ astrbot_plugin_media_parser/
     │       │   ├── reading.py       # 阅读作品介绍和公开评论查询
     │       │   └── web.py           # 匿名会话、网页和图片访客校验
     │       ├── v2ex.py              # V2EX 公开主题主帖与有限范围评论
+    │       ├── juejin.py            # 稀土掘金文章图文与热门评论
+    │       ├── csdn.py              # CSDN 文章图文、公开预览与普通评论
+    │       ├── cnblogs.py           # 博客园公开文章图文
+    │       ├── gitee.py             # Gitee 仓库概况、Issue 与评论
     │       ├── tiktok.py            # TikTok 视频/图集解析器
     │       ├── youtube.py           # YouTube 视频解析器
     │       ├── steam.py             # Steam 游戏详情页解析器
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
     │       ├── pixiv.py             # Pixiv 插画/漫画解析器
-    │       └── github.py            # GitHub 公开仓库概况解析器
+    │       ├── github.py            # GitHub 公开仓库概况解析器
+    │       └── gitlab.py            # GitLab 仓库概况、Issue 与讨论
     ├── downloader/
     │   ├── manager.py               # DownloadManager，媒体模式决策与下载调度
     │   ├── router.py                # 下载路由：dash/m3u8/image/video/range
@@ -145,9 +150,9 @@ astrbot_plugin_media_parser/
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
-GitHub 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况复用既有文本元数据可见性、长度限制和图片渲染链路。
+Gitee、GitHub 和 GitLab 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况及 Issue 正文复用既有文本元数据可见性、长度限制和图片渲染链路。Gitee、GitLab 的评论开关仅作用于 Issue，仓库概况不请求评论；未知赞数省略。
 
-`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 19 个平台开关默认开启（快手、微信、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 23 个平台开关默认开启（快手、微信、博客园、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
 新增平台复用已有签名、访客会话和代理设置；优先热门或精选列表，也允许默认排序、时间排序评论及游戏评价。各解析器限制分页次数并按评论 ID 去重，接口失败保留正文及已取得评论，取消操作向上传播。`hot_comments` 中的 `likes` 可以是精确整数或平台提供的缩写字符串；未知时省略，消息节点显示 `-`。
 

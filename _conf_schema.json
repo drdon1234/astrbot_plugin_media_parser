@@ -193,6 +193,54 @@
                 ],
                 "default": "全部发送"
             },
+            "juejin": {
+                "description": "稀土掘金",
+                "type": "string",
+                "hint": "支持公开文章正文、配图及评论；热评需另行设置条数。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "csdn": {
+                "description": "CSDN",
+                "type": "string",
+                "hint": "支持公开博客正文、配图及普通评论；付费文章仅输出公开预览并标注限制。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "cnblogs": {
+                "description": "博客园",
+                "type": "string",
+                "hint": "支持公开博客正文和配图；匿名评论接口要求登录，暂不输出评论。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "gitee": {
+                "description": "Gitee",
+                "type": "string",
+                "hint": "支持公开仓库概况及 Issue 正文、评论，不展开 README 或代码文件。请选择全部发送或仅文本；仅富媒体时没有可发送内容。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "tiktok": {
                 "description": "TikTok",
                 "type": "string",
@@ -252,6 +300,18 @@
                 "description": "GitHub",
                 "type": "string",
                 "hint": "支持公开仓库首页，展示仓库概况和简短介绍，不展开 README。请选择全部发送或仅文本；仅富媒体时没有可发送内容。",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
+            "gitlab": {
+                "description": "GitLab",
+                "type": "string",
+                "hint": "支持 gitlab.com 公开仓库概况及 Issue 正文、讨论，不支持自建站点。请选择全部发送或仅文本；仅富媒体时没有可发送内容。",
                 "options": [
                     "关闭",
                     "全部发送",
@@ -524,6 +584,21 @@
                         "type": "bool",
                         "default": true
                     },
+                    "juejin": {
+                        "description": "稀土掘金",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "csdn": {
+                        "description": "CSDN",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "gitee": {
+                        "description": "Gitee",
+                        "type": "bool",
+                        "default": true
+                    },
                     "tiktok": {
                         "description": "TikTok",
                         "type": "bool",
@@ -541,6 +616,11 @@
                     },
                     "pixiv": {
                         "description": "Pixiv",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "gitlab": {
+                        "description": "GitLab",
                         "type": "bool",
                         "default": true
                     }

@@ -27,12 +27,17 @@ from .parser.platform import (
     HupuParser,
     DoubanParser,
     V2exParser,
+    JuejinParser,
+    CsdnParser,
+    CnblogsParser,
+    GiteeParser,
     TikTokParser,
     YoutubeParser,
     SteamParser,
     TwitterParser,
     PixivParser,
     GitHubParser,
+    GitLabParser,
 )
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
@@ -69,12 +74,17 @@ PARSER_OUTPUT_KEYS = (
     "hupu",
     "douban",
     "v2ex",
+    "juejin",
+    "csdn",
+    "cnblogs",
+    "gitee",
     "tiktok",
     "youtube",
     "steam",
     "twitter",
     "pixiv",
     "github",
+    "gitlab",
 )
 
 OUTPUT_MODE_DISABLED = "关闭"
@@ -362,10 +372,14 @@ class HotCommentConfig:
     hupu: bool = True
     douban: bool = True
     v2ex: bool = True
+    juejin: bool = True
+    csdn: bool = True
+    gitee: bool = True
     tiktok: bool = True
     youtube: bool = True
     steam: bool = True
     pixiv: bool = True
+    gitlab: bool = True
 
 
 @dataclass
@@ -632,12 +646,17 @@ class ConfigManager:
         self._enable_hupu = self._parser_enabled("hupu")
         self._enable_douban = self._parser_enabled("douban")
         self._enable_v2ex = self._parser_enabled("v2ex")
+        self._enable_juejin = self._parser_enabled("juejin")
+        self._enable_csdn = self._parser_enabled("csdn")
+        self._enable_cnblogs = self._parser_enabled("cnblogs")
+        self._enable_gitee = self._parser_enabled("gitee")
         self._enable_tiktok = self._parser_enabled("tiktok")
         self._enable_youtube = self._parser_enabled("youtube")
         self._enable_steam = self._parser_enabled("steam")
         self._enable_twitter = self._parser_enabled("twitter")
         self._enable_pixiv = self._parser_enabled("pixiv")
         self._enable_github = self._parser_enabled("github")
+        self._enable_gitlab = self._parser_enabled("gitlab")
 
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
@@ -840,6 +859,21 @@ class ConfigManager:
                     True,
                     "message.hot_comments.v2ex",
                 ),
+                juejin=self._parse_bool(
+                    hot_comments.get("juejin", True),
+                    True,
+                    "message.hot_comments.juejin",
+                ),
+                csdn=self._parse_bool(
+                    hot_comments.get("csdn", True),
+                    True,
+                    "message.hot_comments.csdn",
+                ),
+                gitee=self._parse_bool(
+                    hot_comments.get("gitee", True),
+                    True,
+                    "message.hot_comments.gitee",
+                ),
                 tiktok=self._parse_bool(
                     hot_comments.get("tiktok", True),
                     True,
@@ -859,6 +893,11 @@ class ConfigManager:
                     hot_comments.get("pixiv", True),
                     True,
                     "message.hot_comments.pixiv",
+                ),
+                gitlab=self._parse_bool(
+                    hot_comments.get("gitlab", True),
+                    True,
+                    "message.hot_comments.gitlab",
                 ),
             ),
         )
@@ -1348,6 +1387,20 @@ class ConfigManager:
             parsers.append(
                 V2exParser(hot_comment_count=hot_comment_counts["v2ex"])
             )
+        if self._enable_juejin:
+            parsers.append(
+                JuejinParser(hot_comment_count=hot_comment_counts["juejin"])
+            )
+        if self._enable_csdn:
+            parsers.append(
+                CsdnParser(hot_comment_count=hot_comment_counts["csdn"])
+            )
+        if self._enable_cnblogs:
+            parsers.append(CnblogsParser())
+        if self._enable_gitee:
+            parsers.append(
+                GiteeParser(hot_comment_count=hot_comment_counts["gitee"])
+            )
         if self._enable_tiktok:
             parsers.append(
                 TikTokParser(
@@ -1399,6 +1452,10 @@ class ConfigManager:
                     proxy_url=proxy_addr if self.proxy.github_use_proxy else None,
                 )
             )
+        if self._enable_gitlab:
+            parsers.append(
+                GitLabParser(hot_comment_count=hot_comment_counts["gitlab"])
+            )
         return parsers
 
     # ── 静态辅助 ────────────────────────────────────────
@@ -1412,11 +1469,11 @@ class ConfigManager:
         valid_modes = set(OUTPUT_MODE_FLAGS)
         missing_mode = OUTPUT_MODE_ALL
         known_values = [values[key] for key in PARSER_OUTPUT_KEYS if key in values]
-        if len(known_values) >= len(PARSER_OUTPUT_KEYS) - 1 and all(
+        if known_values and all(
             str(raw_mode or "").strip() == OUTPUT_MODE_DISABLED
             for raw_mode in known_values
         ):
-            # 旧配置显式关闭全部已知平台时，新增平台也保持关闭，避免意外启用。
+            # 显式提供的平台全部关闭时，缺省平台也关闭，不依赖平台数量。
             missing_mode = OUTPUT_MODE_DISABLED
         for key in PARSER_OUTPUT_KEYS:
             if key not in values:
