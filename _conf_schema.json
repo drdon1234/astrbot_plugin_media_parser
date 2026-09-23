@@ -138,6 +138,17 @@
                 ],
                 "default": "全部发送"
             },
+            "tieba": {
+                "description": "百度贴吧",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "hupu": {
                 "description": "虎扑",
                 "type": "string",

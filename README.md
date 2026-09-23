@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.6.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.7.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -32,6 +32,7 @@ _✨ 自动解析流媒体平台链接，转换为媒体直链发送 ✨_
 | **雪球** | 视频 / 图片 / 文本 | 帖子、长文、视频 |
 | **微信** | 视频 / 图片 / 文本 | 公众号文章、纯图集、视频号 |
 | **知乎** | 图片 / 文本 | 回答、专栏文章 |
+| **百度贴吧** | 视频 / 图片 / 文本 | 电脑/手机帖子首楼、转发 |
 | **虎扑** | 视频 / 图片 / 文本 / 热评 | 电脑/手机帖子、亮评与普通回复 |
 | **豆瓣** | 视频 / 图片 / 文本 / 热评 | 公开条目、评论、小组、日记、广播、相册与阅读作品介绍 |
 | **TikTok** | 视频 / 图片 / 文本 | 视频、图集 |
@@ -143,6 +144,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 ## 📝 注意事项
 
 - **小黑盒**：游戏预览视频下载速度不佳（Steam CDN）时建议启用代理
+- **百度贴吧**：解析帖子首楼和直接转发的原帖，不展开多层转发；语音保留收听提示，外部视频播放页保留正文链接
 - **虎扑**：支持电脑端和手机端公开帖子，提取主帖正文、图片、原生视频与首屏亮评，亮评不足时补充普通回复；无需配置 Cookie。比赛战报组件仅保留原帖查看提示，删除、权限受限或未公开完整内容的帖子无法完整解析
 - **豆瓣**：无需手动配置 Cookie，支持公开影视、图书、音乐、游戏、舞台剧条目及长短评，小组话题、日记、广播、图书讨论、豆列、活动、照片、线上相册、预告片，以及豆瓣阅读作品介绍与评论。优先热门评论，也可展示普通评论；豆列和相册预览首批最多 24 项，阅读器链接返回作品介绍，不获取付费全文。私密、登录限制、删除内容或平台风控可能导致失败，评论失败时仍保留已取得的正文和媒体；部分独立短评链接必须保留分享参数
 - **TikTok**：受地区和风控影响较明显，必要时请开启代理
@@ -150,7 +152,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境
 - **Pixiv**：受地区限制时需同时代理解析请求和图片下载
 - **GitHub**：支持公开仓库首页，展示仓库名、所有者、简短介绍、主要语言、Star/Fork 数、许可证、归档状态、更新时间及原链接，不展开 README。请选择 `全部发送` 或 `仅文本`，也可使用文本元数据图片功能；Issue、Pull Request、Release、代码文件等子页不解析。无需 Token，受 GitHub 匿名接口频率限制，私有或不存在的仓库无法解析；连接受限时可填写代理地址并开启 `proxy.github`
-- **图片格式**：非 JPG/PNG 图片会尝试用 ffmpeg 转换；缺少 ffmpeg 时保留原格式
+- **图片格式**：非 JPG/PNG 图片会尝试用 ffmpeg 转为 PNG，GIF 等动图只保留首帧；缺少 ffmpeg 时保留原格式，显示效果取决于消息平台
 - 插件会跳过机器人自身消息以防重复解析；直播链接会自动跳过
 
 ---

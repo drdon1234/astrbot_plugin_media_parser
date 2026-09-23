@@ -11,6 +11,7 @@ from .xiaoheihe import XiaoheiheParser
 from .xueqiu import XueqiuParser
 from .wechat import WechatParser
 from .zhihu import ZhihuParser
+from .tieba import TiebaParser
 from .hupu import HupuParser
 from .douban import DoubanParser
 from .tiktok import TikTokParser
@@ -34,6 +35,7 @@ __all__ = [
     'XueqiuParser',
     'WechatParser',
     'ZhihuParser',
+    'TiebaParser',
     'HupuParser',
     'DoubanParser',
     'TikTokParser',

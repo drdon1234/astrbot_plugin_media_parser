@@ -22,6 +22,7 @@ from .parser.platform import (
     XueqiuParser,
     WechatParser,
     ZhihuParser,
+    TiebaParser,
     HupuParser,
     DoubanParser,
     TikTokParser,
@@ -61,6 +62,7 @@ PARSER_OUTPUT_KEYS = (
     "xueqiu",
     "wechat",
     "zhihu",
+    "tieba",
     "hupu",
     "douban",
     "tiktok",
@@ -607,6 +609,7 @@ class ConfigManager:
         self._enable_xueqiu = self._parser_enabled("xueqiu")
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
+        self._enable_tieba = self._parser_enabled("tieba")
         self._enable_hupu = self._parser_enabled("hupu")
         self._enable_douban = self._parser_enabled("douban")
         self._enable_tiktok = self._parser_enabled("tiktok")
@@ -1234,6 +1237,8 @@ class ConfigManager:
             )
         if self._enable_zhihu:
             parsers.append(ZhihuParser())
+        if self._enable_tieba:
+            parsers.append(TiebaParser())
         if self._enable_hupu:
             parsers.append(HupuParser(hot_comment_count=hupu_hc))
         if self._enable_douban:

@@ -22,6 +22,7 @@
 - 雪球：支持 视频 / 图片 / 文本；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
 - 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
 - 知乎：支持 图片 / 文本；覆盖指定回答和专栏文章，回答使用匿名 API，文章使用匿名访客 `d_c0` 与接口签名。
+- 百度贴吧：支持 视频 / 图片 / 文本；通过匿名客户端接口获取帖子首楼与直接转发的原帖，统一处理手机与电脑端帖子链接。
 - 虎扑：支持 视频 / 图片 / 文本 / 热评；从公开帖子首屏状态提取主帖、亮评与普通回复，统一电脑和手机分享入口。
 - 豆瓣：支持 视频 / 图片 / 文本 / 热评；结合匿名移动接口、公开网页与阅读查询获取内容，自动处理已验证的匿名访客校验，集合只作有限展开。
 - TikTok：支持 视频 / 图片 / 文本；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
@@ -76,6 +77,7 @@ astrbot_plugin_media_parser/
     │       ├── zhihu/              # 知乎子包
     │       │   ├── parser.py        # 回答/文章路由与匿名接口请求
     │       │   └── sign.py          # 专栏文章接口签名
+    │       ├── tieba.py             # 百度贴吧帖子首楼解析器
     │       ├── hupu.py              # 虎扑公开主帖与首屏评论
     │       ├── douban/              # 豆瓣子包
     │       │   ├── parser.py        # 实体路由、内容与评论获取
@@ -243,7 +245,7 @@ cache/runtime_manager/bilibili/cookie.json
 - 平台解析器：单模块平台为 `platform/<平台>.py`，多模块平台为 `platform/<平台>/parser.py`。
 - 平台辅助模块：只被 1 个平台解析器引用的传输层、签名等模块，放在该平台的子包内，模块名只描述职责。
 - 不新建跨平台共享位置：不存在被 2 个及以上平台解析器共同继承的类或共同导入的模块（`base.py` 与 `utils.py` 除外）。2 个及以上平台需要等价辅助逻辑时各自持有一份实现——抖音与 TikTok 的 URL / 时间戳 / JSON 辅助方法即按此规则各存一份，代价是两份实现可能随时间产生差异，收益是单平台调整不会波及另一平台。
-- 新增平台需要修改 3 处登记点：`platform/__init__.py` 的 `__all__`、`config_manager.py` 的 `PARSER_OUTPUT_KEYS` 与 `create_parsers()`、`_conf_schema.json` 的平台配置项。
+- 新增平台需要同步修改 `platform/__init__.py` 的导入与 `__all__`、`config_manager.py` 的 `PARSER_OUTPUT_KEYS`、启用状态与 `create_parsers()`、`_conf_schema.json` 的平台配置项，以及 `run_local.py` 的 `PARSER_DISCOVERY_ORDER`；登记顺序与 `AGENTS.md` 的平台分类一致。
 
 #### AcFun 解析
 
@@ -324,7 +326,7 @@ video_count .. video_count + image_count - 1   图片
 - `dash:video_url||audio_url`：进入 DASH 处理器，video/audio 并发下载，音频存在时必须 ffmpeg 合并成功。
 - `m3u8:` 或 URL 中含 `.m3u8`：进入 M3U8 处理器，下载分片、合并；音视频分离时需要 ffmpeg。
 - `range:`：普通视频路径中先尝试并发 Range 下载，失败降级普通视频下载。
-- `image`：进入图片处理器；非 jpg/jpeg/png 会尝试 ffmpeg 转 PNG，缺少 ffmpeg 时保留原格式并写入警告。
+- `image`：进入图片处理器；非 jpg/jpeg/png 会尝试 ffmpeg 转 PNG，GIF 等动图通过 `-frames:v 1` 只保留首帧，缺少 ffmpeg 时保留原格式并写入警告。
 - 其他：普通视频流式下载。
 
 `validator.py` 负责 HEAD/Range GET 预检、大小提取、Content-Type 检查、HTML/JSON/文本错误响应识别和 403 状态传递。`budget.py` 为普通视频、图片、DASH、HLS 和封面截取提供流式硬字节预算。所有文件先写 `.part` 再原子替换，取消或失败不会留下伪成功文件。HLS 会选择最高分辨率/带宽变体并限制清单、初始化片和分片总量；`EXT-X-BYTERANGE` 当前明确拒绝。
