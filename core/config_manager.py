@@ -15,6 +15,7 @@ from .parser.platform import (
     KuaishouParser,
     AcfunParser,
     NeteaseParser,
+    XimalayaParser,
     WeiboParser,
     XiaohongshuParser,
     XianyuParser,
@@ -63,6 +64,7 @@ PARSER_OUTPUT_KEYS = (
     "kuaishou",
     "acfun",
     "netease",
+    "ximalaya",
     "weibo",
     "xiaohongshu",
     "xianyu",
@@ -364,6 +366,7 @@ class HotCommentConfig:
     douyin: bool = True
     acfun: bool = True
     netease: bool = True
+    ximalaya: bool = True
     weibo: bool = True
     xiaohongshu: bool = True
     xianyu: bool = True
@@ -639,6 +642,7 @@ class ConfigManager:
         self._enable_kuaishou = self._parser_enabled("kuaishou")
         self._enable_acfun = self._parser_enabled("acfun")
         self._enable_netease = self._parser_enabled("netease")
+        self._enable_ximalaya = self._parser_enabled("ximalaya")
         self._enable_weibo = self._parser_enabled("weibo")
         self._enable_xiaohongshu = self._parser_enabled("xiaohongshu")
         self._enable_xianyu = self._parser_enabled("xianyu")
@@ -813,6 +817,11 @@ class ConfigManager:
                     hot_comments.get("netease", True),
                     True,
                     "message.hot_comments.netease",
+                ),
+                ximalaya=self._parse_bool(
+                    hot_comments.get("ximalaya", True),
+                    True,
+                    "message.hot_comments.ximalaya",
                 ),
                 weibo=self._parse_bool(
                     hot_comments.get("weibo", True),
@@ -1345,6 +1354,10 @@ class ConfigManager:
         if self._enable_netease:
             parsers.append(
                 NeteaseParser(hot_comment_count=hot_comment_counts["netease"])
+            )
+        if self._enable_ximalaya:
+            parsers.append(
+                XimalayaParser(hot_comment_count=hot_comment_counts["ximalaya"])
             )
         if self._enable_weibo:
             parsers.append(

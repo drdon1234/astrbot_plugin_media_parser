@@ -46,6 +46,7 @@ PARSER_DISCOVERY_ORDER = (
     "kuaishou",
     "acfun",
     "netease",
+    "ximalaya",
     "weibo",
     "xiaohongshu",
     "xianyu",

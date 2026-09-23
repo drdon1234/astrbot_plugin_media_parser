@@ -227,7 +227,17 @@ window.videoInfo / window.articleInfo / window.bangumiData
 
 热评使用 `/api/v1/resource/hotcomments/R_SO_4_{id}`，按服务端顺序分页并去重，最多读取 3 页；关闭热评不发起请求，评论失败保留已取得内容。平台请求不跟随重定向，JSON 响应有体积上限，取消正常透传。
 
-## 七、微博
+## 七、喜马拉雅
+
+支持能力：音频 / 图片 / 文本 / 热评。
+
+支持 `www.ximalaya.com`、`m.ximalaya.com` 与裸域名的 `/sound/{id}`、`/{数字主播ID}/sound/{id}`，按单集编号去重，保留消息中的提链顺序；输出规范 `/sound/{id}` 链接。专辑、评论详情、短链和应用私有协议不接入。
+
+通过匿名 `https://m.ximalaya.com/tracks/{id}.json` 取得标题、主播、简介、封面、时长与 `play_path_64`、`play_path_32`、`play_path` 候选。验证单集身份，清洗 HTML，媒体只接受平台 CDN 域名。候选内出现 `_preview_` 时区分试听，不与普通音频混成同一组；付费或状态未知的可用 URL 不声明为完整音频，接口没有音频仍保留图文信息。
+
+高赞评论使用移动接口 `/m-revision/common/track/queryTrackCommentsFirstPage`，按 `trackId` 验证归属，保留首屏顺序、去重并排除楼中楼，最多 20 条；不把页码增加当作已验证的分页，不用普通评论接口补足。关闭评论不发请求，评论失败保留音频与详情。所有 JSON 响应有体积限制、不跟随重定向，取消操作向上传播，不增加 Cookie、代理或新依赖。
+
+## 八、微博
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -267,7 +277,7 @@ Component_Play_Playinfo
 
 视频地址来自播放组件的 URL 集合。视频页能提供的作者、标题和正文比普通微博少，以组件返回为准，缺失时保持空值。
 
-## 八、小红书
+## 九、小红书
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -296,7 +306,7 @@ xhslink.com / xhslink.cn / xiaohongshu.com
 
 正文里的话题标签带前端标记，解析时清理成可读文本。评论信息如果已随页面状态下发，从状态树中收集并按点赞数排序；状态里没有就不额外请求高风险接口。
 
-## 九、闲鱼
+## 十、闲鱼
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -341,7 +351,7 @@ mtop.taobao.idle.awesome.detail
 
 商品留言使用 `mtop.taobao.idle.comment.list` 版本 `5.0`，复用现有 MTop 匿名签名，参数按平台使用 `roesPerPage`。保留接口顺序和打码昵称；公开列表通常只返回 3 条，即便总数非零或标记还有下一页，也可能拿不到更多留言。
 
-## 十、今日头条
+## 十一、今日头条
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -421,7 +431,7 @@ Result.Data.PlayInfoList
 
 评论使用移动前端的 `https://api.toutiaoapi.com/article/v4/tab_comments/`，优先根据页面 `sessionConfig.groupId`，再用 `articleInfo.gid` 等字段确定 `group_id`，校验响应资源身份后分页读取，保留平台排序。文章、视频与微头条的完整解析和评论分页均已在线验证。
 
-## 十一、小黑盒
+## 十二、小黑盒
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -478,7 +488,7 @@ game_introduction?steam_appid=...
 
 帖子评论复用 `/bbs/app/link/tree`，以 `owner_only=0` 获取楼层，只将每楼首项作为主评论，排除楼中楼混入。PC 游戏评价使用 `/bbs/app/link/game/comments` 的 `sort_type=4`（有用），两条路线复用现有签名及请求代理。主机、手游评价尚未接入。
 
-## 十二、雪球
+## 十三、雪球
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -530,7 +540,7 @@ api.xueqiu.com/statuses/show.json?id={status_id}
 
 评论复用匿名访客令牌与失效重试，先请求 `api.xueqiu.com/statuses/comments_excellent.json` 的精选，再用 `comments.json` 普通评论补足；按评论 ID 去重。评论总数字段不等于本次实际取得数量。
 
-## 十三、微信
+## 十四、微信
 
 支持能力：公众号图片 / 公众号正文 / 视频号视频 / 视频号文本
 
@@ -604,7 +614,7 @@ data.feedInfo + data.authorInfo
 
 公众号图文已通过两篇普通文章和一篇纯图集真实样例匿名验证，并抽样确认图片可访问。视频号除覆盖两步请求、结果字段和异常分支的模拟验证外，还使用两个真实短链验证了元宝换票、HTTP 201 预览响应及媒体 CDN Range 访问；未验证 AstrBot 内的完整下载与发送流程。
 
-## 十四、知乎
+## 十五、知乎
 
 支持能力：图片 / 文本 / 热评
 
@@ -620,7 +630,7 @@ data.feedInfo + data.authorInfo
 
 回答和专栏评论分别请求 `/api/v4/comment_v5/answers/{id}/root_comment` 与 `/api/v4/comment_v5/articles/{id}/root_comment`，使用 `order=score`，复用匿名 `d_c0` 和 `x-zse-96`。根据响应下一页游标重新签名，限定当前资源路径，正文 HTML 和图片转换为评论文本。
 
-## 十五、百度贴吧
+## 十六、百度贴吧
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -640,7 +650,7 @@ data.feedInfo + data.authorInfo
 
 链接形态参考 [TiebaLite](https://github.com/HuanCheng65/TiebaLite)，富文本字段参考 [open-tbm](https://github.com/n0099/open-tbm)，混排与转发验证样例参考 [aiotieba](https://github.com/lumina37/aiotieba)；最终字段与接口行为以实际响应核验。
 
-## 十六、NGA
+## 十七、NGA
 
 支持能力：图片 / 文本 / 热评
 
@@ -666,7 +676,7 @@ data.feedInfo + data.authorInfo
 
 请求方式参考 [RSSHub NGA forum.ts](https://github.com/DIYgod/RSSHub/blob/75d43dd0868d3a169cb0bc94eabf354d26af5e9c/lib/routes/nga/forum.ts)。
 
-## 十七、虎扑
+## 十八、虎扑
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -678,7 +688,7 @@ data.feedInfo + data.authorInfo
 
 虎扑注册独立输出模式与热评开关，复用全局评论条数和文本输出条件，无需 Cookie 或代理配置。
 
-## 十八、豆瓣
+## 十九、豆瓣
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -694,7 +704,7 @@ data.feedInfo + data.authorInfo
 
 豆瓣注册独立输出模式与热评开关，复用全局评论条数和文本输出条件，不新增 Cookie 配置、第三方依赖或代理设置。
 
-## 十九、V2EX
+## 二十、V2EX
 
 支持能力：图片 / 文本 / 热评
 
@@ -708,7 +718,7 @@ data.feedInfo + data.authorInfo
 
 感谢数复用 `hot_comments.likes`，未知时省略，不伪造为 `0`；评论正文中的图片仅保留文本提示，不加入主帖配图。所有响应限制为 8 MiB，评论请求失败保留主帖，取消操作继续向上传播。不增加登录、代理或独立评论数量配置。
 
-## 二十、稀土掘金
+## 二十一、稀土掘金
 
 支持能力：图片 / 文本 / 热评
 
@@ -716,7 +726,7 @@ data.feedInfo + data.authorInfo
 
 评论使用 `/interact_api/v1/comment/list` 的热门排序，最多读取 3 页；一级评论不足时使用内嵌回复及最多 3 次 `/interact_api/v1/reply/list` 请求补齐，输出总数受全局条数限制。按文章、父评论身份校验并去重，未知点赞省略，评论失败保留正文及已有评论。
 
-## 二十一、CSDN
+## 二十二、CSDN
 
 支持能力：图片 / 文本 / 热评
 
@@ -724,7 +734,7 @@ data.feedInfo + data.authorInfo
 
 付费文章仅使用服务器匿名返回的公开预览，在正文中明确说明限制并设置 `is_preview_only`；不请求解锁接口。评论使用 `POST /phoenix/web/v1/comment/list/{文章ID}?page={页}&size=10&fold=unfold`，最多 5 页，按平台普通顺序读取一级评论及附带回复。核对文章身份、去重并限制总数，评论失败不影响正文。
 
-## 二十二、博客园
+## 二十三、博客园
 
 支持能力：图片 / 文本
 
@@ -732,7 +742,7 @@ data.feedInfo + data.authorInfo
 
 匿名评论接口实测要求登录，返回的评论计数不能证明正文可获取，因此当前不注册评论开关、不发起评论请求。不接入新闻子站、登录内容或搜索摘要。
 
-## 二十三、Gitee
+## 二十四、Gitee
 
 支持能力：文本 / 评论
 
@@ -740,7 +750,7 @@ data.feedInfo + data.authorInfo
 
 Issue 使用 `/repos/{owner}/{repo}/issues/{编号}` 及其 `/comments` 接口，保留大小写敏感的字母数字编号。核验议题归属，读取有限普通评论，保留正文、作者、时间和回复关联；缺少点赞字段时省略，不称为热门评论。
 
-## 二十四、TikTok
+## 二十五、TikTok
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -775,7 +785,7 @@ oEmbed 只适合补充标题、作者等文本，媒体资源以页面脚本中�
 
 评论调用 `/api/comment/list/`，使用作品 ID 和游标，沿用解析代理；按平台默认顺序展示，不推断为全站点赞排名。评论风控或空响应不影响已经解析成功的作品。
 
-## 二十五、YouTube
+## 二十六、YouTube
 
 支持能力：视频 / 文本 / 热评
 
@@ -806,7 +816,7 @@ YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长�
 
 评论复用观看页 `ytInitialData` 的热门或默认入口，以及 `ytcfg` 中的 WEB 客户端上下文，请求 `/youtubei/v1/next`。按根列表的 `commentViewModel` 关联 `commentEntityPayload`，不追踪子回复游标；缩写赞数和相对时间保留平台原文。
 
-## 二十六、Steam
+## 二十七、Steam
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -838,7 +848,7 @@ Steam 代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情
 
 玩家评测调用官方 `/appreviews/{appid}`，优先过去一年内的中文有用评测，不足时补充所有语言的近期评测；使用 Steam 解析代理。即使游戏详情委托小黑盒，评测仍取自 Steam，内部小黑盒实例不重复请求评价。
 
-## 二十七、Twitter/X
+## 二十八、Twitter/X
 
 支持能力：视频 / 图片 / 文本
 
@@ -879,7 +889,7 @@ Twitter 响应嵌套很深，不能假设固定路径永远在。递归找带有
 
 一条推文没有图片和视频但有正文，仍然是可解析内容。
 
-## 二十八、Pixiv
+## 二十九、Pixiv
 
 支持能力：图片 / 文本 / 热评
 
@@ -920,7 +930,7 @@ image_urls = [
 
 作品评论使用 `/ajax/illusts/comments/roots`，按 `offset` 分页并保留时间倒序；复用原有 Cookie 和代理。纯贴纸评论转换为 `[贴纸]`，缺少点赞字段时不伪造零赞。
 
-## 二十九、GitHub
+## 三十、GitHub
 
 支持能力：文本
 
@@ -932,7 +942,7 @@ image_urls = [
 
 不配置登录 Cookie 或 Token；匿名接口受到 GitHub 频率限制，限流、私有或不存在的仓库会明确失败，不切换为网页抓取或重复请求规避限制。
 
-## 三十、GitLab
+## 三十一、GitLab
 
 支持能力：文本 / 评论
 
@@ -942,7 +952,7 @@ Issue 接入 `/-/issues/{编号}` 及 Issue 类型的 `/-/work_items/{编号}`�
 
 GitLab 和 Gitee 均复用现有文本元数据和评论链路；仓库概况不请求评论，`仅富媒体` 没有可发送媒体。五个技术平台不新增依赖、Token、Cookie 或代理配置。评论默认关闭，仅在输出模式包含文本、全局条数大于零且对应开关开启时请求；响应有界，取消操作继续向上传播。
 
-## 三十一、维护原则
+## 三十二、维护原则
 
 改平台解析逻辑前，过一遍这些问题：
 
