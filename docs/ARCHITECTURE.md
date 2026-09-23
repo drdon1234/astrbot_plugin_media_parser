@@ -1,6 +1,6 @@
 # 架构文档
 
-本文件按当前项目真实实现描述插件边界、模块职责和主流程。平台解析细节见 `docs/PARSER_METHOD_MEMO.md`。
+本文件按当前实现描述插件边界、模块职责和主流程。平台解析细节见 [平台解析备忘](PARSER_METHOD_MEMO.md)，使用与配置见 [README](../README.md)。
 
 ## 一、整体框架
 
@@ -8,7 +8,7 @@
 
 本项目是 AstrBot 流媒体平台链接解析插件。插件监听消息事件，识别可解析平台链接，调用对应平台解析器提取文本元数据和媒体候选 URL，再按缓存目录能力与媒体类型决定 `local/direct/skip` 发送模式，最终构建 AstrBot 消息节点并完成清理。
 
-当前支持的平台解析器包括：
+当前注册 30 个平台解析器，按项目约定顺序列出：
 
 - B站：支持 视频 / 图片 / 文本 / 热评；覆盖普通视频、番剧、动态 / opus，支持 Cookie 增强和扫码登录运行时。
 - 抖音：支持 视频 / 图片 / 文本 / 热评；覆盖短链、视频、图集和 slides 多分段分享页。
@@ -29,12 +29,17 @@
 - 虎扑：支持 视频 / 图片 / 文本 / 热评；从公开帖子首屏状态提取主帖、亮评与普通回复，统一电脑和手机分享入口。
 - 豆瓣：支持 视频 / 图片 / 文本 / 热评；结合匿名移动接口、公开网页与阅读查询获取内容，自动处理已验证的匿名访客校验，集合只作有限展开。
 - V2EX：支持 图片 / 文本 / 热评；匿名接口读取公开主题主帖图文，评论结合顺序回复与前 5 页网页感谢数，在已读取范围内优先展示获感谢的回复。
+- 稀土掘金：支持 图片 / 文本 / 热评；匿名文章接口读取公开正文，评论按热门排序并限量补充回复。
+- CSDN：支持 图片 / 文本 / 评论；从文章页读取公开正文，付费文章只展示匿名可见预览，评论保留普通顺序。
+- 博客园：支持 图片 / 文本；仅提取公开博客文章正文，不请求需要登录的评论。
+- Gitee：支持 文本 / 评论；官方匿名接口读取公开仓库概况和 Issue，评论只适用于 Issue。
 - TikTok：支持 视频 / 图片 / 文本 / 热评；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
 - YouTube：支持 视频 / 文本 / 热评；覆盖 `watch`、`shorts`、`youtu.be` 和 `embed` 链接，通过内置播放器接口获取短时效直链。
 - Steam：支持 视频 / 图片 / 文本 / 热评；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本 / 热评；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
 - GitHub：支持 文本；通过官方匿名仓库接口获取公开仓库首页概况，不读取 README 或仓库子页。
+- GitLab：支持 文本 / 评论；匿名接口读取 gitlab.com 公开项目概况和 Issue，讨论只适用于 Issue。
 
 ### 1.2 核心模块结构
 
@@ -123,7 +128,8 @@ astrbot_plugin_media_parser/
     │       ├── image.py             # 图片下载与可选 ffmpeg 转 PNG
     │       └── video_cover.py       # 视频仅封面模式的首帧截取
     ├── message_adapter/
-    │   ├── node_builder.py          # Plain/Image/Video 节点构建
+    │   ├── node_builder.py          # Plain/Image/Video/Record/File 节点构建
+    │   ├── font_manager.py          # 中文字体校验、下载与缓存
     │   ├── text_renderer.py         # 文本元数据 PNG 渲染
     │   ├── sender.py                # 聚合/独立/文件发送
     │   └── archive_builder.py       # 解析结果 ZIP 归档
@@ -155,22 +161,20 @@ astrbot_plugin_media_parser/
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
-Gitee、GitHub 和 GitLab 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况及 Issue 正文复用既有文本元数据可见性、长度限制和图片渲染链路。Gitee、GitLab 的评论开关仅作用于 Issue，仓库概况不请求评论；未知赞数省略。
-
 `message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 25 个平台开关默认开启（快手、微信、博客园、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
-新增平台复用已有签名、访客会话和代理设置；优先热门或精选列表，也允许默认排序、时间排序评论及游戏评价。各解析器限制分页次数并按评论 ID 去重，接口失败保留正文及已取得评论，取消操作向上传播。`hot_comments` 中的 `likes` 可以是精确整数或平台提供的缩写字符串；未知时省略，消息节点显示 `-`。
+Gitee、GitHub 和 GitLab 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况及 Issue 正文复用既有文本元数据可见性、长度限制和图片渲染链路。Gitee、GitLab 的评论开关仅作用于 Issue，仓库概况不请求评论；未知赞数省略。
 
-NGA 评论复用 `message.hot_comments.count`（默认 `0`）与 `message.hot_comments.nga`（默认开启）；仅在数量大于 `0`、平台开关开启且 NGA 输出模式包含文本时读取。优先使用平台返回的热门回复，没有可用热门回复时才按楼层顺序限量读取普通回复；评论获取失败不影响首帖正文和媒体。
+评论请求复用对应平台已有的签名、访客会话和代理设置；优先热门或精选列表，也允许默认排序、时间排序评论及游戏评价。评论来源、排序和读取范围由各平台决定，分页请求设有上限；接口失败保留正文及已取得评论，取消操作向上传播。`hot_comments` 中的 `likes` 可以是精确整数或平台提供的缩写字符串；未知时省略，消息节点显示 `-`。
 
 V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参数无效，因此只请求一次；网页最多读取前 5 页的感谢统计，按回复 ID、作者和时间核对归属后，在取得的范围内按感谢数优先，其余按楼层补齐。网页失败或没有感谢时保留普通顺序，不把有限范围的排序称为全帖热门。
 
 #### 消息聚合与 ZIP 归档
 
-`message.packing.mode` 是为保留现有用户配置而继续使用的持久化路径，内部映射为 `AggregationConfig`，控制最终发送策略：
+`message.packing.mode` 在内部映射为 `AggregationConfig`，控制最终发送策略：
 
 - `不聚合`：始终逐链接独立发送。
-- `全部聚合`：普通媒体使用 `Nodes` 消息集合发送，大媒体仍按 `download.large_video_threshold_mb` 单独发送。
+- `全部聚合`：普通图片、视频和文本使用 `Nodes` 消息集合发送，大媒体仍按 `download.large_video_threshold_mb` 单独发送；语音和音频文件始终单独发送。
 - `按条件聚合`：统计真正进入合并转发的图片、视频、文本和翻译节点，任一数量达到 `message.packing.thresholds` 对应阈值时使用消息集合；单独发送的大媒体不参与统计。
 
 `message.packing.thresholds.image_count`、`video_count`、`node_count` 均为非负整数。阈值为 `0` 时表示不按该项触发聚合。
@@ -179,7 +183,7 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
 
-`message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。现有 `message.*` 路径保持不变，避免 AstrBot 递归更新 schema 时删除用户旧配置。
+`message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
 
 `message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42。`font_manager.py` 在插件加载和实际渲染前幂等检查默认 Noto Sans CJK，缺失或大小、SHA256 校验失败时从固定版本的字体仓库 Release 流式下载，经临时文件校验后原子落盘；也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体，再按配置的字体族和系统字体路径回退。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
 
@@ -197,7 +201,7 @@ B站运行时 Cookie 文件位于当前缓存根目录下：
 cache/runtime_manager/bilibili/cookie.json
 ```
 
-缓存目录不可用时，普通视频会尽量走 `direct`；图片、DASH、M3U8、平台强制缓存视频会 `skip`。
+缓存目录不可用时，普通视频会尽量走 `direct`；图片、独立音频、仅含 DASH/M3U8 候选的视频及平台强制缓存视频会 `skip`。非强制缓存的视频若同时提供普通直链候选，会剔除流媒体候选，再预检普通直链。
 
 #### 媒体模式
 
@@ -207,7 +211,7 @@ cache/runtime_manager/bilibili/cookie.json
 - `direct`：节点层直接使用 URL 发送。目前主要用于缓存不可用时的普通视频。
 - `skip`：不构建富媒体节点，但文本节点可展示跳过原因。
 
-下载失败后不会静默回退直链。失败原因必须留在 `video_skip_reasons` 或 `image_skip_reasons` 中。
+下载失败后不会静默回退直链。失败原因必须留在对应的 `video_skip_reasons`、`image_skip_reasons` 或 `audio_skip_reasons` 中。
 
 ## 二、模块职责
 
@@ -239,10 +243,10 @@ cache/runtime_manager/bilibili/cookie.json
 - `SteamConfig`：Steam 游戏页是否改用小黑盒完整路径解析。
 - `PixivConfig`：Pixiv Web Ajax API 使用的可选 Cookie。
 - `MediaRelayConfig`：文件 Token 中转开关、回调地址、TTL。
-- `TranslationConfig`：翻译开关、翻译范围、目标语言、AstrBot 内置或自定义大模型配置。输入/输出上限固定为 4000，超时固定为 60 秒，随机性固定为 0。
+- `TranslationConfig`：翻译开关、翻译范围、目标语言、AstrBot 内置或自定义大模型配置。单请求输入上限为 4000 字符、输出上限为 4000 Token，超时为 60 秒，随机性为 0。
 - `AdminConfig`：清理关键词和 debug 模式。
 
-`ConfigManager` 会将 `parsers` 的输出模式归一到 `ParserOutputConfig.modes`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。缺省平台使用 `全部发送`；显式无效值会安全关闭并记录警告。`message.packing.mode` 会被归一为 `不聚合`、`全部聚合`、`按条件聚合`；条件阈值按非负整数兜底。旧模式值和旧 ZIP 命令会在 schema 仍保留这些字段时迁移，避免 AstrBot 完整性检查提前删除用户配置。
+`ConfigManager` 会将 `parsers` 的输出模式归一到 `ParserOutputConfig.modes`。使用 `关闭`、`全部发送`、`仅文本`、`仅富媒体` 四种字符串模式。通常缺省平台使用 `全部发送`；如果显式提供的已知平台全部为 `关闭`，缺省平台也关闭。显式无效模式会安全关闭并记录警告，整个 `parsers` 配置类型无效时关闭全部解析器。`message.packing.mode` 会被归一为 `不聚合`、`全部聚合`、`按条件聚合`；条件阈值按非负整数兜底。现有 `_migrate_message_config()` 在配置解析前处理旧聚合模式和旧 ZIP 命令字段；维护时以现有路径为准，不新增兼容分支。
 
 权限优先级为：管理员直接放行，其次个人白名单、个人黑名单、群组白名单、群组黑名单；均未命中时，白名单开启则拒绝，白名单关闭则放行。管理员 ID 会自动加入用户白名单。权限根配置、白/黑名单子配置、开关值或名单类型无效时整段权限配置 fail-closed，所有消息均拒绝。
 
@@ -253,7 +257,7 @@ cache/runtime_manager/bilibili/cookie.json
 - 只负责文本提链，不再使用用户可伪造的文本哨兵；`main.py` 在事件层通过发送者 ID 跳过机器人自身消息。
 - 遍历启用的解析器调用 `extract_links()`。
 - 过滤 hostname 标签含 `live` 的直播链接，也会识别 query 参数内嵌的直播跳转。
-- 按原文出现位置排序并去重。
+- 原文可定位链接按出现位置排序；解析器规范化后无法定位的链接按提取顺序排在其后，再按 URL 去重。
 
 `ParserManager` 负责：
 
@@ -337,10 +341,10 @@ video_count + image_count ..                  音频
 每个视频独立决策：
 
 - `video_force_download` 为真：该解析结果中的视频必须 `local`。
-- URL 含 `dash:` 或 `m3u8:`：必须 `local`。
+- DASH/M3U8 候选必须本地处理；无缓存时只有同组提供普通直链且未强制缓存，才可筛选这些直链并预检后 `direct`。
 - 缓存可用的普通视频：`local`。
 - 缓存不可用的普通视频：通过大小与可访问性预检后 `direct`。
-- 必须 `local` 但缓存不可用：`skip`。
+- 必须 `local` 且没有可用普通直链回退、缓存又不可用：`skip`。
 - 普通视频会先走 `get_video_size()`，必要时再 `validate_media_url()`；超过 `download.max_video_size_mb` 或 403 会记录跳过原因。
 
 每个图片独立决策：
@@ -359,7 +363,7 @@ video_count + image_count ..                  音频
 - `image`：进入图片处理器；非 jpg/jpeg/png 会尝试 ffmpeg 转 PNG，GIF 等动图通过 `-frames:v 1` 只保留首帧，缺少 ffmpeg 时保留原格式并写入警告。
 - 其他：普通视频流式下载。
 
-`validator.py` 负责 HEAD/Range GET 预检、大小提取、Content-Type 检查、HTML/JSON/文本错误响应识别和 403 状态传递。`budget.py` 为普通视频、图片、DASH、HLS 和封面截取提供流式硬字节预算。所有文件先写 `.part` 再原子替换，取消或失败不会留下伪成功文件。HLS 会选择最高分辨率/带宽变体并限制清单、初始化片和分片总量；`EXT-X-BYTERANGE` 当前明确拒绝。
+`validator.py` 负责 HEAD/Range GET 预检、大小提取、Content-Type 检查、HTML/JSON/文本错误响应识别和 403 状态传递。`budget.py` 为普通视频、图片、DASH、HLS 和封面截取提供流式硬字节预算，独立音频下载器自行执行音频预算。媒体下载和转换先写临时文件，再原子替换成品；取消或失败会清理未完成文件。HLS 会选择最高分辨率/带宽变体并限制清单、初始化片和分片总量；`EXT-X-BYTERANGE` 当前明确拒绝。
 
 ### 2.6 存储与清理 `core/storage/`
 
@@ -367,8 +371,9 @@ video_count + image_count ..                  音频
 
 - `stamp_subdir(directory)` 在媒体缓存子目录中写 `.astrbot_media_parser`。
 - `cleanup_marked_in(root_dir)` 只删除缓存根目录的直接子目录中带标记的条目，不删除根目录，不触碰未标记目录。
-- `cleanup_file()` 删除单个文件后尝试删除空父目录；如果父目录仅剩标记文件，会同时删除标记和目录。
-- `cleanup_files()` 清理本次构建结果记录的图片和视频文件。
+- `cleanup_file()` 删除单个文件后尝试删除空父目录；如果父目录仅剩归属标记和过期标记，会同时删除标记和目录。
+- `cleanup_files()` 清理解析结果及节点构建记录的图片、视频、音频和渲染图片。
+- `mark_files_expire_after()` 写入 `.astrbot_media_parser.expire`；周期扫描只通过 `cleanup_expired_marked_in()` 回收过期目录，并另行回收过期 ZIP 工作目录。
 - `cleanup_directory()` 用于全部媒体失败后的空壳子目录清理，或 M3U8 临时目录清理。
 
 文件 Token 中转由 `file_token.py` 实现：
@@ -377,7 +382,7 @@ video_count + image_count ..                  音频
 - 优先使用插件配置 `media_relay.callback_url`；为空时回退 AstrBot 全局 `callback_api_base`。
 - 注册失败不会改变媒体模式，节点层会回退本地文件。
 - 文本元数据渲染生成的 PNG 不属于媒体索引，但在中转开启时会单独注册，并与媒体文件使用相同 TTL。
-- `main.py` 会按 `media_relay.ttl` 延迟清理本次文件，延迟任务受插件生命周期管理。
+- 只要本次至少一个文件成功注册 Token，`main.py` 就按 `media_relay.ttl` 延迟清理本次文件；仅打开中转开关但全部注册失败不会延迟。原始音频文件发送会独立触发至少 300 秒的保留期，延迟任务受插件生命周期管理。
 
 ### 2.7 消息适配器 `core/message_adapter/`
 
@@ -387,7 +392,7 @@ video_count + image_count ..                  音频
 - 热评节点和翻译节点是独立文本节点，不混入文本元数据节点。热评不进入翻译流程。
 - 翻译结果来自后台大模型任务，按链接独立请求，每条请求最多包含标题和简介/正文；无需翻译时不会生成翻译节点。
 - `collect_text_metadata()` 按发送顺序收集基础文本、热评和翻译；启用图片渲染时，`strip_text_metadata_nodes()` 只在 PNG 生成成功后移除这些 Plain 节点。`text_renderer.py` 在线程中调用 Pillow 绘制中文换行、字段标签和样式背景。
-- 富媒体节点只消费 `video_modes/image_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的 URL，`skip` 不构建节点。
+- 富媒体节点消费 `video_modes/image_modes/audio_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的视频 URL，`skip` 不构建节点。音频根据配置构建 `Record` 或 `File`，不使用源站直链发送。
 - 内部先尝试构建富媒体节点，再构建文本节点，这样节点构建失败时可把原因回填到 metadata，文本节点可展示。
 - `build_all_nodes()` 返回 `BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)`。
 - `summarize_node_counts()` 统计真正进入合并转发的图片、视频和总节点数量，供按条件聚合判断使用。
@@ -396,7 +401,7 @@ video_count + image_count ..                  音频
 `sender.py` 负责发送，是否进入消息集合由 `main.py` 在节点构建后决定：
 
 - `message.packing.mode=不聚合`：逐链接独立发送。
-- `message.packing.mode=全部聚合`：使用 `Nodes` 聚合发送普通媒体；大媒体单独发送。
+- `message.packing.mode=全部聚合`：使用 `Nodes` 聚合发送普通图片、视频和文本；大媒体、语音与音频文件单独发送。
 - `message.packing.mode=按条件聚合`：节点构建和翻译完成后统计可聚合节点，任一数量达到 `message.packing.thresholds` 中配置的阈值时合并转发。
 - 非聚合时，如果 `message.text_metadata.quote_user_message=true`，只让文本元数据节点引用对应的用户消息；媒体、热评、翻译和分隔符不引用。
 - 纯图片图集会把文本和图片分组发送；混合内容按节点逐个发送。
@@ -411,6 +416,8 @@ main.py::VideoParserPlugin.auto_parse(event)
   ↓
 admin_cookie_assist.try_update_admin_origin(event)
   ↓
+按发送者 ID 跳过机器人自身消息
+  ↓
 PermissionConfig.check(is_private, sender_id, group_id)
   ├─ false -> 返回
   └─ true  -> 继续
@@ -419,21 +426,27 @@ PermissionConfig.check(is_private, sender_id, group_id)
   ├─ 命中且为管理员私聊 -> cleanup_marked_in(cache_dir) -> 返回
   └─ 未命中 -> 继续
   ↓
+admin_cookie_assist.handle_admin_command()
+  ├─ 命中主动更新 Cookie 指令 -> 处理后返回
+  └─ 未命中 -> 继续
+  ↓
 parser_output.has_any_output()
   ├─ false -> 返回（管理命令仍可用）
   └─ true  -> 继续
   ↓
 提取当前消息文本 / QQ 卡片 URL
   ↓
-ParserManager.extract_all_links()
-  ├─ 当前消息有链接 -> 进入触发判断
-  └─ 当前消息无链接
-      ├─ reply_trigger=true 且当前消息含关键词 -> 从 Reply.message_str / Reply.chain 卡片提链
-      └─ 仍无链接 -> admin_cookie_assist.handle_admin_reply() -> 返回
+判断是否为完整 ZIP 归档命令
+  ├─ 是 -> 只从被引用消息提链；无链接时提示后返回
+  └─ 否 -> ParserManager.extract_all_links()
+           ├─ 当前消息有链接 -> 进入触发判断
+           └─ 当前消息无链接
+               ├─ reply_trigger=true 且当前消息含关键词 -> 从 Reply.message_str / Reply.chain 卡片提链
+               └─ 仍无链接 -> admin_cookie_assist.handle_admin_reply() -> 返回
   ↓
 按 parsers 输出模式过滤无输出链接
   ↓
-TriggerConfig.should_parse(original_message_text)
+普通解析调用 TriggerConfig.should_parse(original_message_text)，ZIP 命令跳过此判断
   ├─ false -> 返回
   └─ true  -> 继续
   ↓
@@ -444,6 +457,8 @@ ParseRecordManager.filter_links()
 创建 aiohttp.ClientSession
   ↓
 ParserManager.parse_text(parse_text, session, links_with_parser)
+  ↓
+记录解析后的规范链接，应用输出模式；ZIP 强制完整字段和富媒体输出
   ↓
 触发 B站 Cookie 协助请求检查
   ↓
@@ -479,12 +494,14 @@ ZIP 命令?
            ↓
          send_translation_results()
   ↓
-finally 清理本次 temp_files + video_files
-  ├─ relay 开启 -> 延迟 media_relay.ttl 秒
-  └─ relay 关闭 -> 立即清理
+finally 清理 metadata.file_paths、节点文件和渲染图片，并收束翻译任务
+  ├─ ZIP -> 源媒体立即清理，已发送 ZIP 保留至少 300 秒
+  ├─ 普通音频文件发送 -> 本次文件保留 max(300, media_relay.ttl) 秒
+  ├─ 至少一个文件成功注册 Token -> 延迟 media_relay.ttl 秒
+  └─ 其余 -> 立即清理
 ```
 
-有效 metadata 的判定条件是：至少一条结果在当前平台输出模式下可能构建节点。带 `error` 的结果也会构建可见错误节点；富媒体输出开启时需要包含视频或图片；文本输出开启时可由标题、作者、简介、发布时间、访问提示、热评、媒体跳过信息或解析错误构建文本节点。
+有效 metadata 的判定条件是：至少一条结果在当前平台输出模式下可能构建节点。带 `error` 的结果也会构建可见错误节点；富媒体输出开启时需要包含视频、图片或音频；文本输出开启时可由标题、作者、简介、发布时间、访问提示、热评、媒体跳过信息或解析错误构建文本节点。
 
 ### 3.2 链接提取与解析链
 
@@ -514,11 +531,12 @@ metadata
 归一 video_urls/image_urls/audio_urls 为 List[List[str]]
   ↓
 逐视频决策 local/direct/skip
-  ├─ DASH/M3U8/强制缓存 -> local 或 skip
+  ├─ DASH/M3U8 -> 优先 local；无缓存时筛选同组普通直链，无候选则 skip
+  ├─ 强制缓存 -> local 或 skip
   ├─ 普通视频 + 缓存可用 -> local
   └─ 普通视频 + 缓存不可用 -> 预检后 direct 或 skip
   ↓
-逐图片决策 local/skip
+逐图片和独立音频决策 local/skip
   ├─ 缓存可用 -> local
   └─ 缓存不可用 -> skip
   ↓
@@ -527,15 +545,16 @@ local_items 并发下载
   ├─ m3u8 -> 分片下载 + 拼接/ffmpeg 合并
   ├─ range -> 单次 0-0 探测；仅严格 206/Content-Range 才并发，否则降级单流
   ├─ image -> 下载 + 必要时转 PNG；ffmpeg 缺失时保留原格式
+  ├─ audio -> MIME/签名校验 + 音频大小限制 + 本地下载
   └─ video -> 普通流式下载
   ↓
 下载结果回填 metadata
   ├─ file_paths
-  ├─ video_modes/image_modes
-  ├─ video_skip_reasons/image_skip_reasons
-  ├─ video_sizes/video_size_limit_flags/status_codes
+  ├─ video_modes/image_modes/audio_modes
+  ├─ video_skip_reasons/image_skip_reasons/audio_skip_reasons
+  ├─ video_sizes/audio_sizes、对应大小限制标记及三类媒体状态码
   ├─ has_valid_media/use_local_files
-  ├─ failed_video_count/failed_image_count
+  ├─ failed_video_count/failed_image_count/failed_audio_count
   └─ exceeds_max_size/has_access_denied
 ```
 
@@ -553,9 +572,12 @@ build_all_nodes()
   ├─ build_text_node()
   ├─ build_hot_comments_node()
   ├─ Plain 文本按 4000 字上限统一分片
-  ├─ 可选 text_renderer.py 将所有文本节点合并为 PNG
   ├─ 判定大媒体
   └─ 分类 temp_files/video_files
+  ↓
+等待 translation_task，调用 build_translation_nodes_for_all()
+  ↓
+可选 text_renderer.py 将基础文本、热评与翻译合并为 PNG
   ↓
 summarize_node_counts()
   ↓
@@ -565,8 +587,7 @@ MessageSender
   ├─ 需要聚合 -> send_aggregated_results()
   └─ 独立发送 -> send_individual_results()
   ↓
-translation_task 完成后
-  └─ build_translation_nodes_for_all() -> send_translation_results()
+send_translation_results() 发送未被渲染为图片的翻译节点
 ```
 
 ### 3.5 清理与终止链
@@ -574,26 +595,29 @@ translation_task 完成后
 普通请求结束：
 
 ```text
-build_result.temp_files + build_result.video_files
-  ├─ media_relay.enable=false -> cleanup_files()
-  └─ media_relay.enable=true  -> _schedule_delayed_cleanup(files, ttl)
+metadata.file_paths + build_result.temp_files + build_result.video_files + 渲染图片
+  ├─ 普通音频文件发送 -> _schedule_delayed_cleanup(files, max(300, ttl))
+  ├─ 成功注册至少一个 Token -> _schedule_delayed_cleanup(files, ttl)
+  └─ 其余 -> cleanup_files()
 ```
+
+ZIP 源媒体始终立即清理；ZIP 发送成功后单独保留 `max(300, ttl)` 秒，发送失败则清理归档。延迟清理先写入持久过期标记，再创建受管理的后台任务。
 
 插件终止：
 
 ```text
 VideoParserPlugin.terminate()
   ↓
+_shutdown_expired_cache_cleanup()
+  ↓
 _shutdown_delayed_cleanups()
   ↓
 admin_cookie_assist.shutdown()
   ↓
 download_manager.shutdown()
-  ↓
-cleanup_marked_in(cache_dir)
 ```
 
-`DownloadManager.shutdown()` 会设置 `_shutting_down`，取消 `_active_tasks` 快照并等待任务结束。
+`DownloadManager.shutdown()` 会设置 `_shutting_down`，取消 `_active_tasks` 快照并等待任务结束。终止不立即清空媒体缓存，已写过期标记的文件由后续实例的周期扫描回收，避免打断协议端延迟拉取。
 
 ## 四、数据流
 
@@ -614,8 +638,6 @@ timelength_ms/available_length_ms
 hot_comments
 use_image_proxy/use_video_proxy/proxy_url
 ```
-
-`image_tls_ciphers` 是可选的图片 TLS 套件表达式，目前由 NGA 指定为 `ECDHE+AESGCM:ECDHE+CHACHA20`。图片下载器据此构建并缓存启用证书与主机名校验的 SSLContext，仅用于对应请求；未指定时沿用会话默认配置，不修改共享会话。
 
 `ParserManager` 归一化时统一回填：
 
@@ -641,17 +663,17 @@ translation_target_language/_translated_fields
 
 ```text
 file_paths
-video_sizes
-video_size_limit_flags
-video_status_codes/image_status_codes
-video_modes/image_modes
-video_skip_reasons/image_skip_reasons
+video_sizes/audio_sizes
+video_size_limit_flags/audio_size_limit_flags
+video_status_codes/image_status_codes/audio_status_codes
+video_modes/image_modes/audio_modes
+video_skip_reasons/image_skip_reasons/audio_skip_reasons
 image_warnings
 largest_video_size_mb/total_video_size_mb
-video_count/image_count
+video_count/image_count/audio_count
 has_valid_media/use_local_files
 exceeds_max_size/has_access_denied
-failed_video_count/failed_image_count
+failed_video_count/failed_image_count/failed_audio_count
 ```
 
 文件 Token 层回填：
@@ -675,7 +697,7 @@ _enable_rich_media + video_modes/image_modes/audio_modes + file_paths/file_token
 媒体 URL
   ↓
 DownloadManager 决策
-  ├─ local -> cache_dir/{platform}_{url_hash}_{timestamp}_{nonce}/video_N.* 或 image_N.*
+  ├─ local -> cache_dir/{媒体ID}/video_N.*、image_N.* 或 audio_N.*
   ├─ direct -> 不写文件
   └─ skip -> 不写文件
   ↓
@@ -689,10 +711,11 @@ cache_marker.stamp_subdir() 写 .astrbot_media_parser
 发送
   ↓
 main.py finally 统一清理本次文件
-  ├─ relay -> 延迟清理
+  ├─ 成功注册 Token / 原始音频文件发送 -> 按对应保留期延迟清理
   └─ 普通 -> 立即清理
   ↓
-周期/admin clean -> 在独占清理锁内 cleanup_marked_in(cache_dir)
+周期扫描 -> 无活跃媒体流程时，在清理锁内 cleanup_expired_marked_in(cache_dir)
+管理员清理 -> 检查活跃流程后，在清理锁内 cleanup_marked_in(cache_dir)
 ```
 
 DASH 临时 `.m4s` 在合并后由 DASH 处理器清理；M3U8 临时分片目录由 M3U8 处理器在 finally 中清理。

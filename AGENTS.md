@@ -16,6 +16,7 @@ core/
   types.py               # MediaMetadata TypedDict — 全流程核心数据契约
   logger.py              # 全局日志实例（包装 AstrBot logger）
   message_text.py        # 消息文本的统一长度约束与分片
+  metadata_state.py      # 视频、图片、音频的模式与有效状态汇总
   metadata_visibility.py # 文本元数据字段可见性的统一读取
   parser/                # 链接路由 + 平台解析器 + 平台运行时管理
     manager.py           #   ParserManager — 并发调度
@@ -27,8 +28,8 @@ core/
     runtime_manager/     #   解析器侧平台运行时管理（如 B 站鉴权凭据）
   downloader/            # 媒体下载决策 + 多种下载策略
     manager.py           #   DownloadManager — 按媒体决策 local/direct/skip
-    handler/             #   具体下载器：normal_video / range / dash / m3u8 / image / video_cover
-  message_adapter/       # AstrBot 消息构建与发送
+    handler/             #   具体下载器：audio / normal_video / range_downloader / dash / m3u8 / image / video_cover
+  message_adapter/       # 消息构建与发送、文本图片渲染、字体管理、ZIP 归档
   translation/           # LLM 翻译（OpenAI 兼容 / Ollama）
   storage/               # 缓存清理、过期标记、频率限制、文件 Token 注册
   interaction/           # 管理员交互功能（如 B 站扫码登录）
@@ -132,6 +133,8 @@ from .base import BaseVideoParser
 ### 文档范围
 
 - `README.md` 面向插件使用者，只记录稳定且需要用户了解的平台能力、配置前提、使用方式和已知限制。
+- README 支持平台表的备注只描述支持的媒体类型；链接形态、接口和取数范围放入平台解析备忘，不在备注中罗列。
+- README 注意事项只保留影响用户配置、使用和结果理解的必要信息，不因新增解析器就追加平台实现说明。
 - 常规版本更新、内部实现细节、维护记录，以及用户无需感知或无需手动处理的变更，不写入 `README.md`；按内容归入 `CHANGELOG.md`、`docs/` 或提交记录。
 - 修改文档前先对照当前实现和配置 schema，避免把内部模块名、临时实现或未对外承诺的行为写成用户能力。
 
@@ -175,7 +178,8 @@ from .base import BaseVideoParser
 
 - 本插件在 AstrBot 框架内运行，不是独立 Python 包。
 - 入口类继承 `astrbot.api.star.Star`，通过 `@register` 装饰器注册。
-- 依赖 AstrBot 的 `Context`、`AstrMessageEvent`、消息组件（`Plain`/`Image`/`Video`）和 `file_token_service`。
+- 依赖 AstrBot 的 `Context`、`AstrMessageEvent`、消息组件（`Plain`/`Image`/`Video`/`Record`/`File`、引用与合并转发组件）和 `file_token_service`。
+- 独立音频走 `audio_urls`、`audio_headers` 和 `audio_modes`，缓存成功后按配置发送语音或原始文件，不复用视频字段；音频文件索引排在视频与图片之后。
 - 本地调试可用 `run_local.py`。
 
 ## 测试
@@ -183,7 +187,9 @@ from .base import BaseVideoParser
 - 测试在 `test/` 目录（已 gitignore），使用 `unittest.TestCase` / `IsolatedAsyncioTestCase`。
 - 不依赖 pytest，不引入第三方 mock 框架；优先用内联轻量 stub 类，需要打补丁时用标准库 `unittest.mock`。
 - AstrBot 运行时模块通过 `sys.modules` 注入 stub。
-- 运行：`python -m unittest discover -s test`
+- 修改后只运行与本次改动直接相关的测试；用户要求全量回归时运行 `python -m unittest discover -s test`。
+- 所有测试文件和用例统一放在根目录 `test/`，不加入 Git 跟踪、暂存、提交或推送，不使用强制添加绕过忽略规则。
+- 根目录 `.gitignore` 必须包含 `/test/`，提交或暂存前确认规则有效；发现已跟踪测试时，保留本地文件，从索引移除并迁入 `test/` 后再继续 Git 操作。
 
 ## Git 约定
 
