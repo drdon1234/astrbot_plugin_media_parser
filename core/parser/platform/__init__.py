@@ -12,6 +12,7 @@ from .xueqiu import XueqiuParser
 from .wechat import WechatParser
 from .zhihu import ZhihuParser
 from .tieba import TiebaParser
+from .nga import NgaParser
 from .hupu import HupuParser
 from .douban import DoubanParser
 from .tiktok import TikTokParser
@@ -36,6 +37,7 @@ __all__ = [
     'WechatParser',
     'ZhihuParser',
     'TiebaParser',
+    'NgaParser',
     'HupuParser',
     'DoubanParser',
     'TikTokParser',

@@ -149,6 +149,17 @@
                 ],
                 "default": "全部发送"
             },
+            "nga": {
+                "description": "NGA",
+                "type": "string",
+                "options": [
+                    "关闭",
+                    "全部发送",
+                    "仅文本",
+                    "仅富媒体"
+                ],
+                "default": "全部发送"
+            },
             "hupu": {
                 "description": "虎扑",
                 "type": "string",
@@ -479,6 +490,11 @@
                     },
                     "tieba": {
                         "description": "百度贴吧",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "nga": {
+                        "description": "NGA",
                         "type": "bool",
                         "default": true
                     },

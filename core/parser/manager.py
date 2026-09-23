@@ -19,6 +19,7 @@ _PARSER_STRING_FIELDS = frozenset(
         "access_status",
         "author",
         "desc",
+        "image_tls_ciphers",
         "platform",
         "restriction_label",
         "restriction_type",

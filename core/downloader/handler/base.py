@@ -3,6 +3,7 @@
 import asyncio
 import os
 import re
+import ssl
 import uuid
 from typing import Optional, Callable, Dict, Any, Tuple
 
@@ -467,6 +468,7 @@ async def download_media_from_url(
     retry_enabled: bool = True,
     max_bytes: Optional[int] = None,
     budget: Optional[ByteBudget] = None,
+    ssl_context: Optional[ssl.SSLContext] = None,
 ) -> Tuple[
     Optional[str],
     Optional[float],
@@ -483,6 +485,7 @@ async def download_media_from_url(
         is_video: 是否为视频（True为视频，False为图片）
         headers: 请求头字典
         proxy: 代理地址（可选）
+        ssl_context: 本次请求使用的 TLS 上下文，缺省时沿用会话配置。
 
     Returns:
         (file_path, size_mb, status_code, error, limit_source) 元组；
@@ -507,6 +510,7 @@ async def download_media_from_url(
                 timeout=timeout,
                 proxy=proxy,
                 allow_redirects=True,
+                **({"ssl": ssl_context} if ssl_context is not None else {}),
             )
             async with response:
                 last_status_code = response.status

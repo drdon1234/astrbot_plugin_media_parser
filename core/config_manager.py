@@ -23,6 +23,7 @@ from .parser.platform import (
     WechatParser,
     ZhihuParser,
     TiebaParser,
+    NgaParser,
     HupuParser,
     DoubanParser,
     TikTokParser,
@@ -63,6 +64,7 @@ PARSER_OUTPUT_KEYS = (
     "wechat",
     "zhihu",
     "tieba",
+    "nga",
     "hupu",
     "douban",
     "tiktok",
@@ -354,6 +356,7 @@ class HotCommentConfig:
     xueqiu: bool = True
     zhihu: bool = True
     tieba: bool = True
+    nga: bool = True
     hupu: bool = True
     douban: bool = True
     tiktok: bool = True
@@ -622,6 +625,7 @@ class ConfigManager:
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
         self._enable_tieba = self._parser_enabled("tieba")
+        self._enable_nga = self._parser_enabled("nga")
         self._enable_hupu = self._parser_enabled("hupu")
         self._enable_douban = self._parser_enabled("douban")
         self._enable_tiktok = self._parser_enabled("tiktok")
@@ -811,6 +815,11 @@ class ConfigManager:
                     hot_comments.get("tieba", True),
                     True,
                     "message.hot_comments.tieba",
+                ),
+                nga=self._parse_bool(
+                    hot_comments.get("nga", True),
+                    True,
+                    "message.hot_comments.nga",
                 ),
                 hupu=self._parse_bool(
                     hot_comments.get("hupu", True),
@@ -1320,6 +1329,8 @@ class ConfigManager:
             parsers.append(
                 TiebaParser(hot_comment_count=hot_comment_counts["tieba"])
             )
+        if self._enable_nga:
+            parsers.append(NgaParser(hot_comment_count=hot_comment_counts["nga"]))
         if self._enable_hupu:
             parsers.append(HupuParser(hot_comment_count=hot_comment_counts["hupu"]))
         if self._enable_douban:

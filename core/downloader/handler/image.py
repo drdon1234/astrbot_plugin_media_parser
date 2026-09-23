@@ -3,6 +3,8 @@
 import asyncio
 import os
 import shutil
+import ssl
+from functools import lru_cache
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -18,6 +20,15 @@ from ..image_format import (
 )
 from ..utils import generate_cache_file_path
 from .base import download_media_from_url
+
+
+@lru_cache(maxsize=8)
+def _image_ssl_context(ciphers: str) -> ssl.SSLContext:
+    """复用图片请求的 TLS 配置，始终启用证书和主机名校验。"""
+    context = ssl.create_default_context()
+    context.set_ciphers(ciphers)
+    context.set_alpn_protocols(["http/1.1"])
+    return context
 
 
 async def _remove_downloaded_image(file_path: str) -> None:
@@ -136,6 +147,7 @@ async def download_image_to_cache(
     headers: dict = None,
     proxy: str = None,
     max_bytes: Optional[int] = None,
+    tls_ciphers: str = "",
 ) -> Optional[Dict[str, Any]]:
     """下载图片到缓存目录
 
@@ -147,6 +159,7 @@ async def download_image_to_cache(
         index: 图片索引
         headers: 请求头字典
         proxy: 代理地址（可选）
+        tls_ciphers: TLS 加密套件列表，空值使用会话默认设置。
 
     Returns:
         下载结果字典，包含 file_path、size_mb、status_code；失败时保留错误原因。
@@ -170,6 +183,9 @@ async def download_image_to_cache(
             url=url,
         )
 
+    ssl_context = (
+        await run_blocking(_image_ssl_context, tls_ciphers) if tls_ciphers else None
+    )
     (
         file_path,
         size_mb,
@@ -184,6 +200,7 @@ async def download_image_to_cache(
         headers=headers,
         proxy=proxy,
         max_bytes=max_bytes,
+        ssl_context=ssl_context,
     )
 
     if not file_path:

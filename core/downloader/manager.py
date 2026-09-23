@@ -351,6 +351,7 @@ class DownloadManager:
                             headers=headers,
                             proxy=proxy,
                             max_bytes=(video_max_bytes if kind != "image" else None),
+                            image_tls_ciphers=item.get("image_tls_ciphers", ""),
                         )
                         if result and result.get("file_path"):
                             return {
@@ -641,6 +642,7 @@ class DownloadManager:
                     "url_list": url_list,
                     "media_id": media_id,
                     "headers": metadata.get("image_headers", {}),
+                    "image_tls_ciphers": metadata.get("image_tls_ciphers", ""),
                     "proxy": self._proxy_for(metadata, "image", proxy_addr),
                 }
             )

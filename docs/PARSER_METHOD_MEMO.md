@@ -630,7 +630,33 @@ data.feedInfo + data.authorInfo
 
 链接形态参考 [TiebaLite](https://github.com/HuanCheng65/TiebaLite)，富文本字段参考 [open-tbm](https://github.com/n0099/open-tbm)，混排与转发验证样例参考 [aiotieba](https://github.com/lumina37/aiotieba)；最终字段与接口行为以实际响应核验。
 
-## 十五、虎扑
+## 十五、NGA
+
+支持能力：图片 / 文本 / 热评
+
+支持 `bbs.nga.cn`、`nga.178.com`、`ngabbs.com` 上带 `tid` 的 `read.php` 帖子分享链接；按帖子 ID 去重，正文和媒体范围限于公开帖子的楼主首帖，回复按热评配置限量读取，不翻页抓取整楼。
+
+帖子正文通过客户端接口 `POST https://ngabbs.com/app_api.php?__lib=post&__act=list` 获取，表单携带 `tid`，使用 `X-User-Agent: NGA_skull/6.0.5(iPhone10,3;iOS 12.0.1)`，每次请求自动设置当前秒时间戳的 `guestJs` 访客 Cookie。不需要用户配置登录 Cookie，也不预先获取或交换 `guest_token`；网页访客限制不代表该客户端请求同样要求登录。
+
+响应需校验 HTTP 状态、业务 `code`、帖子 ID 和首帖身份，不能把回复或错误说明当作楼主正文。标题、作者、时间、正文和图片转换为已有 `MediaMetadata` 字段，图片继续使用统一下载与发送链路。权限不足、帖子删除、接口拒绝或响应缺少有效首帖时返回明确错误。
+
+`nga/content.py` 统一处理混合 HTML 与 BBCode：换行和段落整理为文本行，链接保留可读文字和地址，引用、折叠和列表保留基本层次；内置表情转换为文字标记，正文图片按出现顺序去重，相对附件地址结合 `attachPrefix` 补全。
+
+首楼附件字段实际拼写为 `attches`，图片项使用 `type: "img"` 和 `attachurl`，仅补齐正文尚未出现的图片，保留原地址及查询参数。实测正文接口可返回纯文字、单图和多图帖子。
+
+图片 CDN 的 HTTP 567 与客户端 TLS 握手特征有关：同一网络、原图地址和请求头，Python 默认握手被拒绝，调整宣告的套件列表后原图可正常下载。NGA 通过 `image_tls_ciphers` 指定 `ECDHE+AESGCM:ECDHE+CHACHA20`，统一图片下载器在请求级别使用缓存的 SSLContext；保留默认 TLS 版本范围、证书和主机名校验，不改写共享会话。成功样本实际仍协商 TLS 1.3，9 张原图均返回 HTTP 200 并通过图片完整性校验。
+
+### 评论
+
+优先使用帖子接口返回的 `hot_post`，保留平台热门回复顺序；有可用热门回复时不混入普通回复补足数量。没有可用热门回复时，按 `result` 中的楼层顺序读取普通回复，复用正文请求的第一页，必要时通过同一接口的 `page` 表单参数补充，包含第一页最多读取 20 页。回复按 `pid` 去重，校验帖子身份和返回页码，首帖不计入评论。
+
+评论使用现有 `hot_comments` 元数据和消息输出链路，保留可获得的作者、发布时间和 `vote_good` 赞数；评论图片转为文字标记，不加入首帖配图。评论获取失败保留已取得的评论，不影响已成功取得的首帖正文和媒体。
+
+评论数量复用 `message.hot_comments.count`，默认 `0`；`message.hot_comments.nga` 开关默认开启，仅在数量大于 `0` 且 NGA 输出模式包含文本时读取评论。不新增平台独立数量配置。
+
+请求方式参考 [RSSHub NGA forum.ts](https://github.com/DIYgod/RSSHub/blob/75d43dd0868d3a169cb0bc94eabf354d26af5e9c/lib/routes/nga/forum.ts)。
+
+## 十六、虎扑
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -642,7 +668,7 @@ data.feedInfo + data.authorInfo
 
 虎扑注册独立输出模式与热评开关，复用全局评论条数和文本输出条件，无需 Cookie 或代理配置。
 
-## 十六、豆瓣
+## 十七、豆瓣
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -658,7 +684,7 @@ data.feedInfo + data.authorInfo
 
 豆瓣注册独立输出模式与热评开关，复用全局评论条数和文本输出条件，不新增 Cookie 配置、第三方依赖或代理设置。
 
-## 十七、TikTok
+## 十八、TikTok
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -693,7 +719,7 @@ oEmbed 只适合补充标题、作者等文本，媒体资源以页面脚本中�
 
 评论调用 `/api/comment/list/`，使用作品 ID 和游标，沿用解析代理；按平台默认顺序展示，不推断为全站点赞排名。评论风控或空响应不影响已经解析成功的作品。
 
-## 十八、YouTube
+## 十九、YouTube
 
 支持能力：视频 / 文本 / 热评
 
@@ -724,7 +750,7 @@ YouTube 播放 URL 带有过期时间、签名和请求出口信息，不能长�
 
 评论复用观看页 `ytInitialData` 的热门或默认入口，以及 `ytcfg` 中的 WEB 客户端上下文，请求 `/youtubei/v1/next`。按根列表的 `commentViewModel` 关联 `commentEntityPayload`，不追踪子回复游标；缩写赞数和相对时间保留平台原文。
 
-## 十九、Steam
+## 二十、Steam
 
 支持能力：视频 / 图片 / 文本 / 热评
 
@@ -756,7 +782,7 @@ Steam 代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情
 
 玩家评测调用官方 `/appreviews/{appid}`，优先过去一年内的中文有用评测，不足时补充所有语言的近期评测；使用 Steam 解析代理。即使游戏详情委托小黑盒，评测仍取自 Steam，内部小黑盒实例不重复请求评价。
 
-## 二十、Twitter/X
+## 二十一、Twitter/X
 
 支持能力：视频 / 图片 / 文本
 
@@ -797,7 +823,7 @@ Twitter 响应嵌套很深，不能假设固定路径永远在。递归找带有
 
 一条推文没有图片和视频但有正文，仍然是可解析内容。
 
-## 二十一、Pixiv
+## 二十二、Pixiv
 
 支持能力：图片 / 文本 / 热评
 
@@ -838,7 +864,7 @@ image_urls = [
 
 作品评论使用 `/ajax/illusts/comments/roots`，按 `offset` 分页并保留时间倒序；复用原有 Cookie 和代理。纯贴纸评论转换为 `[贴纸]`，缺少点赞字段时不伪造零赞。
 
-## 二十二、GitHub
+## 二十三、GitHub
 
 支持能力：文本
 
@@ -849,14 +875,6 @@ image_urls = [
 `parsers.github` 默认 `全部发送`，也可选择 `仅文本`；`仅富媒体` 没有可发送内容。文本可继续由现有消息链路渲染为图片。`proxy.github` 默认关闭，仅控制仓库 API 请求，开启后使用 `proxy.address`，解析结果不附加媒体下载代理字段。
 
 不配置登录 Cookie 或 Token；匿名接口受到 GitHub 频率限制，限流、私有或不存在的仓库会明确失败，不切换为网页抓取或重复请求规避限制。
-
-## 二十三、NGA
-
-当前未提供解析器。
-
-NGA 已关闭访客浏览：`read.php?tid=...` 直接返回 `ERROR:1 未登录`，站点根路径返回 `ERROR:15 访客不能直接访问`。挑战页里的 `guestJs` Cookie 每次请求都会重新生成，回填后仍被拒绝；`app_api.php` 的 `post/list` 返回 `code:12 未登录`，随响应下发的 `guest_token` 无法换取内容，带 `access_token` 时改报 `code:5 签名错误`。`__output=8`、`__output=11`、`lite=js` 等输出形式只是换了错误载体，同样是 403。
-
-也就是说取数必须依赖 `ngaPassportUid` + `ngaPassportCid` 登录 Cookie。若之后决定支持，需要先引入用户提供 Cookie 的配置项，并注意页面是 GBK/GB18030 编码。
 
 ## 二十四、维护原则
 

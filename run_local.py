@@ -54,6 +54,7 @@ PARSER_DISCOVERY_ORDER = (
     "wechat",
     "zhihu",
     "tieba",
+    "nga",
     "hupu",
     "douban",
     "tiktok",

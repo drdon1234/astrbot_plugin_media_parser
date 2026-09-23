@@ -23,6 +23,7 @@
 - 微信：公众号文章匿名提取正文、图片和文本元数据；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
 - 知乎：支持 图片 / 文本 / 热评；覆盖指定回答和专栏文章，回答使用匿名 API，文章使用匿名访客 `d_c0` 与接口签名。
 - 百度贴吧：支持 视频 / 图片 / 文本 / 热评；通过匿名客户端接口获取帖子首楼与直接转发的原帖，按配置优先读取平台热门回复，也接受普通回复，统一处理手机与电脑端帖子链接。
+- NGA：支持 图片 / 文本 / 热评；通过匿名客户端接口获取公开帖子首帖，统一处理三个分享域名并按帖子 ID 去重，优先热门回复，没有可用热门回复时按楼层顺序限量读取普通回复。
 - 虎扑：支持 视频 / 图片 / 文本 / 热评；从公开帖子首屏状态提取主帖、亮评与普通回复，统一电脑和手机分享入口。
 - 豆瓣：支持 视频 / 图片 / 文本 / 热评；结合匿名移动接口、公开网页与阅读查询获取内容，自动处理已验证的匿名访客校验，集合只作有限展开。
 - TikTok：支持 视频 / 图片 / 文本 / 热评；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
@@ -78,6 +79,9 @@ astrbot_plugin_media_parser/
     │       │   ├── parser.py        # 回答/文章路由与匿名接口请求
     │       │   └── sign.py          # 专栏文章接口签名
     │       ├── tieba.py             # 百度贴吧帖子首楼解析器
+    │       ├── nga/                 # NGA 子包
+    │       │   ├── parser.py        # 帖子链接、首帖与评论接口请求
+    │       │   └── content.py       # HTML、BBCode 正文与附件图片提取
     │       ├── hupu.py              # 虎扑公开主帖与首屏评论
     │       ├── douban/              # 豆瓣子包
     │       │   ├── parser.py        # 实体路由、内容与评论获取
@@ -141,9 +145,11 @@ astrbot_plugin_media_parser/
 
 GitHub 仅提供文本元数据；`全部发送` 与 `仅文本` 均可展示仓库概况，`仅富媒体` 没有可发送内容。仓库概况复用既有文本元数据可见性、长度限制和图片渲染链路。
 
-`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 17 个平台开关默认开启（快手、微信、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 18 个平台开关默认开启（快手、微信、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
 新增平台复用已有签名、访客会话和代理设置；优先热门或精选列表，也允许默认排序、时间排序评论及游戏评价。各解析器限制分页次数并按评论 ID 去重，接口失败保留正文及已取得评论，取消操作向上传播。`hot_comments` 中的 `likes` 可以是精确整数或平台提供的缩写字符串；未知时省略，消息节点显示 `-`。
+
+NGA 评论复用 `message.hot_comments.count`（默认 `0`）与 `message.hot_comments.nga`（默认开启）；仅在数量大于 `0`、平台开关开启且 NGA 输出模式包含文本时读取。优先使用平台返回的热门回复，没有可用热门回复时才按楼层顺序限量读取普通回复；评论获取失败不影响首帖正文和媒体。
 
 #### 消息聚合与 ZIP 归档
 
@@ -580,6 +586,7 @@ url/platform
 title/author/desc/timestamp
 video_urls/video_cover_urls/image_urls
 video_headers/image_headers
+image_tls_ciphers
 video_force_download
 access_status/restriction_type/restriction_label
 can_access_full_video/is_preview_only/access_message
@@ -587,6 +594,8 @@ timelength_ms/available_length_ms
 hot_comments
 use_image_proxy/use_video_proxy/proxy_url
 ```
+
+`image_tls_ciphers` 是可选的图片 TLS 套件表达式，目前由 NGA 指定为 `ECDHE+AESGCM:ECDHE+CHACHA20`。图片下载器据此构建并缓存启用证书与主机名校验的 SSLContext，仅用于对应请求；未指定时沿用会话默认配置，不修改共享会话。
 
 `ParserManager` 归一化时统一回填：
 

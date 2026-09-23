@@ -21,6 +21,7 @@ class MediaMetadata(TypedDict, total=False):
     video_cover_urls: List[List[str]]
     image_urls: List[List[str]]
     image_headers: Dict[str, str]
+    image_tls_ciphers: str
     video_headers: Dict[str, str]
     video_force_download: bool
 

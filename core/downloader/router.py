@@ -75,6 +75,7 @@ async def download_media(
     m3u8_handler: Optional[M3U8Handler] = None,
     use_ffmpeg: bool = True,
     max_bytes: Optional[int] = None,
+    image_tls_ciphers: str = "",
 ) -> Optional[Dict[str, Any]]:
     """下载媒体文件
 
@@ -89,6 +90,7 @@ async def download_media(
         proxy: 代理地址（可选）
         m3u8_handler: M3U8处理器（可选）
         use_ffmpeg: 是否使用ffmpeg（仅用于M3U8）
+        image_tls_ciphers: 图片请求的 TLS 加密套件列表，空值使用会话默认设置。
 
     Returns:
         下载结果字典，包含file_path和size_mb字段，失败时为None
@@ -161,6 +163,7 @@ async def download_media(
             headers=headers,
             proxy=proxy,
             max_bytes=max_bytes,
+            tls_ciphers=image_tls_ciphers,
         )
         if result:
             return result
