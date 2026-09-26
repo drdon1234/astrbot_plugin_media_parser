@@ -35,7 +35,7 @@
 - Gitee：支持 文本 / 热评；官方匿名接口读取公开仓库概况和 Issue，评论只适用于 Issue。
 - TikTok：支持 视频 / 图片 / 文本 / 热评；覆盖短链、视频和图集作品页，使用独立解析器和代理开关。
 - YouTube：支持 视频 / 文本 / 热评；覆盖 `watch`、`shorts`、`youtu.be`、`embed` 等单视频链接，通过内置播放器接口获取短时效直链。
-- Steam：支持 视频 / 图片 / 文本 / 热评；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息。
+- Steam：支持 视频 / 图片 / 文本 / 热评；通过 Steam `appdetails` 接口解析游戏页，可选委托小黑盒完整游戏路径补充统计信息；指南与创意工坊物品、合集从社区详情页读取正文、预览图与首屏评论。
 - Twitter/X：支持 视频 / 图片 / 文本；优先 FxTwitter/FxEmbed，服务不可用时回退 Guest GraphQL。
 - Pixiv：支持 图片 / 文本 / 热评；覆盖插画和漫画作品页、多页原图候选、Cookie 访问限制与解析/图片代理。
 - GitHub：支持 文本；通过官方匿名仓库接口获取公开仓库首页概况，不读取 README 或仓库子页。
@@ -109,7 +109,7 @@ astrbot_plugin_media_parser/
     │       ├── gitee.py             # Gitee 仓库概况、Issue 与评论
     │       ├── tiktok.py            # TikTok 视频/图集解析器
     │       ├── youtube.py           # YouTube 视频解析器
-    │       ├── steam.py             # Steam 游戏详情页解析器
+    │       ├── steam.py             # Steam 游戏页、指南与创意工坊解析器
     │       ├── twitter.py           # Twitter/X 解析器（FxTwitter + Guest GraphQL）
     │       ├── pixiv.py             # Pixiv 插画/漫画解析器
     │       ├── github.py            # GitHub 公开仓库概况解析器
@@ -748,7 +748,7 @@ proxy.github
 - `XiaoheiheParser`：直接解析小黑盒时仅视频下载使用代理，详情请求不使用代理；Steam 的小黑盒路径由 `proxy.steam` 分组控制。
 - `TikTokParser`：TikTok 解析和媒体代理。
 - `YoutubeParser`：YouTube 页面和播放器接口解析，以及视频下载共用 `proxy.youtube` 开关。
-- `SteamParser`：Steam 官方接口解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
+- `SteamParser`：Steam 官方接口与社区详情页解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
 - `TwitterParser`：Twitter/X 解析、图片、视频代理。
 - `PixivParser`：Pixiv Web Ajax API 解析和图片下载共用同一代理开关。
 - `GitHubParser`：`proxy.github` 默认关闭，仅控制官方仓库 API 请求，复用全局代理地址；不产生媒体下载代理字段。

@@ -52,7 +52,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.8.2",
+    "1.9.0",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):

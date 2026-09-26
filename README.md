@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.8.2-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.9.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -45,7 +45,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 | **Gitee** | 文本 / 热评 | 仓库 / Issue |
 | **TikTok** | 视频 / 图片 / 文本 / 热评 | 短链 / 视频 / 图集 |
 | **YouTube** | 视频 / 文本 / 热评 | 视频 / Shorts |
-| **Steam** | 视频 / 图片 / 文本 / 热评 | 商店游戏页 |
+| **Steam** | 视频 / 图片 / 文本 / 热评 | 商店游戏页 / 指南 / 创意工坊物品 / 创意工坊合集 |
 | **Twitter/X** | 视频 / 图片 / 文本 | 推文 |
 | **Pixiv** | 图片 / 文本 / 热评 | 插画 / 漫画 / 多页作品 |
 | **GitHub** | 文本 | 公开仓库 |

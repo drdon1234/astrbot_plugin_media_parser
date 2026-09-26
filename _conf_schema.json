@@ -1118,7 +1118,7 @@
     "steam": {
         "description": "Steam 设置",
         "type": "object",
-        "hint": "Steam 游戏页默认使用 Steam 官方接口；开启后改用小黑盒完整游戏路径，可获得更多评分、在线人数和统计信息。",
+        "hint": "Steam 游戏页默认使用 Steam 官方接口；开启后改用小黑盒完整游戏路径，可获得更多评分、在线人数和统计信息。指南与创意工坊页面不受此开关影响。",
         "items": {
             "use_xiaoheihe": {
                 "description": "使用小黑盒路径解析 Steam 游戏页",
@@ -1172,7 +1172,7 @@
             "steam": {
                 "description": "Steam 代理",
                 "type": "object",
-                "hint": "需要先填写“代理地址”；解析开关控制 Steam 或小黑盒详情接口请求，图片和视频开关分别控制媒体下载。",
+                "hint": "需要先填写“代理地址”；解析开关控制 Steam 商店、社区页面或小黑盒详情接口请求，图片和视频开关分别控制媒体下载。",
                 "items": {
                     "parse": {
                         "description": "解析",

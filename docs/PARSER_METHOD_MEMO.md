@@ -904,6 +904,13 @@ https://store.steampowered.com/app/3998900/_/
 https://store.steampowered.com/app/3998900
 ```
 
+指南、创意工坊物品与合集共用社区详情页，以查询参数 `id` 为稳定标识；`sharedfiles` 与 `workshop` 两种路径等价，按 ID 去重：
+
+```text
+https://steamcommunity.com/sharedfiles/filedetails/?id=2157044774
+https://steamcommunity.com/workshop/filedetails/?id=3807028911
+```
+
 ### 取数流程
 
 默认调用 Steam 商店的 `appdetails` 接口：
@@ -919,17 +926,35 @@ store.steampowered.com/api/appdetails/?appids={appid}&l=schinese&cc=cn
 
 开启 `steam.use_xiaoheihe` 后，解析器将同一 appid 交由小黑盒游戏详情接口处理，结果保留原始 Steam 链接，并可额外获得小黑盒评分、在线人数、峰值、销量排行与平均游戏时间等统计；该模式不请求 Steam HTML 页面。
 
+社区物品不经过小黑盒路径。匿名 `ISteamRemoteStorage/GetPublishedFileDetails` 对指南返回 `result=9`，且不含创意工坊预览截图，因此改为读取社区详情页 HTML：
+
+```text
+steamcommunity.com/sharedfiles/filedetails/?id={id}&l=schinese
+  ├─ workshopItemTitle / creatorsBlock / apphub_AppName：标题、创建者与所属游戏
+  ├─ guideTopDescription + subSection：指南简介与各章节正文
+  ├─ workshopItemDescription：创意工坊物品或合集描述
+  ├─ og:image / rgFullScreenshotURLs / 正文 <img>：封面、预览截图与正文配图
+  ├─ rgMovieFlashvars：YouTube 预览视频 ID
+  └─ 评分、标签、必需物品、文件大小、发布时间与访问统计
+```
+
+页面指定 `l=schinese`，界面标签与作者提供的本地化标题、描述均取中文版本。页面缺少标题时读取错误页提示并解析失败；页面内的 `publishedfileid` 与请求 ID 不一致时视为错误。
+
 ### 字段与媒体
 
 每个预告片保留一个候选组，优先使用 `m3u8:` HLS 地址，失败时依次降级为 MP4 / WebM 候选。解析结果设置 `video_force_download`，预告片须缓存到本地后发送。截图、封面与预告片请求携带 Steam 商店页 Referer。
 
+社区物品的 `images.steamusercontent.com/ugc/` 图片统一改写为页面放大预览使用的全尺寸参数，按地址去重，排除表情与站点界面素材，请求携带社区详情页 Referer。正文 BBCode 表格按行以 ` | ` 连接单元格；指南内嵌视频与创意工坊 YouTube 预览只以链接写入正文，不进入下载流程，因此社区物品不输出视频。发布时间沿用页面显示文本，当年内容不含年份。
+
 ### 代理
 
-代理配置位于 `proxy.steam`：`parse` 控制 Steam 或小黑盒详情接口，`image` 控制截图与封面下载，`video` 控制预告片下载。
+代理配置位于 `proxy.steam`：`parse` 控制 Steam 商店接口、社区详情页或小黑盒详情接口，`image` 控制截图、封面与社区图片下载，`video` 控制预告片下载。
 
 ### 评论
 
 玩家评测请求官方 `/appreviews/{appid}`，优先取过去一年内的中文“有用”评测，不足时补充所有语言的近期评测，使用 Steam 解析代理。游戏详情委托小黑盒时，评测仍取自 Steam，内部的小黑盒实例不重复请求评价。
+
+指南与创意工坊物品不额外请求评论接口，只读取详情页已下发的首屏公开评论（按时间倒序，通常最多 10 条），不含点赞数。
 
 ## 二十八、Twitter/X
 
