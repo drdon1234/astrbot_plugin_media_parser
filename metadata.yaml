@@ -1,6 +1,6 @@
 name: astrbot_plugin_media_parser
 desc: 聚合解析平台分享内容，发送视频、音频、图片与文本
-version: 1.8.1
+version: 1.8.2
 astrbot_version: ">=4,<5"
 author: drdon1234
 repo: https://github.com/drdon1234/astrbot_plugin_media_parser

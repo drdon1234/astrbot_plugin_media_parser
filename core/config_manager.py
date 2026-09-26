@@ -1413,11 +1413,17 @@ class ConfigManager:
                 TiebaParser(hot_comment_count=hot_comment_counts["tieba"])
             )
         if self._enable_nga:
-            parsers.append(NgaParser(hot_comment_count=hot_comment_counts["nga"]))
+            parsers.append(
+                NgaParser(hot_comment_count=hot_comment_counts["nga"])
+            )
         if self._enable_hupu:
-            parsers.append(HupuParser(hot_comment_count=hot_comment_counts["hupu"]))
+            parsers.append(
+                HupuParser(hot_comment_count=hot_comment_counts["hupu"])
+            )
         if self._enable_douban:
-            parsers.append(DoubanParser(hot_comment_count=hot_comment_counts["douban"]))
+            parsers.append(
+                DoubanParser(hot_comment_count=hot_comment_counts["douban"])
+            )
         if self._enable_v2ex:
             parsers.append(
                 V2exParser(hot_comment_count=hot_comment_counts["v2ex"])

@@ -828,7 +828,7 @@
                             "AstrBot 内置提供商",
                             "插件自定义提供商"
                         ],
-                        "hint": "仅启用翻译后生效。选择 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口。",
+                        "hint": "仅启用翻译后生效。选择 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口或 Ollama。",
                         "default": "AstrBot 内置提供商"
                     },
                     "astrbot_provider": {
@@ -1265,7 +1265,7 @@
             "clean_cache_keyword": {
                 "description": "清理缓存关键词",
                 "type": "string",
-                "hint": "管理员发送此关键词清除所有媒体缓存",
+                "hint": "管理员私聊发送此关键词清除所有媒体缓存",
                 "default": "清理媒体"
             },
             "debug": {

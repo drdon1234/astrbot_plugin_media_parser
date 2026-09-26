@@ -10,6 +10,8 @@ run_local.py             # 本地调试脚本，命令行验证解析与下载�
 _conf_schema.json        # AstrBot WebUI 配置面板 JSON Schema
 metadata.yaml            # AstrBot 插件清单（名称、版本、依赖版本范围）
 requirements.txt         # Python 依赖（aiohttp / cryptography / qrcode / pillow）
+docs/                    # 文档索引、架构说明与平台解析备忘
+resource/font/           # 字体许可证与运行时字体落盘目录
 core/
   config_manager.py      # 所有配置 dataclass + 类型转换兜底
   constants.py           # 全局常量（Config 类）
@@ -133,7 +135,7 @@ from .base import BaseVideoParser
 ### 文档范围
 
 - `README.md` 面向插件使用者，只记录稳定且需要用户了解的平台能力、配置前提、使用方式和已知限制。
-- README 支持平台表的备注只描述支持的媒体类型；链接形态、接口和取数范围放入平台解析备忘，不在备注中罗列。
+- README 支持平台表的“支持能力”列写媒体类型与热评，“备注”列写支持的链接与内容形态，两列均以 ` / ` 分隔、不加“支持”前缀；接口、取数范围和实现细节放入平台解析备忘。
 - README 注意事项只保留影响用户配置、使用和结果理解的必要信息，不因新增解析器就追加平台实现说明。
 - 常规版本更新、内部实现细节、维护记录，以及用户无需感知或无需手动处理的变更，不写入 `README.md`；按内容归入 `CHANGELOG.md`、`docs/` 或提交记录。
 - 修改文档前先对照当前实现和配置 schema，避免把内部模块名、临时实现或未对外承诺的行为写成用户能力。
