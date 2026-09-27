@@ -10,7 +10,7 @@ import aiohttp
 from .core.logger import logger
 
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.message_components import Reply
+from astrbot.api.message_components import Image, Plain, Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
@@ -33,10 +33,10 @@ from .core.message_adapter.node_builder import (
     build_all_nodes,
     build_translation_nodes_for_all,
     collect_text_metadata,
-    summarize_node_counts,
     strip_text_metadata_nodes,
+    summarize_node_counts,
 )
-from .core.message_adapter.text_renderer import render_text_metadata_image
+from .core.message_adapter.text_renderer import render_text_metadata_images
 from .core.message_adapter.archive_builder import (
     ArchiveSizeLimitError,
     build_zip_archive,
@@ -107,11 +107,23 @@ class VideoParserPlugin(Star):
             command=cfg.bilibili.admin_cookie_update_command,
         )
         self._start_expired_cache_cleanup()
+        self._page_api = None
+        try:
+            from .page_api import MediaParserPageAPI
+        except ModuleNotFoundError as exc:
+            if exc.name != "astrbot.api.web":
+                raise
+            logger.warning("当前 AstrBot 不支持 Pages 配置接口，请继续使用插件基础配置")
+        else:
+            self._page_api = MediaParserPageAPI(self, config)
 
     async def initialize(self) -> None:
         """插件加载时检查并补全图片渲染字体。"""
         try:
-            await ensure_default_fonts()
+            proxy = self.config_manager.proxy
+            await ensure_default_fonts(
+                proxy_url=proxy.address if proxy.static_resources_use_proxy else None
+            )
         except asyncio.CancelledError:
             raise
         except FontDownloadError as exc:
@@ -120,6 +132,8 @@ class VideoParserPlugin(Star):
             )
 
     async def terminate(self):
+        if self._page_api is not None:
+            await self._page_api.close()
         await self._shutdown_expired_cache_cleanup()
         await self._shutdown_delayed_cleanups()
         await self.admin_cookie_assist.shutdown()
@@ -406,72 +420,92 @@ class VideoParserPlugin(Star):
         build_result,
         translation_nodes,
         cfg,
-    ) -> str:
-        """将所有文本节点合并渲染为图片，失败时保留原文本节点。"""
+    ) -> list[str]:
+        """按阅读顺序将文本渲染为图片，失败时保留原文字。"""
         if not getattr(cfg.message.text_metadata, "render_to_image", False):
-            return ""
-
-        text = collect_text_metadata(
-            build_result.all_link_nodes,
-            translation_nodes,
+            return []
+        combine_text = not cfg.message.text_metadata.separate_text_sections and not any(
+            meta.get("preserve_order") for meta in build_result.link_metadata
         )
-        if not text:
-            return ""
-
+        node_groups = [*build_result.all_link_nodes, *(translation_nodes or [])]
+        if combine_text:
+            text = collect_text_metadata(build_result.all_link_nodes, translation_nodes)
+            if not text:
+                return []
+            node_groups = [[Plain(text)]]
         cache_root = str(cfg.download.cache_dir or "").strip()
-        if cache_root:
-            image_dir = Path(cache_root).resolve() / "rendered_text"
-        else:
-            image_dir = Path(tempfile.gettempdir()).resolve() / "astrbot_media_parser"
-        image_path = image_dir / f"metadata_{uuid.uuid4().hex}.png"
-        try:
-            rendered_path = await render_text_metadata_image(
-                text,
-                str(image_path),
-                style=getattr(
-                    cfg.message.text_metadata,
-                    "render_style",
-                    "fresh",
-                ),
-                font_family=getattr(
-                    cfg.message.text_metadata,
-                    "render_font_family",
-                    "noto_sans",
-                ),
-                font_size=getattr(
-                    cfg.message.text_metadata,
-                    "render_font_size",
-                    24,
-                ),
-            )
-        except asyncio.CancelledError:
-            try:
-                image_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
-        except (
-            ImportError,
-            OSError,
-            RuntimeError,
-            ValueError,
-            asyncio.TimeoutError,
-        ) as exc:
-            try:
-                image_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self.logger.warning(f"文本元数据图片渲染失败，保留原文本节点: {exc}")
-            return ""
-
-        strip_text_metadata_nodes(
-            build_result.all_link_nodes,
-            translation_nodes,
+        image_dir = (
+            Path(cache_root).resolve() / "rendered_text"
+            if cache_root
+            else Path(tempfile.gettempdir()).resolve() / "astrbot_media_parser"
         )
-        for metadata in build_result.link_metadata:
-            metadata["metadata_text_node"] = None
-        self.logger.debug(f"文本元数据已渲染为图片: {rendered_path}")
-        return rendered_path
+        for nodes in node_groups:
+            rendered_nodes = []
+            for node in nodes:
+                if not isinstance(node, Plain) or not node.text.strip():
+                    rendered_nodes.append(node)
+                    continue
+                try:
+                    paths = await render_text_metadata_images(
+                        node.text,
+                        str(image_dir / f"metadata_{uuid.uuid4().hex}.png"),
+                        title="热评"
+                        if node.text.startswith("热评")
+                        else "媒体解析结果",
+                        style=cfg.message.text_metadata.render_style,
+                        font_family=cfg.message.text_metadata.render_font_family,
+                        font_size=cfg.message.text_metadata.render_font_size,
+                        line_spacing=cfg.message.text_metadata.render_line_spacing,
+                        paragraph_spacing=cfg.message.text_metadata.render_paragraph_spacing,
+                        paginate_images=cfg.message.text_metadata.paginate_images,
+                        resource_proxy_url=(
+                            cfg.proxy.address if cfg.proxy.static_resources_use_proxy else None
+                        ),
+                    )
+                    build_result.temp_files.extend(paths)
+                    images = []
+                    references = []
+                    for path in paths:
+                        reference = path
+                        if cfg.relay.enabled:
+                            token = await register_file_with_token_service(
+                                path,
+                                cfg.relay.callback_api_base,
+                                cfg.relay.file_token_ttl,
+                            )
+                            reference = token or path
+                        references.append(reference)
+                        images.append(
+                            Image.fromURL(reference)
+                            if reference.startswith(("http://", "https://"))
+                            else Image.fromFileSystem(reference)
+                        )
+                    if combine_text:
+                        strip_text_metadata_nodes(
+                            build_result.all_link_nodes, translation_nodes
+                        )
+                        for metadata in build_result.link_metadata:
+                            metadata["metadata_text_node"] = None
+                        return references
+                    rendered_nodes.extend(images)
+                    for metadata in build_result.link_metadata:
+                        if metadata["link_nodes"] is nodes:
+                            metadata["preserve_order"] = True
+                        if metadata.get("metadata_text_node") is node:
+                            metadata["metadata_text_node"] = (
+                                images[0] if images else node
+                            )
+                except (
+                    ImportError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    asyncio.TimeoutError,
+                ) as exc:
+                    self.logger.warning(f"文本图片渲染失败，保留原文本: {exc}")
+                    rendered_nodes.append(node)
+            nodes[:] = rendered_nodes
+        return []
 
     def _metadata_has_output_candidate(self, metadata: Dict[str, Any]) -> bool:
         """判断 metadata 在当前输出策略下是否可能构建出节点。"""
@@ -535,8 +569,6 @@ class VideoParserPlugin(Star):
         build_result = None
         processed_metadata_list = metadata_list
         relay_registered = False
-        text_metadata_image_path = ""
-        text_metadata_image_ref = ""
 
         try:
             opening_lock = asyncio.Lock()
@@ -667,21 +699,11 @@ class VideoParserPlugin(Star):
                 )
                 return
 
-            text_metadata_image_path = await self._render_text_metadata_output(
+            text_metadata_image_ref = await self._render_text_metadata_output(
                 build_result,
                 translation_nodes,
                 cfg,
             )
-            text_metadata_image_ref = text_metadata_image_path
-            if text_metadata_image_path and cfg.relay.enabled:
-                token_url = await register_file_with_token_service(
-                    text_metadata_image_path,
-                    cfg.relay.callback_api_base,
-                    cfg.relay.file_token_ttl,
-                )
-                if token_url:
-                    text_metadata_image_ref = token_url
-                    relay_registered = True
             aggregatable_nodes = [
                 meta["link_nodes"]
                 for meta in build_result.link_metadata
@@ -689,6 +711,8 @@ class VideoParserPlugin(Star):
             ]
             aggregatable_nodes.extend(translation_nodes)
             node_counts = summarize_node_counts(aggregatable_nodes)
+            node_counts["image_count"] += len(text_metadata_image_ref)
+            node_counts["node_count"] += len(text_metadata_image_ref)
             should_aggregate_nodes = cfg.message.aggregation.should_aggregate_nodes(
                 **node_counts
             )
@@ -776,7 +800,6 @@ class VideoParserPlugin(Star):
                     self._collect_metadata_files(processed_metadata_list),
                     build_temp_files,
                     build_video_files,
-                    [text_metadata_image_path] if text_metadata_image_path else [],
                 )
                 if all_files:
                     has_audio_files = bool(
@@ -790,7 +813,9 @@ class VideoParserPlugin(Star):
                             for metadata in processed_metadata_list
                         )
                     )
-                    if not zip_requested and (relay_registered or has_audio_files):
+                    if not zip_requested and (
+                        relay_registered or has_audio_files or cfg.relay.enabled
+                    ):
                         # 同一缓存目录共用过期标记，音频文件与封面须采用同一个有效期。
                         delay = (
                             max(300, cfg.relay.file_token_ttl)

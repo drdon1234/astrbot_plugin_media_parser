@@ -61,8 +61,12 @@ _ensure_lock = asyncio.Lock()
 _fonts_ready = False
 
 
-async def ensure_default_fonts() -> None:
-    """校验并补全默认 Noto Sans CJK 字体。"""
+async def ensure_default_fonts(proxy_url: str | None = None) -> None:
+    """校验并补全默认 Noto Sans CJK 字体。
+
+    Args:
+        proxy_url: 字体下载代理地址，为空时直接连接。
+    """
     global _fonts_ready
 
     if _fonts_ready and _all_assets_have_expected_size():
@@ -89,7 +93,7 @@ async def ensure_default_fonts() -> None:
                     target = FONT_DIR / asset.filename
                     if await asyncio.to_thread(_font_is_valid, target, asset):
                         continue
-                    await _download_font(session, asset, target)
+                    await _download_font(session, asset, target, proxy_url)
         except asyncio.CancelledError:
             _fonts_ready = False
             raise
@@ -109,13 +113,14 @@ async def _download_font(
     session: aiohttp.ClientSession,
     asset: FontAsset,
     target: Path,
+    proxy_url: str | None = None,
 ) -> None:
     """下载并原子替换单个字体文件。"""
     temp_path = target.with_name(f"{target.name}.{uuid.uuid4().hex}.part")
     received_size = 0
     digest = hashlib.sha256()
     try:
-        async with session.get(asset.url) as response:
+        async with session.get(asset.url, proxy=proxy_url or None) as response:
             if response.status != 200:
                 raise FontDownloadError(
                     f"下载字体 {asset.filename} 失败: HTTP {response.status}"

@@ -43,6 +43,7 @@ _PARSER_NULLABLE_INTEGER_FIELDS = frozenset(
 )
 _PARSER_SPECIAL_FIELDS = frozenset(
     {
+        "article_blocks",
         "audio_headers",
         "audio_urls",
         "hot_comments",
@@ -133,6 +134,24 @@ class ParserManager:
         if misplaced_fields:
             names = ", ".join(sorted(misplaced_fields))
             raise ValueError(f"解析器不得写入边界或下游阶段字段: {names}")
+
+        if "article_blocks" in metadata:
+            blocks = metadata["article_blocks"]
+            if not isinstance(blocks, list):
+                raise TypeError("article_blocks 必须是列表")
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") not in {
+                    "text",
+                    "image",
+                }:
+                    raise TypeError("正文块必须是文本或图片")
+                if block["type"] == "text" and not isinstance(block.get("text"), str):
+                    raise TypeError("正文文本必须是字符串")
+                if block["type"] == "image" and (
+                    type(block.get("index")) is not int
+                    or not 0 <= block["index"] < len(metadata.get("image_urls", []))
+                ):
+                    raise ValueError("正文图片索引无效")
 
         for field_name in _PARSER_STRING_FIELDS:
             if field_name not in metadata:

@@ -1,4 +1,5 @@
 """项目统一类型定义（TypedDict、别名与结构约束）。"""
+
 from typing import TypedDict, NamedTuple, List, Dict, Optional, Any
 
 
@@ -14,6 +15,7 @@ class MediaMetadata(TypedDict, total=False):
     title: str
     author: str
     desc: str
+    article_blocks: List[Dict[str, Any]]
     timestamp: str
     platform: str
 
@@ -94,6 +96,7 @@ class MediaMetadata(TypedDict, total=False):
 
 class LinkBuildMeta(TypedDict):
     """node_builder 为每条链接构建的辅助元数据，用于发送阶段。"""
+
     metadata_index: int
     link_nodes: List[Any]
     is_large_media: bool
@@ -101,10 +104,12 @@ class LinkBuildMeta(TypedDict):
     video_files: List[str]
     temp_files: List[str]
     metadata_text_node: Optional[Any]
+    preserve_order: bool
 
 
 class BuildAllNodesResult(NamedTuple):
     """build_all_nodes 的结构化返回值。"""
+
     all_link_nodes: List[List[Any]]
     link_metadata: List[LinkBuildMeta]
     temp_files: List[str]

@@ -46,10 +46,16 @@
 ```text
 astrbot_plugin_media_parser/
 ├── main.py                          # AstrBot 插件入口与生命周期
+├── page_api.py                      # Pages 配置读取、校验、保存与插件重载接口
 ├── _conf_schema.json                # AstrBot 配置 schema
 ├── metadata.yaml                    # 插件清单与 AstrBot 版本范围
 ├── requirements.txt                 # Python 运行依赖
 ├── run_local.py                     # 本地调试入口，递归发现平台解析器
+├── .astrbot-plugin/i18n/zh-CN.json   # 插件 Pages 中文展示信息
+├── pages/settings/
+│   ├── index.html                   # 配置页面结构与预览缩放控件
+│   ├── app.js                       # 配置草稿、条件联动、保存与即时预览
+│   └── style.css                    # 配置页面与消息预览样式，不参与实际图片渲染
 ├── docs/
 │   ├── README.md                    # 文档索引
 │   ├── ARCHITECTURE.md              # 当前架构文档

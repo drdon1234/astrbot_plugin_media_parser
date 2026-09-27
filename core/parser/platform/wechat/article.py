@@ -370,6 +370,7 @@ class _ArticleHTMLParser(HTMLParser):
         self.meta: Dict[str, str] = {}
         self.fields: Dict[str, List[str]] = {name: [] for name in FIELD_IDS.values()}
         self.images: List[List[str]] = []
+        self.content_parts: List[object] = []
         self.visible_text: List[str] = []
         self.has_content = False
         self._seen_images = set()
@@ -402,8 +403,10 @@ class _ArticleHTMLParser(HTMLParser):
             if field == "content":
                 if tag in BLOCK_TAGS:
                     self.fields[field].append("\n")
+                    self.content_parts.append("\n")
                 elif tag in {"td", "th"}:
                     self.fields[field].append(" ")
+                    self.content_parts.append(" ")
                 if tag == "img":
                     self._add_image(attributes)
             if tag in BLOCK_TAGS:
@@ -425,6 +428,7 @@ class _ArticleHTMLParser(HTMLParser):
             if not ignored and tag in BLOCK_TAGS:
                 if field == "content":
                     self.fields[field].append("\n")
+                    self.content_parts.append("\n")
                 self.visible_text.append("\n")
             del self._stack[index:]
             break
@@ -455,15 +459,21 @@ class _ArticleHTMLParser(HTMLParser):
         field = self._stack[-1][1] if self._stack else ""
         if field:
             self.fields[field].append(text)
+        if field == "content":
+            self.content_parts.append(text)
 
     def _add_image(self, attributes: Dict[str, Optional[str]]) -> None:
         """优先保留正文懒加载图片地址，跳过内嵌占位图。"""
         value = attributes.get("data-src") or attributes.get("src") or ""
         image_url = _normalize_image_url(self.source_url, value)
-        if not image_url or image_url in self._seen_images:
+        if not image_url:
             return
-        self._seen_images.add(image_url)
-        self.images.append([image_url])
+        if image_url not in self._seen_images:
+            self._seen_images.add(image_url)
+            self.images.append([image_url])
+        self.content_parts.append(
+            {"type": "image", "index": self.images.index([image_url])}
+        )
 
 
 def _publication_date(page: str, visible_date: str, cgi_data: str) -> str:
@@ -558,6 +568,18 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
         or parser.meta.get("og:description", "")
         or _property_string(cgi_data, "desc")
     )
+    article_blocks = []
+    text_parts = []
+    for part in [*parser.content_parts, {"type": "end"}]:
+        if isinstance(part, str):
+            text_parts.append(part)
+            continue
+        text = _clean_text("".join(text_parts))
+        if text:
+            article_blocks.append({"type": "text", "text": text.replace("\n", "\n\n")})
+        text_parts = []
+        if part["type"] == "image":
+            article_blocks.append(part)
     return {
         "url": source_url,
         "title": title,
@@ -567,4 +589,5 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
             page, "".join(parser.fields["timestamp"]), cgi_data
         ),
         "image_urls": gallery_images if has_gallery_content else parser.images,
+        "article_blocks": [] if has_gallery_content else article_blocks,
     }

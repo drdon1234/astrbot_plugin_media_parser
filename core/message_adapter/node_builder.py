@@ -329,27 +329,23 @@ def build_hot_comments_node(
     if not isinstance(hot_comments, list) or not hot_comments:
         return None
 
-    text_parts = [f"热评（{len(hot_comments)}条）："]
-    total = len(hot_comments)
-    for idx, item in enumerate(hot_comments, start=1):
-        if not isinstance(item, dict):
-            continue
+    comments = [item for item in hot_comments if isinstance(item, dict)]
+    text_parts = [f"热评 · {len(comments)} 条", ""]
+    for idx, item in enumerate(comments, start=1):
         username = str(item.get("username", "") or "").strip() or "未知用户"
-        uid = str(item.get("uid", "") or "").strip()
         # 平台可能只提供缩写赞数；未知数量不能当作零赞。
         raw_likes = item.get("likes")
         likes = str(raw_likes).strip() if raw_likes is not None else ""
         likes = likes or "-"
         time_text = str(item.get("time", "") or "").strip() or "-"
         message = str(item.get("message", "") or "").strip() or "（无文本内容）"
-        user_label = f"{username}(uid:{uid})" if uid else username
-        text_parts.append(f"[{idx}] {user_label}")
-        text_parts.append(f"点赞: {likes} | 时间: {time_text}")
+        text_parts.append(f"{idx:02d}  {username}")
         text_parts.append(message)
-        if idx < total:
-            text_parts.append("")
+        text_parts.append(f"赞 {likes}  ·  {time_text}")
+        if idx < len(comments):
+            text_parts.extend(["", TEXT_SECTION_SEPARATOR, ""])
 
-    if len(text_parts) <= 1:
+    if not comments:
         return None
     return Plain("\n".join(text_parts))
 
@@ -396,6 +392,7 @@ def build_media_nodes(
     use_local_files: bool = False,
     enable_rich_media: bool = True,
     audio_send_mode: str = "语音",
+    article_images: Optional[Dict[int, Image]] = None,
 ) -> List[Union[Image, Video, Record, File]]:
     """构建媒体节点
 
@@ -404,6 +401,7 @@ def build_media_nodes(
         use_local_files: 是否使用本地文件
         enable_rich_media: 是否构建富媒体节点
         audio_send_mode: 音频以语音或原始文件发送。
+        article_images: 按原图片索引回填正文图片节点。
 
     Returns:
         图片、视频、语音或音频文件节点列表。
@@ -537,6 +535,8 @@ def build_media_nodes(
         if token_url:
             try:
                 nodes.append(Image.fromURL(token_url))
+                if article_images is not None:
+                    article_images[image_idx] = nodes[-1]
                 file_idx += 1
                 continue
             except Exception as e:
@@ -550,6 +550,8 @@ def build_media_nodes(
         ):
             try:
                 nodes.append(Image.fromFileSystem(file_paths[file_idx]))
+                if article_images is not None:
+                    article_images[image_idx] = nodes[-1]
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {file_paths[file_idx]}, 错误: {e}")
                 _mark_media_failure(
@@ -562,6 +564,8 @@ def build_media_nodes(
         else:
             try:
                 nodes.append(Image.fromURL(image_url))
+                if article_images is not None:
+                    article_images[image_idx] = nodes[-1]
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {image_url}, 错误: {e}")
                 _mark_media_failure(
@@ -621,14 +625,23 @@ def _build_node_parts_for_link(
         enable_rich_media,
     )
 
+    article_images: Dict[int, Image] = {}
     media_nodes = build_media_nodes(
         metadata,
         use_local_files,
         effective_rich_media,
         audio_send_mode,
+        article_images,
+    )
+    article_blocks = metadata.get("article_blocks")
+    ordered_article = bool(
+        article_blocks
+        and effective_text_metadata
+        and text_metadata_field_enabled(metadata, "description")
+        and not metadata.get("error")
     )
     text_node = build_text_node(
-        metadata,
+        {**metadata, "desc": ""} if ordered_article else metadata,
         max_video_size_mb,
         effective_text_metadata,
     )
@@ -639,6 +652,15 @@ def _build_node_parts_for_link(
     text_nodes = _split_plain_node(text_node)
     hot_comments_nodes = _split_plain_node(hot_comments_node)
     nodes.extend(text_nodes)
+    if ordered_article:
+        for block in article_blocks:
+            if block.get("type") == "text":
+                nodes.extend(_split_plain_node(Plain(block.get("text", ""))))
+            elif block.get("type") == "image":
+                image = article_images.get(block.get("index"))
+                if image is not None:
+                    nodes.append(image)
+        media_nodes = [node for node in media_nodes if not isinstance(node, Image)]
     nodes.extend(hot_comments_nodes)
     nodes.extend(media_nodes)
 
@@ -663,6 +685,12 @@ def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video, Record, File]])
             break
         elif isinstance(node, Image):
             has_image = True
+    seen_image = False
+    for node in nodes:
+        if isinstance(node, Image):
+            seen_image = True
+        elif isinstance(node, Plain) and seen_image:
+            return False
     return has_image and not has_video
 
 
@@ -787,6 +815,7 @@ def build_all_nodes(
                     video_files=link_video_files,
                     temp_files=link_temp_files,
                     metadata_text_node=metadata_text_node,
+                    preserve_order=bool(metadata.get("article_blocks")),
                 )
             )
         else:
