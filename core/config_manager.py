@@ -333,6 +333,7 @@ class ArchiveConfig:
 class MediaDisplayConfig:
     video_cover_only: bool = False
     audio_send_mode: str = "语音"
+    interleave_images: bool = False
 
 
 @dataclass
@@ -347,6 +348,7 @@ class TextMetadataConfig:
     render_style: str = "fresh"
     render_font_family: str = "noto_sans"
     render_font_size: int = 24
+    render_paginate: bool = False
 
     def visibility(self) -> Dict[str, bool]:
         """返回写入 metadata 的稳定字段名与展示开关。"""
@@ -491,6 +493,7 @@ class ParseRateLimitConfig:
 @dataclass
 class ProxyConfig:
     address: str = ""
+    font_use_proxy: bool = False
     xiaoheihe_use_video_proxy: bool = True
     tiktok_use_proxy: bool = False
     youtube_use_proxy: bool = True
@@ -502,6 +505,10 @@ class ProxyConfig:
     twitter_use_video_proxy: bool = True
     pixiv_use_proxy: bool = False
     github_use_proxy: bool = False
+
+    def font_proxy_url(self) -> str:
+        """返回字体补全使用的代理地址，未启用时返回空字符串。"""
+        return self.address if self.font_use_proxy else ""
 
 
 @dataclass
@@ -742,6 +749,11 @@ class ConfigManager:
                     False,
                     "message.media_display.video_cover_only",
                 ),
+                interleave_images=self._parse_bool(
+                    media_display.get("interleave_images", False),
+                    False,
+                    "message.media_display.interleave_images",
+                ),
             ),
             text_metadata=TextMetadataConfig(
                 show_title=self._parse_bool(
@@ -794,6 +806,11 @@ class ConfigManager:
                             24,
                         ),
                     ),
+                ),
+                render_paginate=self._parse_bool(
+                    text_metadata.get("render_paginate", False),
+                    False,
+                    "message.text_metadata.render_paginate",
                 ),
             ),
             hot_comments=HotCommentConfig(
@@ -1224,6 +1241,11 @@ class ConfigManager:
         twitter_proxy = self._as_dict(proxy_raw.get("twitter"))
         self.proxy = ProxyConfig(
             address=str(proxy_raw.get("address", "") or "").strip(),
+            font_use_proxy=self._parse_bool(
+                proxy_raw.get("font", False),
+                False,
+                "proxy.font",
+            ),
             xiaoheihe_use_video_proxy=self._parse_bool(
                 proxy_raw.get("xiaoheihe_video", True),
                 True,

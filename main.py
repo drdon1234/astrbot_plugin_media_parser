@@ -10,7 +10,7 @@ import aiohttp
 from .core.logger import logger
 
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.message_components import Reply
+from astrbot.api.message_components import Image, Plain, Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
@@ -36,7 +36,7 @@ from .core.message_adapter.node_builder import (
     summarize_node_counts,
     strip_text_metadata_nodes,
 )
-from .core.message_adapter.text_renderer import render_text_metadata_image
+from .core.message_adapter.text_renderer import render_text_metadata_images
 from .core.message_adapter.archive_builder import (
     ArchiveSizeLimitError,
     build_zip_archive,
@@ -111,7 +111,7 @@ class VideoParserPlugin(Star):
     async def initialize(self) -> None:
         """插件加载时检查并补全图片渲染字体。"""
         try:
-            await ensure_default_fonts()
+            await ensure_default_fonts(self.config_manager.proxy.font_proxy_url())
         except asyncio.CancelledError:
             raise
         except FontDownloadError as exc:
@@ -401,54 +401,87 @@ class VideoParserPlugin(Star):
             return []
         return build_translation_nodes_for_all(translation_metadata_list)
 
-    async def _render_text_metadata_output(
-        self,
-        build_result,
-        translation_nodes,
-        cfg,
-    ) -> str:
-        """将所有文本节点合并渲染为图片，失败时保留原文本节点。"""
-        if not getattr(cfg.message.text_metadata, "render_to_image", False):
-            return ""
-
-        text = collect_text_metadata(
-            build_result.all_link_nodes,
-            translation_nodes,
-        )
-        if not text:
-            return ""
-
+    async def _render_text_to_images(self, text: str, cfg) -> list[str]:
+        """按当前渲染配置将文本绘制为图片，返回按页排列的本地路径。"""
         cache_root = str(cfg.download.cache_dir or "").strip()
         if cache_root:
             image_dir = Path(cache_root).resolve() / "rendered_text"
         else:
             image_dir = Path(tempfile.gettempdir()).resolve() / "astrbot_media_parser"
         image_path = image_dir / f"metadata_{uuid.uuid4().hex}.png"
+        proxy = getattr(cfg, "proxy", None)
+        return await render_text_metadata_images(
+            text,
+            str(image_path),
+            style=getattr(
+                cfg.message.text_metadata,
+                "render_style",
+                "fresh",
+            ),
+            font_family=getattr(
+                cfg.message.text_metadata,
+                "render_font_family",
+                "noto_sans",
+            ),
+            font_size=getattr(
+                cfg.message.text_metadata,
+                "render_font_size",
+                24,
+            ),
+            paginate=getattr(cfg.message.text_metadata, "render_paginate", False),
+            font_proxy_url=proxy.font_proxy_url() if proxy else "",
+        )
+
+    @staticmethod
+    async def _rendered_image_references(paths, cfg) -> tuple[list[str], bool]:
+        """为渲染图片登记文件 Token，登记失败时沿用本地路径。"""
+        references: list[str] = []
+        registered = False
+        for path in paths:
+            token_url = None
+            if cfg.relay.enabled:
+                token_url = await register_file_with_token_service(
+                    path,
+                    cfg.relay.callback_api_base,
+                    cfg.relay.file_token_ttl,
+                )
+            references.append(token_url or path)
+            registered = registered or bool(token_url)
+        return references, registered
+
+    async def _render_ordered_link_text(self, link_meta, build_result, cfg) -> bool:
+        """将正文穿插链接中的连续文本节点在原位置渲染为图片。
+
+        任一段渲染失败时整条链接保留原文本，避免图文混杂两种展示方式。
+
+        Returns:
+            是否为渲染图片登记了文件 Token。
+        """
+        link_nodes = link_meta["link_nodes"]
+        runs: list[tuple[int, int]] = []
+        start = None
+        for index, node in enumerate([*link_nodes, None]):
+            if isinstance(node, Plain):
+                if start is None:
+                    start = index
+            elif start is not None:
+                runs.append((start, index))
+                start = None
+
+        rendered_runs: list[list[str]] = []
+        rendered_paths: list[str] = []
         try:
-            rendered_path = await render_text_metadata_image(
-                text,
-                str(image_path),
-                style=getattr(
-                    cfg.message.text_metadata,
-                    "render_style",
-                    "fresh",
-                ),
-                font_family=getattr(
-                    cfg.message.text_metadata,
-                    "render_font_family",
-                    "noto_sans",
-                ),
-                font_size=getattr(
-                    cfg.message.text_metadata,
-                    "render_font_size",
-                    24,
-                ),
-            )
+            for run_start, run_end in runs:
+                text = "\n".join(
+                    str(node.text or "").strip()
+                    for node in link_nodes[run_start:run_end]
+                    if str(node.text or "").strip()
+                )
+                paths = await self._render_text_to_images(text, cfg) if text else []
+                rendered_paths.extend(paths)
+                rendered_runs.append(paths)
         except asyncio.CancelledError:
-            try:
-                image_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            await self._run_blocking_to_completion(cleanup_files, rendered_paths)
             raise
         except (
             ImportError,
@@ -457,21 +490,91 @@ class VideoParserPlugin(Star):
             ValueError,
             asyncio.TimeoutError,
         ) as exc:
-            try:
-                image_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self.logger.warning(f"文本元数据图片渲染失败，保留原文本节点: {exc}")
-            return ""
+            await self._run_blocking_to_completion(cleanup_files, rendered_paths)
+            self.logger.warning(f"正文穿插文本渲染失败，保留原文本节点: {exc}")
+            return False
 
-        strip_text_metadata_nodes(
-            build_result.all_link_nodes,
-            translation_nodes,
+        build_result.temp_files.extend(rendered_paths)
+        references, registered = await self._rendered_image_references(
+            rendered_paths, cfg
         )
-        for metadata in build_result.link_metadata:
+        reference_iter = iter(references)
+        text_node = link_meta.get("metadata_text_node")
+        rebuilt: list[Any] = []
+        cursor = 0
+        for (run_start, run_end), paths in zip(runs, rendered_runs):
+            rebuilt.extend(link_nodes[cursor:run_start])
+            run_nodes = link_nodes[run_start:run_end]
+            if not paths:
+                rebuilt.extend(run_nodes)
+            else:
+                images = []
+                for _ in paths:
+                    reference = next(reference_iter)
+                    images.append(
+                        Image.fromURL(reference)
+                        if reference.lower().startswith(("http://", "https://"))
+                        else Image.fromFileSystem(reference)
+                    )
+                if any(node is text_node for node in run_nodes):
+                    link_meta["metadata_text_node"] = images[0]
+                rebuilt.extend(images)
+            cursor = run_end
+        rebuilt.extend(link_nodes[cursor:])
+        link_nodes[:] = rebuilt
+        return registered
+
+    async def _render_text_metadata_output(
+        self,
+        build_result,
+        translation_nodes,
+        cfg,
+    ) -> tuple[list[str], bool]:
+        """将文本节点渲染为图片，失败时保留原文本节点。
+
+        正文穿插的链接在原位置分段渲染；其余链接与翻译合并渲染，由发送阶段前置发送。
+
+        Returns:
+            合并渲染图片的路径或 Token URL（按页排列），以及是否登记了文件 Token。
+        """
+        if not getattr(cfg.message.text_metadata, "render_to_image", False):
+            return [], False
+
+        relay_registered = False
+        for link_meta in build_result.link_metadata:
+            if link_meta.get("preserve_order"):
+                if await self._render_ordered_link_text(link_meta, build_result, cfg):
+                    relay_registered = True
+
+        combined_metadata = [
+            meta for meta in build_result.link_metadata if not meta.get("preserve_order")
+        ]
+        combined_nodes = [meta["link_nodes"] for meta in combined_metadata]
+        text = collect_text_metadata(combined_nodes, translation_nodes)
+        if not text:
+            return [], relay_registered
+
+        try:
+            rendered_paths = await self._render_text_to_images(text, cfg)
+        except (
+            ImportError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as exc:
+            self.logger.warning(f"文本元数据图片渲染失败，保留原文本节点: {exc}")
+            return [], relay_registered
+
+        build_result.temp_files.extend(rendered_paths)
+        strip_text_metadata_nodes(combined_nodes, translation_nodes)
+        for metadata in combined_metadata:
             metadata["metadata_text_node"] = None
-        self.logger.debug(f"文本元数据已渲染为图片: {rendered_path}")
-        return rendered_path
+        self.logger.debug(f"文本元数据已渲染为图片: {rendered_paths}")
+        references, registered = await self._rendered_image_references(
+            rendered_paths, cfg
+        )
+        return references, relay_registered or registered
 
     def _metadata_has_output_candidate(self, metadata: Dict[str, Any]) -> bool:
         """判断 metadata 在当前输出策略下是否可能构建出节点。"""
@@ -535,8 +638,7 @@ class VideoParserPlugin(Star):
         build_result = None
         processed_metadata_list = metadata_list
         relay_registered = False
-        text_metadata_image_path = ""
-        text_metadata_image_ref = ""
+        text_metadata_images: list[str] = []
 
         try:
             opening_lock = asyncio.Lock()
@@ -652,6 +754,7 @@ class VideoParserPlugin(Star):
                 True,
                 True,
                 audio_send_mode=cfg.message.media_display.audio_send_mode,
+                interleave_images=cfg.message.media_display.interleave_images,
             )
 
             translation_nodes = await self._build_translation_nodes_after_task(
@@ -667,21 +770,15 @@ class VideoParserPlugin(Star):
                 )
                 return
 
-            text_metadata_image_path = await self._render_text_metadata_output(
+            (
+                text_metadata_images,
+                rendered_registered,
+            ) = await self._render_text_metadata_output(
                 build_result,
                 translation_nodes,
                 cfg,
             )
-            text_metadata_image_ref = text_metadata_image_path
-            if text_metadata_image_path and cfg.relay.enabled:
-                token_url = await register_file_with_token_service(
-                    text_metadata_image_path,
-                    cfg.relay.callback_api_base,
-                    cfg.relay.file_token_ttl,
-                )
-                if token_url:
-                    text_metadata_image_ref = token_url
-                    relay_registered = True
+            relay_registered = relay_registered or rendered_registered
             aggregatable_nodes = [
                 meta["link_nodes"]
                 for meta in build_result.link_metadata
@@ -709,7 +806,7 @@ class VideoParserPlugin(Star):
                     sender_name,
                     sender_id,
                     cfg.download.large_video_threshold_mb,
-                    text_metadata_image=text_metadata_image_ref,
+                    text_metadata_images=text_metadata_images,
                 )
             else:
                 await self.message_sender.send_individual_results(
@@ -718,7 +815,7 @@ class VideoParserPlugin(Star):
                     build_result.link_metadata,
                     quote_user_message=(cfg.message.text_metadata.quote_user_message),
                     quote_message_id=quote_source_message_id,
-                    text_metadata_image=text_metadata_image_ref,
+                    text_metadata_images=text_metadata_images,
                 )
 
             try:
@@ -776,7 +873,6 @@ class VideoParserPlugin(Star):
                     self._collect_metadata_files(processed_metadata_list),
                     build_temp_files,
                     build_video_files,
-                    [text_metadata_image_path] if text_metadata_image_path else [],
                 )
                 if all_files:
                     has_audio_files = bool(

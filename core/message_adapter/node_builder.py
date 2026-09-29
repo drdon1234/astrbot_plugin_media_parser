@@ -168,6 +168,7 @@ def build_text_node(
     metadata: MediaMetadata,
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
+    include_description: bool = True,
 ) -> Optional[Plain]:
     """构建文本节点
 
@@ -175,6 +176,7 @@ def build_text_node(
         metadata: 元数据字典
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
         enable_text_metadata: 是否包含视频图文文本信息的附加文本
+        include_description: 是否写入简介/正文；为否时只保留正文标题，正文由后续节点发送
 
     Returns:
         Plain文本节点，无内容时为None
@@ -311,7 +313,8 @@ def build_text_node(
         if text_parts:
             text_parts.append(TEXT_SECTION_SEPARATOR)
         text_parts.append("简介/正文：")
-        text_parts.append(desc_text)
+        if include_description:
+            text_parts.append(desc_text)
 
     if not text_parts:
         return None
@@ -396,6 +399,7 @@ def build_media_nodes(
     use_local_files: bool = False,
     enable_rich_media: bool = True,
     audio_send_mode: str = "语音",
+    image_nodes: Optional[Dict[int, Image]] = None,
 ) -> List[Union[Image, Video, Record, File]]:
     """构建媒体节点
 
@@ -404,6 +408,7 @@ def build_media_nodes(
         use_local_files: 是否使用本地文件
         enable_rich_media: 是否构建富媒体节点
         audio_send_mode: 音频以语音或原始文件发送。
+        image_nodes: 传入时按 image_urls 下标回填成功构建的图片节点。
 
     Returns:
         图片、视频、语音或音频文件节点列表。
@@ -537,6 +542,8 @@ def build_media_nodes(
         if token_url:
             try:
                 nodes.append(Image.fromURL(token_url))
+                if image_nodes is not None:
+                    image_nodes[image_idx] = nodes[-1]
                 file_idx += 1
                 continue
             except Exception as e:
@@ -550,6 +557,8 @@ def build_media_nodes(
         ):
             try:
                 nodes.append(Image.fromFileSystem(file_paths[file_idx]))
+                if image_nodes is not None:
+                    image_nodes[image_idx] = nodes[-1]
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {file_paths[file_idx]}, 错误: {e}")
                 _mark_media_failure(
@@ -562,6 +571,8 @@ def build_media_nodes(
         else:
             try:
                 nodes.append(Image.fromURL(image_url))
+                if image_nodes is not None:
+                    image_nodes[image_idx] = nodes[-1]
             except Exception as e:
                 logger.warning(f"构建图片节点失败: {image_url}, 错误: {e}")
                 _mark_media_failure(
@@ -601,6 +612,29 @@ def build_media_nodes(
     return nodes
 
 
+def _build_content_block_nodes(
+    metadata: MediaMetadata,
+    image_nodes: Dict[int, Image],
+) -> List[Union[Plain, Image]]:
+    """按原文顺序穿插正文文字与已构建的配图，没有可用配图时返回空列表。"""
+    blocks = metadata.get("content_blocks")
+    if not isinstance(blocks, list) or not blocks:
+        return []
+    nodes: List[Union[Plain, Image]] = []
+    has_image = False
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            nodes.extend(_split_plain_node(Plain(str(block.get("text") or ""))))
+        elif block.get("type") == "image":
+            image = image_nodes.get(block.get("index"))
+            if image is not None and all(node is not image for node in nodes):
+                nodes.append(image)
+                has_image = True
+    return nodes if has_image else []
+
+
 def _build_node_parts_for_link(
     metadata: MediaMetadata,
     use_local_files: bool = False,
@@ -608,7 +642,8 @@ def _build_node_parts_for_link(
     enable_text_metadata: bool = True,
     enable_rich_media: bool = True,
     audio_send_mode: str = "语音",
-) -> tuple[List[Union[Plain, Image, Video, Record, File]], Optional[Plain]]:
+    interleave_images: bool = False,
+) -> tuple[List[Union[Plain, Image, Video, Record, File]], Optional[Plain], bool]:
     nodes: List[Union[Plain, Image, Video, Record, File]] = []
     effective_text_metadata = _resolve_output_flag(
         metadata,
@@ -621,16 +656,28 @@ def _build_node_parts_for_link(
         enable_rich_media,
     )
 
+    image_nodes: Dict[int, Image] = {}
     media_nodes = build_media_nodes(
         metadata,
         use_local_files,
         effective_rich_media,
         audio_send_mode,
+        image_nodes,
     )
+    content_nodes: List[Union[Plain, Image]] = []
+    if (
+        interleave_images
+        and effective_text_metadata
+        and not metadata.get("error")
+        and text_metadata_field_enabled(metadata, "description")
+        and str(metadata.get("desc") or "").strip()
+    ):
+        content_nodes = _build_content_block_nodes(metadata, image_nodes)
     text_node = build_text_node(
         metadata,
         max_video_size_mb,
         effective_text_metadata,
+        include_description=not content_nodes,
     )
     hot_comments_node = build_hot_comments_node(
         metadata,
@@ -639,11 +686,14 @@ def _build_node_parts_for_link(
     text_nodes = _split_plain_node(text_node)
     hot_comments_nodes = _split_plain_node(hot_comments_node)
     nodes.extend(text_nodes)
+    nodes.extend(content_nodes)
     nodes.extend(hot_comments_nodes)
-    nodes.extend(media_nodes)
+    # 已穿插到正文中的配图不再重复追加，其余媒体保持原有顺序。
+    placed_images = {id(node) for node in content_nodes if isinstance(node, Image)}
+    nodes.extend(node for node in media_nodes if id(node) not in placed_images)
 
     metadata_text_node = text_nodes[0] if text_nodes else None
-    return nodes, metadata_text_node
+    return nodes, metadata_text_node, bool(content_nodes)
 
 
 def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video, Record, File]]) -> bool:
@@ -698,6 +748,7 @@ def build_all_nodes(
     enable_text_metadata: bool = True,
     enable_rich_media: bool = True,
     audio_send_mode: str = "语音",
+    interleave_images: bool = False,
 ) -> BuildAllNodesResult:
     """构建所有链接的消息节点。
 
@@ -708,6 +759,7 @@ def build_all_nodes(
         enable_text_metadata: 是否发送图文文本消息
         enable_rich_media: 是否发送图片、视频和音频。
         audio_send_mode: 音频以语音或原始文件发送。
+        interleave_images: 是否按正文块将文字与配图按原文顺序穿插。
 
     Returns:
         BuildAllNodesResult 命名元组
@@ -727,13 +779,14 @@ def build_all_nodes(
             f"构建节点[{idx}]: {url}, 使用本地文件: {use_local_files}"
         )
 
-        link_nodes, metadata_text_node = _build_node_parts_for_link(
+        link_nodes, metadata_text_node, preserve_order = _build_node_parts_for_link(
             metadata,
             use_local_files,
             max_video_size_mb,
             enable_text_metadata,
             enable_rich_media,
             audio_send_mode,
+            interleave_images,
         )
 
         max_video_size = metadata.get("largest_video_size_mb")
@@ -787,6 +840,7 @@ def build_all_nodes(
                     video_files=link_video_files,
                     temp_files=link_temp_files,
                     metadata_text_node=metadata_text_node,
+                    preserve_order=preserve_order,
                 )
             )
         else:

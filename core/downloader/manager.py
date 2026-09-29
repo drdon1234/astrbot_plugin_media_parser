@@ -144,6 +144,14 @@ class DownloadManager:
             converted_images.append([f"video-cover://{idx}"])
             cover_fallbacks[len(converted_images) - 1] = list(url_list)
 
+        # 封面排在正文图片之前，正文配图位置需同步后移。
+        content_blocks = metadata.get("content_blocks")
+        if isinstance(content_blocks, list):
+            metadata["content_blocks"] = [
+                {**block, "index": block["index"] + len(converted_images)}
+                if block.get("type") == "image" else block
+                for block in content_blocks
+            ]
         converted_images.extend(image_urls)
         metadata.pop("video_cover_urls", None)
         metadata.pop("video_force_download", None)

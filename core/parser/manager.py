@@ -45,6 +45,7 @@ _PARSER_SPECIAL_FIELDS = frozenset(
     {
         "audio_headers",
         "audio_urls",
+        "content_blocks",
         "hot_comments",
         "image_headers",
         "image_urls",
@@ -118,6 +119,31 @@ class ParserManager:
         ):
             raise TypeError(f"{field_name} 的键和值必须是字符串")
         return dict(value)
+
+    @staticmethod
+    def _validate_content_blocks(value: Any, image_count: int) -> List[Dict[str, Any]]:
+        """校验正文块，配图块必须指向已有的图片候选组。"""
+        if not isinstance(value, list):
+            raise TypeError("content_blocks 必须是字典列表")
+        blocks: List[Dict[str, Any]] = []
+        for index, block in enumerate(value):
+            if not isinstance(block, dict):
+                raise TypeError(f"content_blocks[{index}] 必须是字典")
+            block_type = block.get("type")
+            if block_type == "text":
+                if not isinstance(block.get("text"), str):
+                    raise TypeError(f"content_blocks[{index}].text 必须是字符串")
+                blocks.append({"type": "text", "text": block["text"]})
+            elif block_type == "image":
+                image_index = block.get("index")
+                if not isinstance(image_index, int) or isinstance(image_index, bool):
+                    raise TypeError(f"content_blocks[{index}].index 必须是整数")
+                if not 0 <= image_index < image_count:
+                    raise ValueError(f"content_blocks[{index}].index 超出图片范围")
+                blocks.append({"type": "image", "index": image_index})
+            else:
+                raise ValueError(f"content_blocks[{index}].type 只能是 text 或 image")
+        return blocks
 
     def _normalize_metadata(
         self, url: str, parser: BaseVideoParser, metadata: MediaMetadata
@@ -193,6 +219,12 @@ class ParserManager:
         metadata["audio_urls"] = self._validate_url_groups(
             "audio_urls", metadata.get("audio_urls", [])
         )
+        if metadata.get("content_blocks"):
+            metadata["content_blocks"] = self._validate_content_blocks(
+                metadata["content_blocks"], len(metadata["image_urls"])
+            )
+        else:
+            metadata.pop("content_blocks", None)
         if "video_cover_urls" in metadata:
             cover_groups = self._validate_url_groups(
                 "video_cover_urls", metadata["video_cover_urls"]

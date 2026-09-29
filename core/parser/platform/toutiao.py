@@ -7,7 +7,7 @@ import html
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 import aiohttp
@@ -16,7 +16,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import SkipParse, build_request_headers
+from ..utils import SkipParse, build_content_blocks, build_request_headers
 from .base import BaseVideoParser
 
 
@@ -403,6 +403,21 @@ class ToutiaoParser(BaseVideoParser):
         lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
         return "\n".join(line for line in lines if line)
 
+    def _build_article_content_blocks(self, content_html: str) -> List[Dict[str, Any]]:
+        """按正文图片位置生成正文块，图片下标与正文图片候选组的顺序一致。"""
+        content_html = content_html or ""
+        parts: List[Union[str, int]] = []
+        image_indexes: Dict[str, int] = {}
+        position = 0
+        for match in self.IMG_SRC_RE.finditer(content_html):
+            parts.append(content_html[position:match.start()])
+            position = match.end()
+            url = html.unescape(match.group(1).strip())
+            if url:
+                parts.append(image_indexes.setdefault(url, len(image_indexes)))
+        parts.append(content_html[position:])
+        return build_content_blocks(parts, self._clean_html_text)
+
     def _extract_image_urls_from_content(self, content_html: str) -> List[List[str]]:
         image_urls: List[List[str]] = []
         seen = set()
@@ -531,7 +546,7 @@ class ToutiaoParser(BaseVideoParser):
             raise RuntimeError("今日头条文章缺少标题")
 
         content_html = self._extract_article_content_html(article_info)
-        return {
+        metadata = {
             "url": source_url,
             "title": title,
             "author": self._format_author(article_info),
@@ -560,6 +575,10 @@ class ToutiaoParser(BaseVideoParser):
                 user_agent=MOBILE_UA,
             ),
         }
+        content_blocks = self._build_article_content_blocks(content_html)
+        if content_blocks:
+            metadata["content_blocks"] = content_blocks
+        return metadata
 
     @staticmethod
     def _decode_base64_text(token: str) -> str:

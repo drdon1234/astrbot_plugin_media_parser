@@ -14,6 +14,9 @@ class MediaMetadata(TypedDict, total=False):
     title: str
     author: str
     desc: str
+    # 正文块：{"type": "text", "text": 文字} 或 {"type": "image", "index": image_urls 下标}，
+    # 按原文顺序覆盖 desc 的全部内容，仅在能识别配图位置时提供。
+    content_blocks: List[Dict[str, Any]]
     timestamp: str
     platform: str
 
@@ -101,6 +104,7 @@ class LinkBuildMeta(TypedDict):
     video_files: List[str]
     temp_files: List[str]
     metadata_text_node: Optional[Any]
+    preserve_order: bool
 
 
 class BuildAllNodesResult(NamedTuple):

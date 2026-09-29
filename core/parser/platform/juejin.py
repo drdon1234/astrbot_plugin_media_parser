@@ -6,7 +6,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import aiohttp
@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers, join_content_text
 from .base import BaseVideoParser
 
 
@@ -114,7 +114,8 @@ class _ContentParser(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.parts: List[str] = []
+        # 文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        self.parts: List[Union[str, int]] = []
         self.images: List[List[str]] = []
         self.stack: List[Tuple[str, bool, str, int, bool]] = []
 
@@ -142,6 +143,8 @@ class _ContentParser(HTMLParser):
             image = _http_url(values.get("data-src") or values.get("src"), image=True)
             if image and [image] not in self.images:
                 self.images.append([image])
+            if image:
+                self.parts.append(self.images.index([image]))
 
     def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         """处理自闭合节点。"""
@@ -156,7 +159,7 @@ class _ContentParser(HTMLParser):
             if name == tag:
                 del self.stack[index:]
                 if not hidden:
-                    if href and href != "".join(self.parts[start:]).strip():
+                    if href and href != join_content_text(self.parts[start:]).strip():
                         self.parts.append(f"（{href}）")
                     if tag in self.BLOCKS:
                         self.parts.append("\n")
@@ -173,7 +176,15 @@ class _ContentParser(HTMLParser):
         Returns:
             清洗后的文章正文。
         """
-        return "".join(self.parts).strip()
+        return join_content_text(self.parts).strip()
+
+    def content_blocks(self) -> List[Dict[str, Any]]:
+        """返回按原文顺序穿插配图的正文块。
+
+        Returns:
+            正文块列表，缺少文字或配图时为空。
+        """
+        return build_content_blocks(self.parts, str.strip)
 
 
 class JuejinParser(BaseVideoParser):
@@ -393,6 +404,9 @@ class JuejinParser(BaseVideoParser):
                 "desc": content.text(), "image_urls": content.images, "video_urls": [],
                 "image_headers": build_request_headers(referer=BASE_URL + "/"), "platform": "稀土掘金",
             }
+            content_blocks = content.content_blocks()
+            if content_blocks:
+                metadata["content_blocks"] = content_blocks
             if self.hot_comment_count:
                 comments = await self._comments(session, identity)
                 if comments:

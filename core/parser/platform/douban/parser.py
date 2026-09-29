@@ -12,10 +12,11 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
+from ...utils import build_content_blocks
 from ..base import BaseVideoParser
 from .content import (
-    Node, first, html_comments, image_candidates, images_in, json_comment,
-    meta, parse_html, structured_data, text_of, video_url,
+    Node, clean_block_text, content_parts, first, html_comments, image_candidates,
+    images_in, json_comment, meta, parse_html, structured_data, text_of, video_url,
 )
 from .reading import parse_reading
 from .web import HEADERS, DoubanWeb
@@ -286,11 +287,13 @@ class DoubanParser(BaseVideoParser):
         if isinstance(photos, list):
             _append_images(metadata, [image_candidates(photo) for photo in photos])
         _append_images(metadata, images_in(root))
+        suffixes = []
         card = data.get('card')
         if isinstance(card, dict):
             card_text = '\n'.join(str(card.get(key) or '') for key in ('title', 'subtitle', 'description') if card.get(key))
             if card_text:
                 metadata['desc'] = '\n\n'.join(filter(None, [metadata['desc'], card_text]))
+                suffixes.append(card_text)
             _append_images(metadata, [image_candidates(card.get('image'))])
         metadata['video_urls'], metadata['video_cover_urls'] = _videos(root)
         entries = list(data['videos']) if isinstance(data.get('videos'), list) else []
@@ -306,9 +309,15 @@ class DoubanParser(BaseVideoParser):
         if isinstance(reshared, dict) and not any(reshared.get(key) for key in UNAVAILABLE_FLAGS):
             original = self._community_metadata({**reshared, 'reshared_status': None}, 'status', url)
             metadata['desc'] += f'\n\n转发 {original.get("author", "")}：\n{original.get("desc", "")}'
+            suffixes.append(f'转发 {original.get("author", "")}：\n{original.get("desc", "")}')
             _append_images(metadata, original.get('image_urls', []))
             metadata['video_urls'].extend(original.get('video_urls', []))
             metadata['video_cover_urls'].extend(original.get('video_cover_urls', []))
+        blocks = build_content_blocks(
+            content_parts('', root, metadata['image_urls'], suffixes), clean_block_text
+        )
+        if blocks:
+            metadata['content_blocks'] = blocks
         return metadata
 
     async def _json_comments(self, web: DoubanWeb, endpoint: str, referer: str) -> List[Dict[str, Any]]:
@@ -424,9 +433,15 @@ class DoubanParser(BaseVideoParser):
                 raise RuntimeError('预告片页面未返回实际播放资源')
             return metadata
         if body:
-            metadata['desc'] = '\n\n'.join(filter(None, [metadata.get('desc', ''), body.text()]))
+            prefix = metadata.get('desc', '')
+            metadata['desc'] = '\n\n'.join(filter(None, [prefix, body.text()]))
             _append_images(metadata, images_in(body))
             metadata['video_urls'], metadata['video_cover_urls'] = _videos(body)
+            blocks = build_content_blocks(
+                content_parts(prefix, body, metadata['image_urls']), clean_block_text
+            )
+            if blocks:
+                metadata['content_blocks'] = blocks
         return metadata
 
     @staticmethod

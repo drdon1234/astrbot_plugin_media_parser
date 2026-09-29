@@ -4,10 +4,11 @@ import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urljoin, urlparse
 
 from ....types import MediaMetadata
+from ...utils import build_content_blocks, join_content_text
 
 
 VOID_TAGS = {
@@ -368,7 +369,10 @@ class _ArticleHTMLParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.source_url = source_url
         self.meta: Dict[str, str] = {}
-        self.fields: Dict[str, List[str]] = {name: [] for name in FIELD_IDS.values()}
+        # 正文字段在文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        self.fields: Dict[str, List[Union[str, int]]] = {
+            name: [] for name in FIELD_IDS.values()
+        }
         self.images: List[List[str]] = []
         self.visible_text: List[str] = []
         self.has_content = False
@@ -460,10 +464,12 @@ class _ArticleHTMLParser(HTMLParser):
         """优先保留正文懒加载图片地址，跳过内嵌占位图。"""
         value = attributes.get("data-src") or attributes.get("src") or ""
         image_url = _normalize_image_url(self.source_url, value)
-        if not image_url or image_url in self._seen_images:
+        if not image_url:
             return
-        self._seen_images.add(image_url)
-        self.images.append([image_url])
+        if image_url not in self._seen_images:
+            self._seen_images.add(image_url)
+            self.images.append([image_url])
+        self.fields["content"].append(self.images.index([image_url]))
 
 
 def _publication_date(page: str, visible_date: str, cgi_data: str) -> str:
@@ -516,7 +522,7 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
     parser.feed(page)
     parser.close()
     cgi_data = _assigned_object(page, "window.cgiDataNew")
-    content = _clean_text("".join(parser.fields["content"]))
+    content = _clean_text(join_content_text(parser.fields["content"]))
     is_gallery = _property_scalar(cgi_data, "item_show_type") == "8"
     gallery_images = _gallery_images(cgi_data, source_url) if is_gallery else []
     has_standard_content = parser.has_content and bool(content or parser.images)
@@ -558,7 +564,7 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
         or parser.meta.get("og:description", "")
         or _property_string(cgi_data, "desc")
     )
-    return {
+    metadata: MediaMetadata = {
         "url": source_url,
         "title": title,
         "author": author,
@@ -568,3 +574,10 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
         ),
         "image_urls": gallery_images if has_gallery_content else parser.images,
     }
+    content_blocks = (
+        [] if has_gallery_content
+        else build_content_blocks(parser.fields["content"], _clean_text)
+    )
+    if content_blocks:
+        metadata["content_blocks"] = content_blocks
+    return metadata

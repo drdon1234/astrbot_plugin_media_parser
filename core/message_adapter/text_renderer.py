@@ -1,11 +1,11 @@
-"""文本元数据图片渲染器，负责将多个文本节点绘制为单张 PNG 图片。"""
+"""文本元数据图片渲染器，负责将文本节点绘制为 PNG 图片，并按需分页。"""
 
 from __future__ import annotations
 
 import asyncio
 import os
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 from .font_manager import FONT_DIR, ensure_default_fonts
 
@@ -16,11 +16,12 @@ DEFAULT_RENDER_STYLE = "fresh"
 DEFAULT_RENDER_FONT_FAMILY = "noto_sans"
 MIN_RENDER_FONT_SIZE = 16
 MAX_RENDER_FONT_SIZE = 42
+PAGINATED_MAX_HEIGHT = 1800
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
 NO_LINE_START_CHARS = "，。！？；：、,.!?;:)]}）】》"
 
 
-async def render_text_metadata_image(
+async def render_text_metadata_images(
     text: str,
     output_path: str,
     *,
@@ -29,22 +30,26 @@ async def render_text_metadata_image(
     font_size: int = DEFAULT_RENDER_FONT_SIZE,
     style: str = DEFAULT_RENDER_STYLE,
     font_family: str = DEFAULT_RENDER_FONT_FAMILY,
+    paginate: bool = False,
+    font_proxy_url: str = "",
     timeout_seconds: int = 60,
-) -> str:
+) -> List[str]:
     """将文本元数据渲染为本地 PNG 文件。
 
     Args:
         text: 待渲染的文本内容。
-        output_path: 输出图片路径。
+        output_path: 输出图片路径；分页时各页在文件名后追加页码。
         title: 图片顶部标题。
         width: 图片宽度。
         font_size: 正文文字大小。
         style: 图片渲染风格。
         font_family: 图片字体族。
+        paginate: 是否将超过最大高度的长图按行拆分为多页。
+        font_proxy_url: 补全默认字体时使用的代理地址，为空时直接连接。
         timeout_seconds: 渲染超时时间（秒）。
 
     Returns:
-        已生成的图片绝对路径。
+        按阅读顺序排列的图片绝对路径。
 
     Raises:
         RuntimeError: Pillow 不可用、字体加载失败或图片未生成。
@@ -53,25 +58,75 @@ async def render_text_metadata_image(
     if not str(text or "").strip():
         raise ValueError("没有可渲染的文本元数据")
 
-    await ensure_default_fonts()
+    await ensure_default_fonts(font_proxy_url)
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.wait_for(
-        asyncio.to_thread(
-            _render_text_metadata_image_sync,
-            str(text),
-            output,
-            str(title or "媒体解析结果"),
-            _normalize_width(width),
-            _normalize_font_size(font_size),
-            _normalize_style(style),
-            _normalize_font_family(font_family),
-        ),
-        timeout=max(10, int(timeout_seconds or 60)),
-    )
-    if not output.is_file() or output.stat().st_size <= 0:
+    try:
+        paths = await asyncio.wait_for(
+            asyncio.to_thread(
+                _render_text_metadata_image_sync,
+                str(text),
+                output,
+                str(title or "媒体解析结果"),
+                _normalize_width(width),
+                _normalize_font_size(font_size),
+                _normalize_style(style),
+                _normalize_font_family(font_family),
+                PAGINATED_MAX_HEIGHT if paginate else 0,
+            ),
+            timeout=max(10, int(timeout_seconds or 60)),
+        )
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        _remove_rendered_pages(output)
+        raise
+    if not paths or any(
+        not Path(path).is_file() or Path(path).stat().st_size <= 0 for path in paths
+    ):
+        _remove_rendered_pages(output)
         raise RuntimeError("文本元数据图片未生成有效文件")
-    return str(output)
+    return paths
+
+
+def _page_path(output: Path, index: int, total: int) -> Path:
+    """返回单页输出路径，单页时沿用原路径。"""
+    if total <= 1:
+        return output
+    return output.with_name(f"{output.stem}_p{index:02d}{output.suffix}")
+
+
+def _remove_rendered_pages(output: Path) -> None:
+    """删除当前输出路径已生成的单页或分页图片。"""
+    for path in (output, *output.parent.glob(f"{output.stem}_p*{output.suffix}")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _paginate_lines(
+    lines: List[str],
+    heights: List[int],
+    capacity: int,
+) -> List[List[str]]:
+    """按可用高度拆分正文行，页首不保留空行或分隔线。"""
+    pages: List[List[str]] = []
+    current: List[str] = []
+    used = 0
+    for line, height in zip(lines, heights):
+        if current and used + height > capacity:
+            pages.append(current)
+            current = []
+            used = 0
+        if not current and line in ("", TEXT_SECTION_SEPARATOR):
+            continue
+        current.append(line)
+        used += height
+    if current:
+        pages.append(current)
+    for page in pages:
+        while len(page) > 1 and page[-1] in ("", TEXT_SECTION_SEPARATOR):
+            page.pop()
+    return pages or [lines]
 
 
 def _render_text_metadata_image_sync(
@@ -82,8 +137,9 @@ def _render_text_metadata_image_sync(
     font_size: int,
     style: str,
     font_family: str,
-) -> None:
-    """同步绘制文本元数据图片。"""
+    max_height: int = 0,
+) -> List[str]:
+    """同步绘制文本元数据图片，max_height 大于 0 时按高度分页。"""
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
@@ -123,15 +179,102 @@ def _render_text_metadata_image_sync(
     title_line_height = _line_height(probe_draw, title_font, 1.35)
     body_line_height = _line_height(probe_draw, regular_font, 1.55)
     label_line_height = _line_height(probe_draw, label_font, 1.4)
+    separator_height = max(body_line_height // 2, label_line_height // 2)
+    line_heights = [
+        separator_height if line == TEXT_SECTION_SEPARATOR else body_line_height
+        for line in body_lines
+    ]
 
+    page_font = _load_font(
+        ImageFont,
+        max(MIN_RENDER_FONT_SIZE, font_size - 4),
+        font_family=font_family,
+    )
     top_padding = 46
     title_gap = 30
     card_top = top_padding + len(title_lines) * title_line_height + title_gap
-    card_bottom = card_top + 34 + len(body_lines) * body_line_height + 34
-    image = Image.new("RGB", (width, card_bottom + 46), palette["background"])
-    draw = ImageDraw.Draw(image)
-    _draw_background(draw, width, card_bottom + 46, palette["background_dot"])
+    # 分页时底部留白需容纳页码；卡片上下内边距与底部留白不计入正文行高度。
+    paged_bottom = max(46, _line_height(probe_draw, page_font, 1.2) + 24)
+    page_capacity = max_height - card_top - 34 - 34 - paged_bottom
+    if max_height > 0 and page_capacity >= body_line_height:
+        pages = _paginate_lines(body_lines, line_heights, page_capacity)
+    else:
+        pages = [body_lines]
+    bottom_space = paged_bottom if len(pages) > 1 else 46
 
+    output.parent.mkdir(parents=True, exist_ok=True)
+    written: List[str] = []
+    try:
+        for page_index, page_lines in enumerate(pages, start=1):
+            page_heights = [
+                separator_height if line == TEXT_SECTION_SEPARATOR else body_line_height
+                for line in page_lines
+            ]
+            card_bottom = card_top + 34 + sum(page_heights) + 34
+            height = card_bottom + bottom_space
+            image = Image.new("RGB", (width, height), palette["background"])
+            draw = ImageDraw.Draw(image)
+            _draw_background(draw, width, height, palette["background_dot"])
+            _draw_page(
+                draw,
+                page_lines,
+                title_lines=title_lines,
+                width=width,
+                margin=margin,
+                top_padding=top_padding,
+                card_top=card_top,
+                card_bottom=card_bottom,
+                title_font=title_font,
+                label_font=label_font,
+                regular_font=regular_font,
+                title_line_height=title_line_height,
+                body_line_height=body_line_height,
+                separator_height=separator_height,
+                palette=palette,
+            )
+            if len(pages) > 1:
+                page_label = f"{page_index} / {len(pages)}"
+                draw.text(
+                    (
+                        (width - _text_width(draw, page_label, page_font)) / 2,
+                        card_bottom + 14,
+                    ),
+                    page_label,
+                    font=page_font,
+                    fill=palette["label_text"],
+                )
+            page_path = _page_path(output, page_index, len(pages))
+            image.save(page_path, format="PNG")
+            written.append(str(page_path))
+    except (OSError, ValueError):
+        for path in written:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    return written
+
+
+def _draw_page(
+    draw: Any,
+    body_lines: List[str],
+    *,
+    title_lines: List[str],
+    width: int,
+    margin: int,
+    top_padding: int,
+    card_top: int,
+    card_bottom: int,
+    title_font: object,
+    label_font: object,
+    regular_font: object,
+    title_line_height: int,
+    body_line_height: int,
+    separator_height: int,
+    palette: dict[str, str],
+) -> None:
+    """绘制单页标题、便签卡片与正文行。"""
     for index, line in enumerate(title_lines):
         line_width = _text_width(draw, line, title_font)
         draw.text(
@@ -173,7 +316,7 @@ def _render_text_metadata_image_sync(
                 fill=palette["rule"],
                 width=2,
             )
-            body_y += max(body_line_height // 2, label_line_height // 2)
+            body_y += separator_height
             continue
 
         label, value = _split_label(line)
@@ -199,9 +342,6 @@ def _render_text_metadata_image_sync(
                 fill=palette["body_text"],
             )
         body_y += body_line_height
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output, format="PNG")
 
 
 def _draw_background(
@@ -274,12 +414,12 @@ def _split_label(line: str) -> tuple[str, str]:
 
 
 def _text_width(draw: object, text: str, font: object) -> int:
-    bbox = draw.textbbox((0, 0), str(text or ""), font=font)  # type: ignore[attr-defined]
+    bbox = draw.textbbox((0, 0), str(text or ""), font=font)
     return max(1, int(bbox[2] - bbox[0]))
 
 
 def _line_height(draw: object, font: object, factor: float) -> int:
-    bbox = draw.textbbox((0, 0), "媒体解析Ag", font=font)  # type: ignore[attr-defined]
+    bbox = draw.textbbox((0, 0), "媒体解析Ag", font=font)
     return max(1, int((bbox[3] - bbox[1]) * factor))
 
 
@@ -474,7 +614,7 @@ def _load_font(
         if not candidate or not os.path.isfile(candidate):
             continue
         try:
-            return image_font.truetype(candidate, size)  # type: ignore[attr-defined]
+            return image_font.truetype(candidate, size)
         except (OSError, ValueError):
             continue
     raise RuntimeError(

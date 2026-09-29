@@ -5,7 +5,7 @@ import hashlib
 import html
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import aiohttp
@@ -14,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers, join_content_text
 from .base import BaseVideoParser
 
 
@@ -336,7 +336,8 @@ class TiebaParser(BaseVideoParser):
     def _build_metadata(self, thread_id: str, payload: Dict[str, Any]) -> MediaMetadata:
         """根据已校验的首楼内容生成统一元数据，不遍历回复和推荐。"""
         thread, post = self._first_post(thread_id, payload)
-        texts: List[str] = []
+        # 文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        texts: List[Union[str, int]] = []
         images: List[List[str]] = []
         videos: List[List[str]] = []
         covers: List[List[str]] = []
@@ -368,6 +369,11 @@ class TiebaParser(BaseVideoParser):
                 if candidates and not image_seen.intersection(candidates):
                     images.append(candidates)
                     image_seen.update(candidates)
+                if candidates:
+                    texts.append(next(
+                        index for index, group in enumerate(images)
+                        if set(group).intersection(candidates)
+                    ))
             elif kind == "5":
                 video_fragments.append(fragment)
 
@@ -412,7 +418,7 @@ class TiebaParser(BaseVideoParser):
             "url": url,
             "title": html.unescape(title.strip()) if isinstance(title, str) else "",
             "author": self._author_name(thread, post, payload),
-            "desc": self._clean_text("".join(texts)),
+            "desc": self._clean_text(join_content_text(texts)),
             "timestamp": self._format_timestamp(post.get("time") or thread.get("create_time")),
             "platform": self.name,
             "image_urls": images,
@@ -424,6 +430,9 @@ class TiebaParser(BaseVideoParser):
                 is_video=True, referer=url, user_agent=MOBILE_UA
             ),
         }
+        content_blocks = build_content_blocks(texts, self._clean_text)
+        if content_blocks:
+            metadata["content_blocks"] = content_blocks
         if videos:
             metadata["video_cover_urls"] = covers
             try:
@@ -451,6 +460,7 @@ class TiebaParser(BaseVideoParser):
         origin_id = str(origin.get("tid", ""))
         if not THREAD_ID_RE.fullmatch(origin_id) or origin_id == str(thread.get("id", "")):
             metadata["desc"] = (metadata["desc"] + "\n\n[转发原帖信息不完整]").strip()
+            self._append_block_text(metadata, "[转发原帖信息不完整]")
             return
         origin_url = f"https://tieba.baidu.com/p/{origin_id}"
         try:
@@ -463,7 +473,11 @@ class TiebaParser(BaseVideoParser):
             metadata["desc"] = (
                 metadata["desc"] + f"\n\n转发原帖：{origin_url}\n[原帖已删除或暂时无法读取]"
             ).strip()
+            self._append_block_text(
+                metadata, f"转发原帖：{origin_url}\n[原帖已删除或暂时无法读取]"
+            )
             return
+        own_desc = metadata["desc"]
         lines = ["转发原帖：" + shared["title"], shared["author"], origin_url, shared["desc"]]
         metadata["desc"] = (metadata["desc"] + "\n\n" + "\n".join(filter(None, lines))).strip()
         image_seen = {url for group in metadata["image_urls"] for url in group}
@@ -471,6 +485,9 @@ class TiebaParser(BaseVideoParser):
             if not image_seen.intersection(group):
                 metadata["image_urls"].append(group)
                 image_seen.update(group)
+        self._append_shared_blocks(
+            metadata, shared, own_desc, "\n".join(filter(None, lines[:3]))
+        )
         video_seen = {url for group in metadata["video_urls"] for url in group}
         covers = metadata.setdefault("video_cover_urls", [[] for _ in metadata["video_urls"]])
         shared_covers = shared.get("video_cover_urls", [])
@@ -484,6 +501,50 @@ class TiebaParser(BaseVideoParser):
                 metadata["timelength_ms"] = shared["timelength_ms"]
         elif len(metadata["video_urls"]) > 1:
             metadata.pop("timelength_ms", None)
+
+    @staticmethod
+    def _append_block_text(metadata: MediaMetadata, text: str) -> None:
+        """正文末尾追加说明时同步正文块，保持两者内容一致。"""
+        blocks = metadata.get("content_blocks")
+        if blocks and text.strip():
+            blocks.append({"type": "text", "text": text.strip()})
+
+    @staticmethod
+    def _append_shared_blocks(
+        metadata: MediaMetadata,
+        shared: MediaMetadata,
+        own_desc: str,
+        heading: str,
+    ) -> None:
+        """将转发原帖并入正文块，原帖配图按合并后的图片位置重新编号。"""
+        blocks = list(metadata.get("content_blocks") or [])
+        shared_blocks = shared.get("content_blocks") or []
+        if not blocks and not shared_blocks:
+            return
+        if not blocks and own_desc:
+            blocks.append({"type": "text", "text": own_desc})
+        blocks.append({"type": "text", "text": heading})
+        if not shared_blocks:
+            if shared["desc"]:
+                blocks.append({"type": "text", "text": shared["desc"]})
+            metadata["content_blocks"] = blocks
+            return
+        for block in shared_blocks:
+            if block["type"] != "image":
+                blocks.append(dict(block))
+                continue
+            candidates = set(shared["image_urls"][block["index"]])
+            index = next(
+                (
+                    position
+                    for position, group in enumerate(metadata["image_urls"])
+                    if candidates.intersection(group)
+                ),
+                None,
+            )
+            if index is not None:
+                blocks.append({"type": "image", "index": index})
+        metadata["content_blocks"] = blocks
 
     async def _fetch_hot_comments(
         self, session: aiohttp.ClientSession, thread_id: str, first_post_id: str

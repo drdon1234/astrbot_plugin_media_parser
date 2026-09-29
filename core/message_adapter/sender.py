@@ -97,7 +97,7 @@ class MessageSender:
         sender_name: str,
         sender_id: Any,
         large_video_threshold_mb: float = 0.0,
-        text_metadata_image: str = "",
+        text_metadata_images: Optional[List[str]] = None,
     ):
         """使用 Nodes 合并转发发送结果。
 
@@ -107,11 +107,16 @@ class MessageSender:
             sender_name: 发送者名称
             sender_id: 发送者ID
             large_video_threshold_mb: 大视频阈值(MB)
-            text_metadata_image: 已渲染的文本元数据图片路径
+            text_metadata_images: 已渲染的文本元数据图片路径或 Token URL，按页排列
         """
         normal_metadata = [
             meta for meta in link_metadata if meta.get("is_normal", True)
         ]
+        ordered_links = {
+            id(meta["link_nodes"])
+            for meta in normal_metadata
+            if meta.get("preserve_order") and meta.get("link_nodes")
+        }
         large_media_metadata = [
             meta for meta in link_metadata if meta.get("is_large_media", False)
         ]
@@ -123,10 +128,15 @@ class MessageSender:
             if isinstance(node, (Record, File))
         ]
         normal_link_nodes = [
-            [node for node in link_nodes if not isinstance(node, (Record, File))]
+            (
+                [node for node in link_nodes if not isinstance(node, (Record, File))],
+                id(link_nodes) in ordered_links,
+            )
             for link_nodes in normal_link_nodes
         ]
-        normal_link_nodes = [nodes for nodes in normal_link_nodes if nodes]
+        normal_link_nodes = [
+            (nodes, preserve_order) for nodes, preserve_order in normal_link_nodes if nodes
+        ]
         large_media_link_nodes = [
             meta["link_nodes"] for meta in large_media_metadata if meta.get("link_nodes")
         ]
@@ -134,18 +144,18 @@ class MessageSender:
         expected = 0
         succeeded = 0
         errors: list[Exception] = []
-        rendered_image = None
-        if text_metadata_image:
+        rendered_images = []
+        for reference in text_metadata_images or []:
             try:
-                rendered_image = self._image_from_reference(text_metadata_image)
+                rendered_images.append(self._image_from_reference(reference))
             except Exception as exc:
                 expected += 1
                 errors.append(exc)
                 logger.warning(f"构建文本元数据图片节点失败: {exc}")
 
-        if normal_link_nodes or rendered_image is not None:
+        if normal_link_nodes or rendered_images:
             flat_nodes = []
-            if rendered_image is not None:
+            for rendered_image in rendered_images:
                 flat_nodes.append(
                     Node(
                         name=sender_name,
@@ -153,8 +163,8 @@ class MessageSender:
                         content=[rendered_image],
                     )
                 )
-            for link_idx, link_nodes in enumerate(normal_link_nodes):
-                if is_pure_image_gallery(link_nodes):
+            for link_idx, (link_nodes, preserve_order) in enumerate(normal_link_nodes):
+                if not preserve_order and is_pure_image_gallery(link_nodes):
                     texts = [node for node in link_nodes if isinstance(node, Plain)]
                     images = [node for node in link_nodes if isinstance(node, Image)]
                     for text in texts:
@@ -273,7 +283,7 @@ class MessageSender:
         *,
         quote_user_message: bool = False,
         quote_message_id: str = "",
-        text_metadata_image: str = "",
+        text_metadata_images: Optional[List[str]] = None,
     ) -> None:
         """发送非聚合结果（逐项独立发送）。
 
@@ -283,21 +293,25 @@ class MessageSender:
             link_metadata: 每条链接的构建辅助信息
             quote_user_message: 文本元数据是否引用对应的用户消息
             quote_message_id: 被引用的用户消息 ID
-            text_metadata_image: 已渲染的文本元数据图片路径
+            text_metadata_images: 已渲染的文本元数据图片路径或 Token URL，按页排列
         """
         separator = "-------------------------------------"
         quote_message_id = str(quote_message_id or "").strip()
         expected = 0
         succeeded = 0
         errors: list[Exception] = []
-        if text_metadata_image:
+        for page_index, reference in enumerate(text_metadata_images or []):
             expected += 1
             try:
-                image_node = self._image_from_reference(text_metadata_image)
+                image_node = self._image_from_reference(reference)
                 await self._send_single_node(
                     event,
                     image_node,
-                    quote_message_id=(quote_message_id if quote_user_message else ""),
+                    quote_message_id=(
+                        quote_message_id
+                        if quote_user_message and page_index == 0
+                        else ""
+                    ),
                 )
                 succeeded += 1
             except Exception as exc:
@@ -312,7 +326,7 @@ class MessageSender:
                 continue
             meta = self._metadata_for_link(link_metadata, link_idx)
             metadata_text_node = meta.get("metadata_text_node")
-            if is_pure_image_gallery(link_nodes):
+            if not meta.get("preserve_order") and is_pure_image_gallery(link_nodes):
                 texts = [node for node in link_nodes if isinstance(node, Plain)]
                 images = [node for node in link_nodes if isinstance(node, Image)]
                 for text in texts:

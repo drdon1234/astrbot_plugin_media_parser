@@ -4,7 +4,7 @@ import asyncio
 import html as html_lib
 import re
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import ParseResult, parse_qs, urlparse
 
 import aiohttp
@@ -13,7 +13,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers
 from .base import BaseVideoParser
 from .xiaoheihe import XiaoheiheParser
 
@@ -662,6 +662,29 @@ class SteamParser(BaseVideoParser):
                 images.append(image)
         return images
 
+    def _community_content_parts(
+        self, fragment: str, image_indexes: Dict[str, int]
+    ) -> List[Union[str, int]]:
+        """按正文配图位置拆分社区正文，配图之间的文字分别清理。"""
+        parts: List[Union[str, int]] = []
+        position = 0
+        for match in re.finditer(r"<img\b[^>]*>", fragment or "", re.IGNORECASE):
+            parts.append(self._community_text(fragment[position:match.start()]) + "\n")
+            position = match.end()
+            source = re.search(
+                r"\bsrc\s*=\s*(['\"])(.*?)\1", match.group(0), re.IGNORECASE | re.DOTALL
+            )
+            image = self._normalize_community_image(source.group(2)) if source else None
+            if image in image_indexes:
+                parts.append(image_indexes[image])
+        parts.append(self._community_text((fragment or "")[position:]))
+        return parts
+
+    @staticmethod
+    def _clean_block_text(text: str) -> str:
+        """合并已清理文字段之间的多余空行。"""
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
     def _extract_preview_media(self, html_text: str) -> Tuple[List[str], List[str]]:
         """提取社区物品封面、预览截图与 YouTube 预览视频链接。"""
         images: List[str] = []
@@ -842,10 +865,12 @@ class SteamParser(BaseVideoParser):
             kind = "指南"
             fragments = self._div_blocks(html_text, "guideTopDescription", limit=1)
             parts = [self._community_text(fragments[0])] if fragments else []
+            sections = [("", fragments[0])] if fragments else []
             for section in self._div_blocks(html_text, "subSection"):
                 section_title = self._first_block_text(section, "subSectionTitle")
                 section_desc = self._div_blocks(section, "subSectionDesc", limit=1)
                 fragments.extend(section_desc)
+                sections.append((section_title, section_desc[0] if section_desc else ""))
                 section_text = (
                     self._community_text(section_desc[0]) if section_desc else ""
                 )
@@ -862,6 +887,7 @@ class SteamParser(BaseVideoParser):
                 html_text, "workshopItemDescription", limit=1
             )
             intro = self._community_text(fragments[0]) if fragments else ""
+            sections = [("", fragments[0])] if fragments else []
 
         preview_images, preview_videos = self._extract_preview_media(html_text)
         content_images: List[str] = []
@@ -889,6 +915,16 @@ class SteamParser(BaseVideoParser):
         lines.append(f"分类：{kind}")
         lines.extend(detail_lines)
         lines.extend(f"预览视频：{video}" for video in preview_videos)
+        content_blocks: List[Dict[str, Any]] = []
+        if intro:
+            # 正文块覆盖简介中的分隔线、正文与其后的物品信息。
+            image_indexes = {group[0]: index for index, group in enumerate(image_urls)}
+            block_parts: List[Union[str, int]] = ["=============\n"]
+            for section_title, fragment in sections:
+                block_parts.append(f"\n\n【{section_title}】\n" if section_title else "\n\n")
+                block_parts.extend(self._community_content_parts(fragment, image_indexes))
+            block_parts.append("\n=============\n\n" + "\n".join(lines[6:]))
+            content_blocks = build_content_blocks(block_parts, self._clean_block_text)
 
         canonical_url = f"{STEAM_COMMUNITY_FILE_URL}?id={file_id}"
         result: MediaMetadata = {
@@ -905,6 +941,8 @@ class SteamParser(BaseVideoParser):
             "use_image_proxy": self.use_image_proxy,
             "proxy_url": self.proxy_url if self.use_image_proxy else None,
         }
+        if content_blocks:
+            result["content_blocks"] = content_blocks
         comments = self._extract_page_comments(html_text)
         if comments:
             result["hot_comments"] = comments

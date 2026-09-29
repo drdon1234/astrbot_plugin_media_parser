@@ -466,7 +466,7 @@
                     "render_to_image": {
                         "description": "将文本元数据渲染为图片",
                         "type": "bool",
-                        "hint": "开启后将基础文本、热评和翻译等所有文本节点合并渲染为一张图片发送；渲染失败时自动保留原文本发送。",
+                        "hint": "开启后将基础文本、热评和翻译等所有文本节点合并渲染为一张图片发送；正文与配图穿插发送时，该条内容的文本在原位置分段渲染。渲染失败时自动保留原文本发送。",
                         "default": false
                     },
                     "render_style": {
@@ -507,6 +507,15 @@
                         },
                         "hint": "有效范围 16–42，数值越大图片越长。",
                         "default": 24
+                    },
+                    "render_paginate": {
+                        "description": "长图自动分页",
+                        "type": "bool",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "hint": "开启后文本图片高度超过 1800 像素时按行拆分为多张图片依次发送，适合限制超长图片的聊天平台。",
+                        "default": false
                     }
                 }
             },
@@ -529,6 +538,12 @@
                         ],
                         "hint": "语音以聊天语音发送，格式转换可能需要 ffmpeg；文件保留原始音频。两种方式均单独发送，实际限制由聊天平台决定。",
                         "default": "语音"
+                    },
+                    "interleave_images": {
+                        "description": "正文与配图按原文顺序穿插",
+                        "type": "bool",
+                        "hint": "开启后，能识别配图位置的文章与帖子会按原文顺序交替发送正文段落和配图，需同时显示简介/正文并发送富媒体；其余内容保持原有发送方式。目前支持 AcFun 文章、今日头条、小黑盒帖子、雪球、微信公众号、知乎、百度贴吧、NGA、虎扑、豆瓣、V2EX、稀土掘金、CSDN、博客园与 Steam 社区指南 / 创意工坊。",
+                        "default": false
                     }
                 }
             },
@@ -1143,13 +1158,19 @@
     "proxy": {
         "description": "代理设置",
         "type": "object",
-        "hint": "先填写代理地址；下面各平台开关只有在地址非空时才会生效。",
+        "hint": "先填写代理地址；下面各项开关只有在地址非空时才会生效。",
         "items": {
             "address": {
                 "description": "代理地址",
                 "type": "string",
                 "hint": "格式：http://host:port 或 https://host:port",
                 "default": ""
+            },
+            "font": {
+                "description": "字体资源下载使用代理",
+                "type": "bool",
+                "hint": "需要先填写“代理地址”；用于补全文本图片渲染所需的默认字体。",
+                "default": false
             },
             "xiaoheihe_video": {
                 "description": "直接解析小黑盒的视频下载使用代理",

@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import aiohttp
@@ -15,7 +15,7 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import SkipParse
+from ...utils import SkipParse, build_content_blocks, join_content_text
 from ..base import BaseVideoParser
 from .sign import sign_article
 
@@ -51,7 +51,8 @@ class _RichContentParser(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.text_parts: List[str] = []
+        # 文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        self.text_parts: List[Union[str, int]] = []
         self.image_urls: List[List[str]] = []
         self._image_seen = set()
         self._ignored_tags: List[str] = []
@@ -85,6 +86,8 @@ class _RichContentParser(HTMLParser):
                 self.image_urls.append([image_url])
             elif not image_url and values.get("alt"):
                 self.text_parts.append(values["alt"])
+            if image_url:
+                self.text_parts.append(self.image_urls.index([image_url]))
         if tag in self._BLOCK_TAGS:
             self.text_parts.append("\n")
 
@@ -127,8 +130,17 @@ class _RichContentParser(HTMLParser):
 
     def text(self) -> str:
         """返回经过空白清理的正文文本。"""
+        return self._clean_text(join_content_text(self.text_parts))
+
+    def content_blocks(self) -> List[Dict[str, Any]]:
+        """返回按原文顺序穿插配图的正文块。"""
+        return build_content_blocks(self.text_parts, self._clean_text)
+
+    @staticmethod
+    def _clean_text(value: str) -> str:
+        """清理正文空白并合并连续空行。"""
         text = (
-            "".join(self.text_parts)
+            value
             .replace("\r\n", "\n")
             .replace("\r", "\n")
             .replace("\xa0", " ")
@@ -340,10 +352,16 @@ class ZhihuParser(BaseVideoParser):
     @staticmethod
     def _parse_content(content: str) -> Tuple[str, List[List[str]]]:
         """从正文 HTML 中提取文本和图片。"""
+        parser = ZhihuParser._content_parser(content)
+        return parser.text(), parser.image_urls
+
+    @staticmethod
+    def _content_parser(content: str) -> _RichContentParser:
+        """解析正文 HTML 并返回保留配图位置的解析器。"""
         parser = _RichContentParser()
         parser.feed(content)
         parser.close()
-        return parser.text(), parser.image_urls
+        return parser
 
     @staticmethod
     def _metadata_from_payload(
@@ -364,25 +382,29 @@ class ZhihuParser(BaseVideoParser):
             or payload.get("force_login_when_click_read_more")
         ):
             raise RuntimeError("知乎文章正文需要登录或被截断")
-        desc, image_urls = ZhihuParser._parse_content(content)
+        parser = ZhihuParser._content_parser(content)
         author = payload.get("author") or {}
         author_name = author.get("name") if isinstance(author, dict) else str(author)
-        return {
+        metadata: MediaMetadata = {
             "url": canonical_url,
             "title": str(payload.get("title") or "").strip(),
             "author": str(author_name or "").strip(),
-            "desc": desc,
+            "desc": parser.text(),
             "timestamp": _format_timestamp(
                 payload.get("created") or payload.get("createdTime")
             ),
             "platform": "zhihu",
             "video_urls": [],
-            "image_urls": image_urls,
+            "image_urls": parser.image_urls,
             "image_headers": {
                 "User-Agent": ZHIHU_USER_AGENT,
                 "Referer": canonical_url,
             },
         }
+        content_blocks = parser.content_blocks()
+        if content_blocks:
+            metadata["content_blocks"] = content_blocks
+        return metadata
 
     async def _parse_answer(
         self,
