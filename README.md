@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.9.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.9.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -21,7 +21,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 | 平台 | 支持能力 | 备注 |
 |------|---------|------|
 | **B站** | 视频 / 图片 / 文本 / 热评 | 短链 / 视频 / 番剧 / 动态 / QQ小程序卡片 |
-| **抖音** | 视频 / 图片 / 文本 / 热评 | 短链 / 视频 / 图集 |
+| **抖音** | 视频 / 图片 / 音频 / 文本 / 热评 | 短链 / 视频 / 图集 |
 | **快手** | 视频 / 图片 / 文本 | 短链 / 视频 / 图集 |
 | **AcFun** | 视频 / 图片 / 文本 / 热评 | 视频（含多 P） / 番剧 / 文章 |
 | **网易云音乐** | 音频 / 图片 / 文本 / 热评 | 单曲 |
@@ -84,7 +84,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 
 ## 🎵 音频发送
 
-网易云音乐支持单曲，喜马拉雅支持单集音频。仅有试听时会标注，无可用音频时仍保留图文信息；不展开歌单、专辑，也不解锁付费内容。
+网易云音乐支持单曲，喜马拉雅支持单集音频，抖音图集附带背景音乐。仅有试听时会标注，无可用音频时仍保留图文信息；不展开歌单、专辑，也不解锁付费内容。
 
 在 `消息输出 → 富媒体展示 → 音频发送方式` 中选择 `语音`（默认）或 `文件`。语音转换可能需要 ffmpeg，文件方式保留原始音频。音频需先缓存，大小默认上限 30 MB，填 0 时仍保留 128 MB 安全上限。
 
