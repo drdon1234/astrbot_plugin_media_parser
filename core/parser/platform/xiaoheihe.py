@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple, Iterable
+from typing import Optional, Dict, Any, List, Tuple, Iterable, Union
 from urllib.parse import urlparse, parse_qs
 
 import aiohttp
@@ -20,7 +20,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers
 from .base import BaseVideoParser
 
 try:
@@ -1133,12 +1133,13 @@ class XiaoheiheParser(BaseVideoParser):
 
     def _extract_bbs_text_and_media(
         self, link: Dict[str, Any]
-    ) -> Tuple[str, List[List[str]], List[List[str]]]:
-        """解析 BBS link 的正文、视频和图片。"""
+    ) -> Tuple[str, List[List[str]], List[List[str]], List[Dict[str, Any]]]:
+        """解析 BBS link 的正文、视频、图片与按原文顺序排列的正文块。"""
         text = str(link.get("text") or "")
         desc = text
         video_urls: List[List[str]] = []
         image_urls: List[List[str]] = []
+        content_parts: List[Union[str, int]] = []
 
         if link.get("has_video") and link.get("video_url"):
             video_url = str(link.get("video_url") or "")
@@ -1157,13 +1158,16 @@ class XiaoheiheParser(BaseVideoParser):
                 if not isinstance(item, dict):
                     continue
                 item_type = item.get("type")
-                if item_type == "html":
-                    desc_parts.append(self._strip_tags(str(item.get("text") or "")))
-                elif item_type == "text":
-                    desc_parts.append(str(item.get("text") or ""))
+                if item_type in {"html", "text"}:
+                    value = str(item.get("text") or "")
+                    part = self._strip_tags(value) if item_type == "html" else value
+                    desc_parts.append(part)
+                    if part:
+                        content_parts.extend((part, "\n"))
                 elif item_type == "img":
                     img_url = str(item.get("url") or "")
                     if img_url:
+                        content_parts.append(len(image_urls))
                         image_urls.append([img_url])
                 elif item_type in {"video", "gif"}:
                     media_url = str(item.get("url") or item.get("video_url") or "")
@@ -1174,12 +1178,18 @@ class XiaoheiheParser(BaseVideoParser):
                     ):
                         media_url = f"m3u8:{media_url}"
                     if item_type == "gif" and ".gif" in media_url.lower():
+                        content_parts.append(len(image_urls))
                         image_urls.append([media_url])
                     else:
                         video_urls.append([media_url])
             desc = "\n".join(part for part in desc_parts if part).strip()
 
-        return desc, video_urls, image_urls
+        return (
+            desc,
+            video_urls,
+            image_urls,
+            build_content_blocks(content_parts, str.strip),
+        )
 
     async def _parse_bbs_link(
         self, session: aiohttp.ClientSession, url: str, link_id: str
@@ -1226,7 +1236,9 @@ class XiaoheiheParser(BaseVideoParser):
             uid = str(user.get("heybox_id") or user.get("uid") or "")
             author = f"{nickname}(uid:{uid})" if nickname and uid else nickname
 
-        desc, video_urls, image_urls = self._extract_bbs_text_and_media(link)
+        desc, video_urls, image_urls, content_blocks = (
+            self._extract_bbs_text_and_media(link)
+        )
         if not video_urls and not image_urls:
             raise RuntimeError("小黑盒BBS帖子未找到媒体")
 
@@ -1246,6 +1258,8 @@ class XiaoheiheParser(BaseVideoParser):
             "use_video_proxy": self.use_video_proxy,
             "proxy_url": self.proxy_url if self.use_video_proxy else None,
         }
+        if content_blocks:
+            result["content_blocks"] = content_blocks
         if video_urls:
             result["video_force_download"] = True
         if self.hot_comment_count:
@@ -1265,7 +1279,7 @@ class XiaoheiheParser(BaseVideoParser):
         if is_game:
             message = self._strip_tags(str(item.get("description") or ""))
         else:
-            message, videos, images = self._extract_bbs_text_and_media(item)
+            message, videos, images, _ = self._extract_bbs_text_and_media(item)
             message = self._strip_tags(message)
             if images:
                 message = (message + "\n[图片]").strip()

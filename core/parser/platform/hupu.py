@@ -6,14 +6,14 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import aiohttp
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers, join_content_text
 from .base import BaseVideoParser
 
 
@@ -145,7 +145,8 @@ class _ContentParser(HTMLParser):
 
     def __init__(self, image_marker: bool = False) -> None:
         super().__init__(convert_charrefs=True)
-        self.parts: List[str] = []
+        # 文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        self.parts: List[Union[str, int]] = []
         self.images: List[List[str]] = []
         self.videos: List[List[str]] = []
         self.covers: List[List[str]] = []
@@ -175,6 +176,11 @@ class _ContentParser(HTMLParser):
             ))
             if candidates and not any(set(candidates) & set(group) for group in self.images):
                 self.images.append(candidates)
+            if candidates:
+                self.parts.append(next(
+                    index for index, group in enumerate(self.images)
+                    if set(candidates) & set(group)
+                ))
             if self.image_marker:
                 self.parts.append(values.get("alt") or "[图片]")
         elif tag in {"video", "source"}:
@@ -201,7 +207,7 @@ class _ContentParser(HTMLParser):
                 continue
             del self.stack[index:]
             if not hidden:
-                if tag == "a" and href and href != "".join(self.parts[start:]).strip():
+                if tag == "a" and href and href != join_content_text(self.parts[start:]).strip():
                     self.parts.append(f"（{href}）")
                 if tag in self.BLOCK_TAGS:
                     self.parts.append("\n")
@@ -218,7 +224,20 @@ class _ContentParser(HTMLParser):
         Returns:
             已去除标签与多余空白的文本。
         """
-        lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in "".join(self.parts).splitlines()]
+        return self._clean_text(join_content_text(self.parts))
+
+    def content_blocks(self) -> List[Dict[str, Any]]:
+        """返回按原文顺序穿插配图的正文块。
+
+        Returns:
+            正文块列表，缺少文字或配图时为空。
+        """
+        return build_content_blocks(self.parts, self._clean_text)
+
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        """整理行内空白并去除空行。"""
+        lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in text.splitlines()]
         return "\n".join(line for line in lines if line)
 
 
@@ -440,6 +459,9 @@ class HupuParser(BaseVideoParser):
             "image_headers": build_request_headers(referer=canonical),
             "video_headers": build_request_headers(is_video=True, referer=canonical),
         }
+        content_blocks = content.content_blocks()
+        if content_blocks:
+            metadata["content_blocks"] = content_blocks
         if self.hot_comment_count:
             metadata["hot_comments"] = self._comments(detail)
         return metadata

@@ -3,7 +3,7 @@
 import re
 from html import escape, unescape
 from html.parser import HTMLParser
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Union
 from urllib.parse import urljoin, urlsplit
 
 
@@ -112,18 +112,22 @@ class _ContentParser(HTMLParser):
         """初始化正文缓冲及图片去重集合。"""
         super().__init__(convert_charrefs=True)
         self.attach_prefix = attach_prefix
-        self.parts: List[str] = []
+        # 文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        self.parts: List[Union[str, int]] = []
         self.images: List[List[str]] = []
         self.image_seen = set()
         self.ignored: List[str] = []
         self.links: List[Tuple[str, int]] = []
 
-    def _append_image(self, value: str) -> None:
-        """补全附件链接并按首次出现顺序保存图片。"""
+    def _append_image(self, value: str) -> Optional[int]:
+        """补全附件链接并按首次出现顺序保存图片，返回图片下标。"""
         url = _http_url(value, self.attach_prefix)
-        if url and url not in self.image_seen:
+        if not url:
+            return None
+        if url not in self.image_seen:
             self.image_seen.add(url)
             self.images.append([url])
+        return self.images.index([url])
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         """读取 HTML 起始标签。
@@ -158,7 +162,9 @@ class _ContentParser(HTMLParser):
                 label = (attributes.get("alt") or attributes.get("title") or "").strip()
                 self.parts.append("[表情" + ("：" + label if label else "") + "]")
             else:
-                self._append_image(source)
+                index = self._append_image(source)
+                if index is not None:
+                    self.parts.append(index)
                 self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
@@ -173,7 +179,9 @@ class _ContentParser(HTMLParser):
             return
         if tag == "a" and self.links:
             url, start = self.links.pop()
-            label = "".join(self.parts[start:]).strip()
+            label = "".join(
+                part for part in self.parts[start:] if isinstance(part, str)
+            ).strip()
             if url and label != url:
                 self.parts.append("（" + url + "）" if label else url)
         if tag in BLOCK_TAGS:
@@ -191,6 +199,46 @@ class _ContentParser(HTMLParser):
             self.parts.append(data)
 
 
+def clean_content_text(text: str) -> str:
+    """整理行内空白并去除空行。
+
+    Args:
+        text: 正文片段拼接后的原始文字。
+
+    Returns:
+        保留基本阅读层次的文字。
+    """
+    lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def parse_content_parts(
+    content: str, attach_prefix: str, attachments: Any = None
+) -> Tuple[List[Union[str, int]], List[List[str]]]:
+    """读取 NGA 混合正文的文字片段、配图位置及图片候选组。
+
+    Args:
+        content: 首帖的 HTML 与 BBCode 正文。
+        attach_prefix: 接口返回的附件地址前缀。
+        attachments: 首帖的附件字段。
+
+    Returns:
+        文字片段与配图下标交错的序列，以及按出现顺序去重的图片候选组；
+        仅出现在附件字段中的图片不占正文位置。
+    """
+    parser = _ContentParser(attach_prefix)
+    parser.feed(_bbcode_to_html(content))
+    parser.close()
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            if not isinstance(attachment, dict) or attachment.get("type") != "img":
+                continue
+            value = attachment.get("attachurl")
+            if isinstance(value, str):
+                parser._append_image(value)
+    return parser.parts, parser.images
+
+
 def parse_content(
     content: str, attach_prefix: str, attachments: Any = None
 ) -> Tuple[str, List[List[str]]]:
@@ -204,16 +252,6 @@ def parse_content(
     Returns:
         保留基本阅读层次的文字与按出现顺序去重的图片候选组。
     """
-    parser = _ContentParser(attach_prefix)
-    parser.feed(_bbcode_to_html(content))
-    parser.close()
-    if isinstance(attachments, list):
-        for attachment in attachments:
-            if not isinstance(attachment, dict) or attachment.get("type") != "img":
-                continue
-            value = attachment.get("attachurl")
-            if isinstance(value, str):
-                parser._append_image(value)
-    lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in "".join(parser.parts).splitlines()]
-    text = "\n".join(line for line in lines if line)
-    return text, parser.images
+    parts, images = parse_content_parts(content, attach_prefix, attachments)
+    text = "".join(part for part in parts if isinstance(part, str))
+    return clean_content_text(text), images

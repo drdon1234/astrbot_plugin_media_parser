@@ -54,17 +54,14 @@ class WechatParser(BaseVideoParser):
     def __init__(
         self,
         yuanbao_cookie: str = "",
-        article_layout: str = "正文与图片分开发送",
     ) -> None:
         """初始化微信解析器。
 
         Args:
             yuanbao_cookie: 腾讯元宝网页 Cookie，用于短链换取视频号令牌。
-            article_layout: 公众号正文与图片的排列方式。
         """
         super().__init__("wechat")
         self.yuanbao_cookie = str(yuanbao_cookie or "").strip()
-        self.article_layout = article_layout
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.yuanbao_headers = {
             "Accept": "application/json, text/plain, */*",
@@ -453,8 +450,6 @@ class WechatParser(BaseVideoParser):
             raise RuntimeError("微信公众号页面网络请求失败") from exc
 
         result = parse_article_page(page, url)
-        if self.article_layout != "按原文图文穿插":
-            result.pop("article_blocks", None)
         result["platform"] = self.name
         result["image_headers"] = build_request_headers(
             is_video=False,

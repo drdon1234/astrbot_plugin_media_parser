@@ -46,16 +46,10 @@
 ```text
 astrbot_plugin_media_parser/
 ├── main.py                          # AstrBot 插件入口与生命周期
-├── page_api.py                      # Pages 配置读取、校验、保存与插件重载接口
 ├── _conf_schema.json                # AstrBot 配置 schema
 ├── metadata.yaml                    # 插件清单与 AstrBot 版本范围
 ├── requirements.txt                 # Python 运行依赖
 ├── run_local.py                     # 本地调试入口，递归发现平台解析器
-├── .astrbot-plugin/i18n/zh-CN.json   # 插件 Pages 中文展示信息
-├── pages/settings/
-│   ├── index.html                   # 配置页面结构与预览缩放控件
-│   ├── app.js                       # 配置草稿、条件联动、保存与即时预览
-│   └── style.css                    # 配置页面与消息预览样式，不参与实际图片渲染
 ├── docs/
 │   ├── README.md                    # 文档索引
 │   ├── ARCHITECTURE.md              # 当前架构文档
@@ -195,7 +189,9 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
 
-`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集所有文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成单张 PNG，再移除已成功渲染的 Plain 节点并发送图片。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42。`font_manager.py` 在插件加载和实际渲染前幂等检查默认 Noto Sans CJK，缺失或大小、SHA256 校验失败时从固定版本的字体仓库 Release 流式下载，经临时文件校验后原子落盘；也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体，再按配置的字体族和系统字体路径回退。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。启用文件 Token 中转时，渲染图片也会单独注册 Token，并纳入同一 TTL 清理流程。
+`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成 PNG，再移除已成功渲染的 Plain 节点并发送图片。正文穿插的链接（`preserve_order`）把连续的 Plain 节点在原位置分段渲染并替换为图片，任一段失败时整条链接保留原文本；其余链接与翻译仍合并渲染，由发送阶段前置发送。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42。`message.text_metadata.render_paginate` 开启时，渲染器按正文行拆分高度超过 1800 像素的图片，页首不保留空行和分隔线，多页时在底部标注页码并以 `_pNN` 后缀命名；关闭时保持单张输出。`font_manager.py` 在插件加载和实际渲染前幂等检查默认 Noto Sans CJK，缺失或大小、SHA256 校验失败时从固定版本的字体仓库 Release 流式下载，`proxy.font` 开启且代理地址非空时经代理下载，经临时文件校验后原子落盘；也可通过 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体，再按配置的字体族和系统字体路径回退。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。渲染图片记入 `build_result.temp_files` 统一清理；启用文件 Token 中转时逐页注册 Token，并纳入同一 TTL 清理流程。
+
+`message.media_display.interleave_images` 开启后，`node_builder.py` 对提供 `content_blocks` 的链接按正文块顺序输出文字节点与已构建的配图节点：基础文本节点保留“简介/正文：”标题但不再写入正文，正文块之后依次为热评和未穿插的剩余媒体。需要同时满足文本元数据与富媒体输出开启、简介/正文可见且无解析错误，并至少有一张配图节点构建成功，否则回退原有布局。穿插链接在 `LinkBuildMeta.preserve_order` 中标记，发送阶段不再按纯图集把文字与图片分组。
 
 配置 schema 对依赖开关的字段使用条件显隐，例如翻译提供商、权限名单、B站 Cookie、管理员协助登录和媒体中转参数。显隐只影响配置页展示，不会删除已保存的隐藏值。
 
@@ -401,7 +397,8 @@ video_count + image_count ..                  音频
 - 文本元数据节点按 `_text_metadata_fields` 展示标题、作者、发布时间、原始链接和简介/正文；访问状态、视频大小、跳过原因和解析错误始终保留。简介/正文放在最后，并用分隔符与前面的元数据分开。
 - 热评节点和翻译节点是独立文本节点，不混入文本元数据节点。热评不进入翻译流程。
 - 翻译结果来自后台大模型任务，按链接独立请求，每条请求最多包含标题和简介/正文；无需翻译时不会生成翻译节点。
-- `collect_text_metadata()` 按发送顺序收集基础文本、热评和翻译；启用图片渲染时，`strip_text_metadata_nodes()` 只在 PNG 生成成功后移除这些 Plain 节点。`text_renderer.py` 在线程中调用 Pillow 绘制中文换行、字段标签和样式背景。
+- `collect_text_metadata()` 按发送顺序收集基础文本、热评和翻译；启用图片渲染时，`strip_text_metadata_nodes()` 只在 PNG 生成成功后移除这些 Plain 节点。`text_renderer.py` 在线程中调用 Pillow 绘制中文换行、字段标签和样式背景，按需分页。
+- 开启正文与配图穿插时，`build_media_nodes()` 按图片下标回填节点，`content_blocks` 中的配图按原文位置插入正文，已穿插的图片不再在媒体节点中重复出现。
 - 富媒体节点消费 `video_modes/image_modes/audio_modes`：`local` 用 Token URL 或本地文件，`direct` 用剥离前缀后的视频 URL，`skip` 不构建节点。音频根据配置构建 `Record` 或 `File`，不使用源站直链发送。
 - 内部先尝试构建富媒体节点，再构建文本节点，这样节点构建失败时可把原因回填到 metadata，文本节点可展示。
 - `build_all_nodes()` 返回 `BuildAllNodesResult(all_link_nodes, link_metadata, temp_files, video_files)`。
@@ -492,7 +489,7 @@ ZIP 命令?
          build_all_nodes() + 等待翻译
            ↓
          message.text_metadata.render_to_image=true?
-           ├─ 是 -> 合并文本节点 -> Pillow 生成 PNG -> 成功后移除 Plain 节点
+           ├─ 是 -> 穿插链接原位分段渲染；其余合并文本节点 -> Pillow 生成 PNG（可分页）-> 成功后移除 Plain 节点
            └─ 否/失败 -> 保留原文本节点
            ↓
          summarize_node_counts()
@@ -580,6 +577,7 @@ build_all_nodes()
   │   ├─ direct URL
   │   └─ skip
   ├─ build_text_node()
+  ├─ 正文穿插开启且有 content_blocks -> 按原文顺序插入正文段落与配图
   ├─ build_hot_comments_node()
   ├─ Plain 文本按 4000 字上限统一分片
   ├─ 判定大媒体
@@ -587,7 +585,7 @@ build_all_nodes()
   ↓
 等待 translation_task，调用 build_translation_nodes_for_all()
   ↓
-可选 text_renderer.py 将基础文本、热评与翻译合并为 PNG
+可选 text_renderer.py 将基础文本、热评与翻译合并为 PNG，正文穿插链接在原位置分段渲染
   ↓
 summarize_node_counts()
   ↓
@@ -638,6 +636,7 @@ download_manager.shutdown()
 ```text
 url/platform
 title/author/desc/timestamp
+content_blocks
 video_urls/video_cover_urls/image_urls/audio_urls
 video_headers/image_headers/audio_headers
 image_tls_ciphers
@@ -658,6 +657,8 @@ source_url/parser_name
 其中 `source_url` 始终是消息中提取的输入链接，`url` 是单一规范链接；`parser_name` 始终是实际解析器名，`platform` 表示内容来源。平台解析器不得主动返回 `source_url` 或 `parser_name`。
 
 `video_urls`、`video_cover_urls`、`image_urls` 与 `audio_urls` 的值均遵循 `List[List[str]]`；内层列表按优先级保存同一媒体的候选地址。解析器返回未知字段、错阶段字段、非法类型或非法候选组时，`ParserManager` 会为该链接生成错误 metadata，不让无效结构进入下载阶段。
+
+`content_blocks` 仅由能识别正文配图位置的解析器提供，元素为 `{"type": "text", "text": ...}` 或 `{"type": "image", "index": ...}`，按原文顺序覆盖 `desc` 的全部内容，`index` 指向 `image_urls` 下标。解析器在文字片段中穿插配图下标，再调用 `core/parser/utils.py` 的 `build_content_blocks()` 按平台自身的正文清洗函数生成；同一配图只保留首次位置，缺少文字或配图时不输出该字段。`ParserManager` 校验块类型与下标范围，空列表直接移除。“视频仅发送封面”把封面插入图片列表前部时，下载层同步后移配图下标。
 
 流程控制、错误与翻译层回填：
 

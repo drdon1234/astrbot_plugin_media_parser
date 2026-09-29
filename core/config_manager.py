@@ -333,6 +333,7 @@ class ArchiveConfig:
 class MediaDisplayConfig:
     video_cover_only: bool = False
     audio_send_mode: str = "语音"
+    interleave_images: bool = False
 
 
 @dataclass
@@ -344,13 +345,10 @@ class TextMetadataConfig:
     show_description: bool = True
     quote_user_message: bool = False
     render_to_image: bool = False
-    paginate_images: bool = False
-    separate_text_sections: bool = False
     render_style: str = "fresh"
     render_font_family: str = "noto_sans"
     render_font_size: int = 24
-    render_line_spacing: float = 1.6
-    render_paragraph_spacing: float = 1.4
+    render_paginate: bool = False
 
     def visibility(self) -> Dict[str, bool]:
         """返回写入 metadata 的稳定字段名与展示开关。"""
@@ -495,7 +493,7 @@ class ParseRateLimitConfig:
 @dataclass
 class ProxyConfig:
     address: str = ""
-    static_resources_use_proxy: bool = False
+    font_use_proxy: bool = False
     xiaoheihe_use_video_proxy: bool = True
     tiktok_use_proxy: bool = False
     youtube_use_proxy: bool = True
@@ -507,6 +505,10 @@ class ProxyConfig:
     twitter_use_video_proxy: bool = True
     pixiv_use_proxy: bool = False
     github_use_proxy: bool = False
+
+    def font_proxy_url(self) -> str:
+        """返回字体补全使用的代理地址，未启用时返回空字符串。"""
+        return self.address if self.font_use_proxy else ""
 
 
 @dataclass
@@ -528,7 +530,6 @@ class WechatConfig:
     """微信视频号换取播放令牌所需的配置。"""
 
     yuanbao_cookie: str = ""
-    article_layout: str = "正文与图片分开发送"
 
 
 @dataclass
@@ -748,6 +749,11 @@ class ConfigManager:
                     False,
                     "message.media_display.video_cover_only",
                 ),
+                interleave_images=self._parse_bool(
+                    media_display.get("interleave_images", False),
+                    False,
+                    "message.media_display.interleave_images",
+                ),
             ),
             text_metadata=TextMetadataConfig(
                 show_title=self._parse_bool(
@@ -785,28 +791,12 @@ class ConfigManager:
                     False,
                     "message.text_metadata.render_to_image",
                 ),
-                paginate_images=self._parse_bool(
-                    text_metadata.get("paginate_images", False),
-                    False,
-                    "message.text_metadata.paginate_images",
-                ),
-                separate_text_sections=self._parse_bool(
-                    text_metadata.get("separate_text_sections", False),
-                    False,
-                    "message.text_metadata.separate_text_sections",
-                ),
                 render_style=self._parse_text_render_style(
                     text_metadata.get("render_style", "清新便签")
                 ),
                 render_font_family=self._parse_text_render_font_family(
                     text_metadata.get("render_font_family", "默认黑体")
                 ),
-                render_line_spacing=min(3.0, max(1.0, self._parse_non_negative_float(
-                    text_metadata.get("render_line_spacing", 1.6), 1.6
-                ))),
-                render_paragraph_spacing=min(3.0, self._parse_non_negative_float(
-                    text_metadata.get("render_paragraph_spacing", 1.4), 1.4
-                )),
                 render_font_size=min(
                     42,
                     max(
@@ -816,6 +806,11 @@ class ConfigManager:
                             24,
                         ),
                     ),
+                ),
+                render_paginate=self._parse_bool(
+                    text_metadata.get("render_paginate", False),
+                    False,
+                    "message.text_metadata.render_paginate",
                 ),
             ),
             hot_comments=HotCommentConfig(
@@ -1218,11 +1213,6 @@ class ConfigManager:
         wechat_raw = self._as_dict(config.get("wechat"))
         self.wechat = WechatConfig(
             yuanbao_cookie=str(wechat_raw.get("yuanbao_cookie", "") or "").strip(),
-            article_layout=(
-                "按原文图文穿插"
-                if wechat_raw.get("article_layout") == "按原文图文穿插"
-                else "正文与图片分开发送"
-            ),
         )
 
         # --- steam ---
@@ -1251,10 +1241,10 @@ class ConfigManager:
         twitter_proxy = self._as_dict(proxy_raw.get("twitter"))
         self.proxy = ProxyConfig(
             address=str(proxy_raw.get("address", "") or "").strip(),
-            static_resources_use_proxy=self._parse_bool(
-                proxy_raw.get("static_resources", False),
+            font_use_proxy=self._parse_bool(
+                proxy_raw.get("font", False),
                 False,
-                "proxy.static_resources",
+                "proxy.font",
             ),
             xiaoheihe_use_video_proxy=self._parse_bool(
                 proxy_raw.get("xiaoheihe_video", True),
@@ -1434,7 +1424,6 @@ class ConfigManager:
             parsers.append(
                 WechatParser(
                     yuanbao_cookie=self.wechat.yuanbao_cookie,
-                    article_layout=self.wechat.article_layout,
                 )
             )
         if self._enable_zhihu:

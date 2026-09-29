@@ -4,8 +4,11 @@ import html
 import json
 import re
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
+
+
+TEXT_BLOCK_TAGS = frozenset({'p', 'div', 'br', 'li', 'h1', 'h2', 'h3', 'blockquote', 'tr'})
 
 
 class Node:
@@ -84,7 +87,7 @@ class Node:
                 parts.append(re.sub(r'\s+', ' ', child))
             else:
                 value = child.text()
-                if child.tag in {'p', 'div', 'br', 'li', 'h1', 'h2', 'h3', 'blockquote', 'tr'}:
+                if child.tag in TEXT_BLOCK_TAGS:
                     value = '\n' + value + '\n'
                 parts.append(value)
         return re.sub(r'\n\s*\n+', '\n\n', ''.join(parts)).strip()
@@ -283,12 +286,69 @@ def images_in(root: Optional[Node]) -> List[List[str]]:
     if not root:
         return result
     for node in root.find_all('img'):
-        urls = list(dict.fromkeys(url for key in ('data-original', 'data-src', 'src')
-                                  if (url := media_url(node.attrs.get(key)))))
+        urls = _img_urls(node)
         if urls and urls[0] not in seen:
             seen.add(urls[0])
             result.append(urls)
     return result
+
+
+def _img_urls(node: Node) -> List[str]:
+    """按懒加载原图优先的顺序读取图片元素的可信地址。"""
+    return list(dict.fromkeys(url for key in ('data-original', 'data-src', 'src')
+                              if (url := media_url(node.attrs.get(key)))))
+
+
+def clean_block_text(value: str) -> str:
+    """与元素文本一致地整理行首尾空白并合并连续空行。
+
+    Args:
+        value: 正文片段拼接后的原始文字。
+
+    Returns:
+        整理后的正文文字。
+    """
+    text = '\n'.join(line.strip() for line in value.split('\n'))
+    return re.sub(r'\n\n+', '\n\n', text).strip()
+
+
+def content_parts(prefix: str, root: Optional[Node], image_urls: List[List[str]],
+                  suffixes: Optional[List[str]] = None) -> List[Union[str, int]]:
+    """按页面顺序读取正文文字与配图位置，配图下标指向已合并的图片候选组。
+
+    Args:
+        prefix: 正文区域之前已写入简介的文字。
+        root: 正文范围。
+        image_urls: 合并去重后的图片候选组。
+        suffixes: 正文区域之后追加到简介的文字段落。
+
+    Returns:
+        文字片段与配图下标交错的序列。
+    """
+    parts: List[Union[str, int]] = [prefix + '\n\n'] if prefix else []
+
+    def walk(node: Node) -> None:
+        for child in node.children:
+            if isinstance(child, str):
+                parts.append(re.sub(r'\s+', ' ', child))
+            elif child.tag == 'img':
+                urls = set(_img_urls(child))
+                index = next((position for position, group in enumerate(image_urls)
+                              if urls.intersection(group)), None)
+                if index is not None:
+                    parts.append(index)
+            elif child.tag not in {'script', 'style', 'noscript'}:
+                block = child.tag in TEXT_BLOCK_TAGS
+                if block:
+                    parts.append('\n')
+                walk(child)
+                if block:
+                    parts.append('\n')
+
+    if root:
+        walk(root)
+    parts.extend('\n\n' + suffix for suffix in suffixes or [] if suffix)
+    return parts
 
 
 def video_url(value: Any) -> str:

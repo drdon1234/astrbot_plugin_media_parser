@@ -61,11 +61,11 @@ _ensure_lock = asyncio.Lock()
 _fonts_ready = False
 
 
-async def ensure_default_fonts(proxy_url: str | None = None) -> None:
+async def ensure_default_fonts(proxy_url: str = "") -> None:
     """校验并补全默认 Noto Sans CJK 字体。
 
     Args:
-        proxy_url: 字体下载代理地址，为空时直接连接。
+        proxy_url: 下载字体使用的代理地址，为空时直接连接。
     """
     global _fonts_ready
 
@@ -113,7 +113,7 @@ async def _download_font(
     session: aiohttp.ClientSession,
     asset: FontAsset,
     target: Path,
-    proxy_url: str | None = None,
+    proxy_url: str = "",
 ) -> None:
     """下载并原子替换单个字体文件。"""
     temp_path = target.with_name(f"{target.name}.{uuid.uuid4().hex}.part")

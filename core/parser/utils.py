@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import json
-from typing import Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -183,3 +183,51 @@ def build_request_headers(
     
     return headers
 
+
+def join_content_text(parts: Sequence[Union[str, int]]) -> str:
+    """拼接正文片段中的文字，忽略配图位置标记。
+
+    Args:
+        parts: 文字片段与配图位置标记交错的序列，整数表示 image_urls 下标。
+
+    Returns:
+        仅由文字片段拼接的原始正文。
+    """
+    return "".join(part for part in parts if isinstance(part, str))
+
+
+def build_content_blocks(
+    parts: Sequence[Union[str, int]],
+    clean_text: Callable[[str], str],
+) -> List[Dict[str, Any]]:
+    """按原文顺序生成正文文字块与配图块。
+
+    Args:
+        parts: 文字片段与配图位置标记交错的序列，整数表示 image_urls 下标。
+        clean_text: 平台自身的正文清洗函数，对相邻配图之间的文字分别调用。
+
+    Returns:
+        同时包含文字与配图时返回有序块列表；缺少任一类型时返回空列表。
+        同一配图重复出现时只保留首次位置。
+    """
+    blocks: List[Dict[str, Any]] = []
+    buffer: List[str] = []
+    seen_images = set()
+    for part in [*parts, None]:
+        if isinstance(part, str):
+            buffer.append(part)
+            continue
+        text = clean_text("".join(buffer))
+        buffer = []
+        if text:
+            blocks.append({"type": "text", "text": text})
+        if (
+            isinstance(part, int)
+            and not isinstance(part, bool)
+            and part >= 0
+            and part not in seen_images
+        ):
+            seen_images.add(part)
+            blocks.append({"type": "image", "index": part})
+    has_text = any(block["type"] == "text" for block in blocks)
+    return blocks if has_text and seen_images else []

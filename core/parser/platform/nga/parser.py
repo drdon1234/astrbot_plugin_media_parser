@@ -14,9 +14,9 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import build_request_headers
+from ...utils import build_content_blocks, build_request_headers, join_content_text
 from ..base import BaseVideoParser
-from .content import parse_content
+from .content import clean_content_text, parse_content, parse_content_parts
 
 
 NGA_API = "https://ngabbs.com/app_api.php?__lib=post&__act=list"
@@ -314,10 +314,11 @@ class NgaParser(BaseVideoParser):
             payload = await self._fetch_thread(session, thread_id)
             post = self._first_post(thread_id, payload)
             prefix = payload.get("attachPrefix")
-            desc, images = parse_content(
+            parts, images = parse_content_parts(
                 post["content"], prefix if isinstance(prefix, str) else "",
                 post.get("attches"),
             )
+            desc = clean_content_text(join_content_text(parts))
             if not desc and not images:
                 raise RuntimeError("NGA 帖子首楼没有可用正文或图片，可能已删除或访问受限")
             title = payload.get("tsubject")
@@ -335,6 +336,9 @@ class NgaParser(BaseVideoParser):
                 "video_urls": [],
                 "platform": "NGA",
             }
+            content_blocks = build_content_blocks(parts, clean_content_text)
+            if content_blocks:
+                metadata["content_blocks"] = content_blocks
             if self.hot_comment_count:
                 comments = await self._fetch_hot_comments(session, thread_id, payload)
                 if comments:

@@ -6,14 +6,14 @@ import json
 import re
 from datetime import datetime
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urljoin, urlsplit
 
 import aiohttp
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers, join_content_text
 from .base import BaseVideoParser
 
 
@@ -72,7 +72,8 @@ class _ArticleHTML(HTMLParser):
     def __init__(self, url: str) -> None:
         super().__init__(convert_charrefs=True)
         self.url = url
-        self.fields: Dict[str, List[str]] = {"body": [], "title": [], "date": []}
+        # 正文字段在文字片段之间穿插配图下标，用于按原文顺序输出正文块。
+        self.fields: Dict[str, List[Union[str, int]]] = {"body": [], "title": [], "date": []}
         self.images: List[List[str]] = []
         self.canonical = ""
         self.body_count = 0
@@ -83,7 +84,7 @@ class _ArticleHTML(HTMLParser):
     def _newline(self, field: str) -> None:
         """为段落边界补充单个换行。"""
         parts = self.fields[field]
-        if parts and not parts[-1].endswith("\n"):
+        if parts and not (isinstance(parts[-1], str) and parts[-1].endswith("\n")):
             parts.append("\n")
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
@@ -124,6 +125,8 @@ class _ArticleHTML(HTMLParser):
             image = _content_url(values.get("data-src") or values.get("src"), self.url, image=True)
             if image and [image] not in self.images:
                 self.images.append([image])
+            if image:
+                self.fields[field].append(self.images.index([image]))
 
     def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         """避免自闭合图片提前结束正文容器。"""
@@ -141,7 +144,7 @@ class _ArticleHTML(HTMLParser):
             if name == tag:
                 del self.stack[index:]
                 if field and not hidden:
-                    if href and href != "".join(self.fields[field][start:]).strip():
+                    if href and href != join_content_text(self.fields[field][start:]).strip():
                         self.fields[field].append(f"（{href}）")
                     if tag in self.BLOCKS:
                         self._newline(field)
@@ -165,7 +168,20 @@ class _ArticleHTML(HTMLParser):
         Returns:
             保留代码缩进和段落换行的文本。
         """
-        return "\n".join(line.rstrip() for line in "".join(self.fields[field]).splitlines()).strip()
+        return self._clean_text(join_content_text(self.fields[field]))
+
+    def content_blocks(self) -> List[Dict[str, Any]]:
+        """返回按原文顺序穿插配图的正文块。
+
+        Returns:
+            正文块列表，缺少文字或配图时为空。
+        """
+        return build_content_blocks(self.fields["body"], self._clean_text)
+
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        """去除行尾空白，保留代码缩进和段落换行。"""
+        return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
 
 class CnblogsParser(BaseVideoParser):
@@ -295,9 +311,13 @@ class CnblogsParser(BaseVideoParser):
                 published = datetime.fromisoformat(page.text("date"))
             except ValueError as exc:
                 raise RuntimeError("博客园页面缺少有效发布时间") from exc
-            return {
+            metadata: MediaMetadata = {
                 "url": canonical, "platform": self.name, "title": title, "author": author,
                 "timestamp": published.strftime("%Y-%m-%d %H:%M:%S"), "desc": body,
                 "image_urls": page.images, "video_urls": [],
                 "image_headers": build_request_headers(referer=canonical),
             }
+            content_blocks = page.content_blocks()
+            if content_blocks:
+                metadata["content_blocks"] = content_blocks
+            return metadata

@@ -6,7 +6,7 @@ import json
 import re
 from datetime import datetime
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import aiohttp
@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers, join_content_text
 from .base import BaseVideoParser
 
 
@@ -131,7 +131,8 @@ class _ArticleContent(HTMLParser):
     def __init__(self) -> None:
         """初始化正文提取状态。"""
         super().__init__(convert_charrefs=True)
-        self.text: List[str] = []
+        # 文字片段中穿插配图下标，用于按原文顺序输出正文块。
+        self.text: List[Union[str, int]] = []
         self.images: List[List[str]] = []
         self.videos: List[List[str]] = []
         self._video: Optional[List[str]] = None
@@ -164,6 +165,8 @@ class _ArticleContent(HTMLParser):
                 self.images.append([url])
             elif not url and values.get("alt"):
                 self.text.append(values["alt"])
+            if url:
+                self.text.append(self.images.index([url]))
         elif tag == "video":
             self._video = []
             self.videos.append(self._video)
@@ -572,10 +575,6 @@ class AcfunParser(BaseVideoParser):
             if isinstance(part, dict) and isinstance(part.get("content"), str)
         ))
         content.close()
-        lines = [
-            re.sub(r"[ \t\u00a0]+", " ", line).strip()
-            for line in "".join(content.text).splitlines()
-        ]
         videos: List[List[str]] = []
         seen = set()
         for candidates in content.videos:
@@ -592,7 +591,7 @@ class AcfunParser(BaseVideoParser):
             "url": source_url,
             "title": self._first_non_empty(state.get("title")),
             "author": self._first_non_empty(user.get("name")),
-            "desc": "\n".join(line for line in lines if line)
+            "desc": self._clean_article_text(join_content_text(content.text))
             or self._first_non_empty(state.get("description")),
             "timestamp": self._format_timestamp(
                 state.get("createTimeMillis") or state.get("createTime")
@@ -609,7 +608,19 @@ class AcfunParser(BaseVideoParser):
         }
         if not metadata["title"] and not metadata["desc"] and not images and not videos:
             raise RuntimeError("AcFun 动态未解析到可用内容")
+        content_blocks = build_content_blocks(content.text, self._clean_article_text)
+        if content_blocks:
+            metadata["content_blocks"] = content_blocks
         return metadata
+
+    @staticmethod
+    def _clean_article_text(text: str) -> str:
+        """整理文章正文空白并去除空行。"""
+        lines = [
+            re.sub(r"[ \t\u00a0]+", " ", line).strip()
+            for line in text.splitlines()
+        ]
+        return "\n".join(line for line in lines if line)
 
     @staticmethod
     def _clean_comment_text(value: Any) -> str:

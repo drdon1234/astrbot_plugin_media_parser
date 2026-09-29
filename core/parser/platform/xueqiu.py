@@ -5,7 +5,7 @@ import html
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import aiohttp
@@ -14,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_content_blocks, build_request_headers
 from .base import BaseVideoParser
 
 
@@ -466,6 +466,56 @@ class XueqiuParser(BaseVideoParser):
         quote_desc = "\n".join(quote_parts)
         return f"{desc}\n\n{quote_desc}" if desc else quote_desc
 
+    @classmethod
+    def _body_content_parts(
+        cls,
+        status: Dict[str, Any],
+        image_indexes: Dict[str, int],
+    ) -> List[Union[str, int]]:
+        """按配图位置拆分帖子正文 HTML，表情等非配图标签留给正文清洗还原。"""
+        body_html = cls._extract_body_html(status)
+        parts: List[Union[str, int]] = []
+        position = 0
+        for match in IMG_TAG_RE.finditer(body_html):
+            parts.append(body_html[position:match.start()])
+            position = match.end()
+            candidates = cls._split_image_variants(
+                cls._parse_img_attrs(match.group(0)).get("src", "")
+            )
+            if candidates and candidates[0] in image_indexes:
+                parts.append(image_indexes[candidates[0]])
+            else:
+                parts.append(match.group(0))
+        parts.append(body_html[position:])
+        return parts
+
+    @classmethod
+    def _build_content_blocks(
+        cls,
+        status: Dict[str, Any],
+        image_urls: List[List[str]],
+    ) -> List[Dict[str, Any]]:
+        """按长文配图位置生成正文块，覆盖本帖正文与被转发原帖段落。"""
+        image_indexes = {
+            candidates[0]: index
+            for index, candidates in enumerate(image_urls)
+            if candidates
+        }
+        parts = cls._body_content_parts(status, image_indexes)
+        retweeted = status.get("retweeted_status")
+        if isinstance(retweeted, dict):
+            # 与 _build_desc 的转发段落保持一致，纯文本字段转义后交给正文清洗还原。
+            quote_lines = [
+                html.escape(value)
+                for value in (cls._extract_author(retweeted), cls._extract_title(retweeted))
+                if value
+            ]
+            retweeted_parts = cls._body_content_parts(retweeted, image_indexes)
+            if quote_lines or cls._clean_html_text(cls._extract_body_html(retweeted)):
+                parts.append("<br>转发原帖：<br>" + "<br>".join(quote_lines) + "<br>")
+                parts.extend(retweeted_parts)
+        return build_content_blocks(parts, cls._clean_html_text)
+
     # ── 媒体提取 ──────────────────────────────────────────
 
     @classmethod
@@ -674,6 +724,9 @@ class XueqiuParser(BaseVideoParser):
                 user_agent=DESKTOP_UA,
             ),
         }
+        content_blocks = self._build_content_blocks(status, image_urls)
+        if content_blocks:
+            metadata["content_blocks"] = content_blocks
         # HLS 播放地址必须先落盘再发送
         if any(
             url_item.startswith("m3u8:")
