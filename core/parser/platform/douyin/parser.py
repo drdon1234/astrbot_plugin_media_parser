@@ -24,6 +24,8 @@ DOUYIN_USER_AGENT = (
     "Chrome/116.0.0.0 Mobile Safari/537.36"
 )
 DOUYIN_REFERER = "https://www.douyin.com/"
+# 动图合入背景音乐时生成 DASH 候选的数量上限，避免合并不可用时逐个重复下载。
+DOUYIN_MUSIC_MERGE_CANDIDATES = 2
 URL_TRAILING_PUNCTUATION = ".,!?)]}>\"'，。！？；：）】》」"
 HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
@@ -594,6 +596,19 @@ class DouyinParser(BaseVideoParser):
             if self._looks_like_audio_url(url)
         ]
 
+    @staticmethod
+    def _attach_douyin_music(
+        video_url_list: List[str], music_urls: List[str]
+    ) -> List[str]:
+        """为动图追加合入背景音乐的 DASH 候选，原始候选保留在后作为兜底。"""
+        merged_urls = [
+            f"dash:{url}||{music_urls[index % len(music_urls)]}"
+            for index, url in enumerate(
+                video_url_list[:DOUYIN_MUSIC_MERGE_CANDIDATES]
+            )
+        ]
+        return merged_urls + video_url_list
+
     def _build_douyin_result_from_item(
         self, item_info: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -606,6 +621,17 @@ class DouyinParser(BaseVideoParser):
             video_cover_groups,
         ) = self._extract_douyin_media_url_lists(item_info)
         music_urls = self._extract_douyin_music_url_list(item_info)
+        # 使用背景音乐的混排作品中动图音轨为静音，音乐合入动图后不再单独发送。
+        if (
+            music_urls
+            and video_url_lists
+            and item_info.get("is_use_music") is not False
+        ):
+            video_url_lists = [
+                self._attach_douyin_music(url_list, music_urls)
+                for url_list in video_url_lists
+            ]
+            music_urls = []
 
         return {
             "item_id": str(item_info.get("aweme_id") or item_info.get("id") or ""),

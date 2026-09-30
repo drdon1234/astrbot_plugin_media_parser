@@ -140,10 +140,11 @@ async def _merge_dash_streams(
     output_path: str,
     max_bytes: Optional[int] = None,
 ) -> bool:
-    """使用 ffmpeg 异步合并 DASH 音视频。"""
+    """使用 ffmpeg 异步合并 DASH 音视频，输出时长以较短的流为准。"""
     process = None
     try:
         temp_output = f"{output_path}.part.mp4"
+        # 外挂音轨可能长于视频（如抖音动图合入整段背景音乐），截断避免尾部画面静止。
         process = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-y",
@@ -157,6 +158,7 @@ async def _merge_dash_streams(
             "0:v:0",
             "-map",
             "1:a:0",
+            "-shortest",
             temp_output,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

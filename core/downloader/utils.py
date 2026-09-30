@@ -27,8 +27,10 @@ def validate_content_type(content_type: str, is_video: bool = False) -> bool:
         return False
 
     if is_video:
+        # DASH 音轨与视频流共用校验，外挂音频可能声明为 audio/mpeg 等类型。
         return (
             normalized_content_type.startswith("video/")
+            or normalized_content_type.startswith("audio/")
             or "mp4" in normalized_content_type
             or "octet-stream" in normalized_content_type
             or not normalized_content_type
