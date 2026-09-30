@@ -643,7 +643,9 @@ def _build_node_parts_for_link(
     enable_rich_media: bool = True,
     audio_send_mode: str = "语音",
     interleave_images: bool = False,
-) -> tuple[List[Union[Plain, Image, Video, Record, File]], Optional[Plain], bool]:
+) -> tuple[
+    List[Union[Plain, Image, Video, Record, File]], Optional[Plain], bool, List[Plain]
+]:
     nodes: List[Union[Plain, Image, Video, Record, File]] = []
     effective_text_metadata = _resolve_output_flag(
         metadata,
@@ -693,7 +695,11 @@ def _build_node_parts_for_link(
     nodes.extend(node for node in media_nodes if id(node) not in placed_images)
 
     metadata_text_node = text_nodes[0] if text_nodes else None
-    return nodes, metadata_text_node, bool(content_nodes)
+    # 基础文本与热评各自的首个分片，供分区渲染时区分文本区域。
+    section_starts = [
+        section[0] for section in (text_nodes, hot_comments_nodes) if section
+    ]
+    return nodes, metadata_text_node, bool(content_nodes), section_starts
 
 
 def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video, Record, File]]) -> bool:
@@ -779,7 +785,12 @@ def build_all_nodes(
             f"构建节点[{idx}]: {url}, 使用本地文件: {use_local_files}"
         )
 
-        link_nodes, metadata_text_node, preserve_order = _build_node_parts_for_link(
+        (
+            link_nodes,
+            metadata_text_node,
+            preserve_order,
+            section_starts,
+        ) = _build_node_parts_for_link(
             metadata,
             use_local_files,
             max_video_size_mb,
@@ -841,6 +852,7 @@ def build_all_nodes(
                     temp_files=link_temp_files,
                     metadata_text_node=metadata_text_node,
                     preserve_order=preserve_order,
+                    section_starts=section_starts,
                 )
             )
         else:

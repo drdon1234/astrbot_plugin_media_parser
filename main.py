@@ -428,6 +428,12 @@ class VideoParserPlugin(Star):
                 "render_font_size",
                 24,
             ),
+            line_spacing=getattr(cfg.message.text_metadata, "render_line_spacing", 1.55),
+            paragraph_spacing=getattr(
+                cfg.message.text_metadata,
+                "render_paragraph_spacing",
+                1.0,
+            ),
             paginate=getattr(cfg.message.text_metadata, "render_paginate", False),
             font_proxy_url=proxy.font_proxy_url() if proxy else "",
         )
@@ -449,24 +455,33 @@ class VideoParserPlugin(Star):
             registered = registered or bool(token_url)
         return references, registered
 
-    async def _render_ordered_link_text(self, link_meta, build_result, cfg) -> bool:
-        """将正文穿插链接中的连续文本节点在原位置渲染为图片。
+    async def _render_nodes_in_place(
+        self,
+        link_nodes: list,
+        build_result,
+        cfg,
+        section_starts=(),
+        link_meta=None,
+    ) -> bool:
+        """将节点列表中的连续文本节点在原位置渲染为图片。
 
-        任一段渲染失败时整条链接保留原文本，避免图文混杂两种展示方式。
+        连续文本遇到分区起点时另起一段；任一段渲染失败时整组保留原文本，
+        避免图文混杂两种展示方式。
 
         Returns:
             是否为渲染图片登记了文件 Token。
         """
-        link_nodes = link_meta["link_nodes"]
+        section_start_ids = {id(node) for node in section_starts}
         runs: list[tuple[int, int]] = []
         start = None
         for index, node in enumerate([*link_nodes, None]):
-            if isinstance(node, Plain):
-                if start is None:
-                    start = index
-            elif start is not None:
+            if start is not None and (
+                not isinstance(node, Plain) or id(node) in section_start_ids
+            ):
                 runs.append((start, index))
                 start = None
+            if isinstance(node, Plain) and start is None:
+                start = index
 
         rendered_runs: list[list[str]] = []
         rendered_paths: list[str] = []
@@ -491,7 +506,7 @@ class VideoParserPlugin(Star):
             asyncio.TimeoutError,
         ) as exc:
             await self._run_blocking_to_completion(cleanup_files, rendered_paths)
-            self.logger.warning(f"正文穿插文本渲染失败，保留原文本节点: {exc}")
+            self.logger.warning(f"文本分段渲染失败，保留原文本节点: {exc}")
             return False
 
         build_result.temp_files.extend(rendered_paths)
@@ -499,7 +514,7 @@ class VideoParserPlugin(Star):
             rendered_paths, cfg
         )
         reference_iter = iter(references)
-        text_node = link_meta.get("metadata_text_node")
+        text_node = link_meta.get("metadata_text_node") if link_meta else None
         rebuilt: list[Any] = []
         cursor = 0
         for (run_start, run_end), paths in zip(runs, rendered_runs):
@@ -516,7 +531,7 @@ class VideoParserPlugin(Star):
                         if reference.lower().startswith(("http://", "https://"))
                         else Image.fromFileSystem(reference)
                     )
-                if any(node is text_node for node in run_nodes):
+                if link_meta and any(node is text_node for node in run_nodes):
                     link_meta["metadata_text_node"] = images[0]
                 rebuilt.extend(images)
             cursor = run_end
@@ -532,7 +547,8 @@ class VideoParserPlugin(Star):
     ) -> tuple[list[str], bool]:
         """将文本节点渲染为图片，失败时保留原文本节点。
 
-        正文穿插的链接在原位置分段渲染；其余链接与翻译合并渲染，由发送阶段前置发送。
+        正文穿插的链接在原位置分段渲染；开启分区渲染时，基础文本、热评与翻译
+        各自在原位置渲染。其余链接与翻译合并渲染，由发送阶段前置发送。
 
         Returns:
             合并渲染图片的路径或 Token URL（按页排列），以及是否登记了文件 Token。
@@ -540,11 +556,24 @@ class VideoParserPlugin(Star):
         if not getattr(cfg.message.text_metadata, "render_to_image", False):
             return [], False
 
+        separate = getattr(cfg.message.text_metadata, "render_separate_sections", False)
         relay_registered = False
         for link_meta in build_result.link_metadata:
-            if link_meta.get("preserve_order"):
-                if await self._render_ordered_link_text(link_meta, build_result, cfg):
+            if not separate and not link_meta.get("preserve_order"):
+                continue
+            if await self._render_nodes_in_place(
+                link_meta["link_nodes"],
+                build_result,
+                cfg,
+                link_meta.get("section_starts", []) if separate else (),
+                link_meta,
+            ):
+                relay_registered = True
+        if separate:
+            for nodes in translation_nodes or []:
+                if await self._render_nodes_in_place(nodes, build_result, cfg):
                     relay_registered = True
+            return [], relay_registered
 
         combined_metadata = [
             meta for meta in build_result.link_metadata if not meta.get("preserve_order")

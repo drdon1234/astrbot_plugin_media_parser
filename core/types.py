@@ -105,6 +105,7 @@ class LinkBuildMeta(TypedDict):
     temp_files: List[str]
     metadata_text_node: Optional[Any]
     preserve_order: bool
+    section_starts: List[Any]
 
 
 class BuildAllNodesResult(NamedTuple):

@@ -16,6 +16,8 @@ DEFAULT_RENDER_STYLE = "fresh"
 DEFAULT_RENDER_FONT_FAMILY = "noto_sans"
 MIN_RENDER_FONT_SIZE = 16
 MAX_RENDER_FONT_SIZE = 42
+DEFAULT_LINE_SPACING = 1.55
+DEFAULT_PARAGRAPH_SPACING = 1.0
 PAGINATED_MAX_HEIGHT = 1800
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
 NO_LINE_START_CHARS = "，。！？；：、,.!?;:)]}）】》"
@@ -30,6 +32,8 @@ async def render_text_metadata_images(
     font_size: int = DEFAULT_RENDER_FONT_SIZE,
     style: str = DEFAULT_RENDER_STYLE,
     font_family: str = DEFAULT_RENDER_FONT_FAMILY,
+    line_spacing: float = DEFAULT_LINE_SPACING,
+    paragraph_spacing: float = DEFAULT_PARAGRAPH_SPACING,
     paginate: bool = False,
     font_proxy_url: str = "",
     timeout_seconds: int = 60,
@@ -44,6 +48,8 @@ async def render_text_metadata_images(
         font_size: 正文文字大小。
         style: 图片渲染风格。
         font_family: 图片字体族。
+        line_spacing: 行高相对文字高度的倍数，限制在 1.0–3.0。
+        paragraph_spacing: 段落空行高度相对行高的倍数，限制在 0–3.0。
         paginate: 是否将超过最大高度的长图按行拆分为多页。
         font_proxy_url: 补全默认字体时使用的代理地址，为空时直接连接。
         timeout_seconds: 渲染超时时间（秒）。
@@ -73,6 +79,8 @@ async def render_text_metadata_images(
                 _normalize_style(style),
                 _normalize_font_family(font_family),
                 PAGINATED_MAX_HEIGHT if paginate else 0,
+                _normalize_spacing(line_spacing, DEFAULT_LINE_SPACING, 1.0),
+                _normalize_spacing(paragraph_spacing, DEFAULT_PARAGRAPH_SPACING, 0.0),
             ),
             timeout=max(10, int(timeout_seconds or 60)),
         )
@@ -138,6 +146,8 @@ def _render_text_metadata_image_sync(
     style: str,
     font_family: str,
     max_height: int = 0,
+    line_spacing: float = DEFAULT_LINE_SPACING,
+    paragraph_spacing: float = DEFAULT_PARAGRAPH_SPACING,
 ) -> List[str]:
     """同步绘制文本元数据图片，max_height 大于 0 时按高度分页。"""
     try:
@@ -177,11 +187,12 @@ def _render_text_metadata_image_sync(
         content_width - 42,
     )
     title_line_height = _line_height(probe_draw, title_font, 1.35)
-    body_line_height = _line_height(probe_draw, regular_font, 1.55)
+    body_line_height = _line_height(probe_draw, regular_font, line_spacing)
+    blank_line_height = round(body_line_height * paragraph_spacing)
     label_line_height = _line_height(probe_draw, label_font, 1.4)
     separator_height = max(body_line_height // 2, label_line_height // 2)
     line_heights = [
-        separator_height if line == TEXT_SECTION_SEPARATOR else body_line_height
+        _row_height(line, body_line_height, blank_line_height, separator_height)
         for line in body_lines
     ]
 
@@ -207,7 +218,7 @@ def _render_text_metadata_image_sync(
     try:
         for page_index, page_lines in enumerate(pages, start=1):
             page_heights = [
-                separator_height if line == TEXT_SECTION_SEPARATOR else body_line_height
+                _row_height(line, body_line_height, blank_line_height, separator_height)
                 for line in page_lines
             ]
             card_bottom = card_top + 34 + sum(page_heights) + 34
@@ -229,6 +240,7 @@ def _render_text_metadata_image_sync(
                 regular_font=regular_font,
                 title_line_height=title_line_height,
                 body_line_height=body_line_height,
+                blank_line_height=blank_line_height,
                 separator_height=separator_height,
                 palette=palette,
             )
@@ -271,6 +283,7 @@ def _draw_page(
     regular_font: object,
     title_line_height: int,
     body_line_height: int,
+    blank_line_height: int,
     separator_height: int,
     palette: dict[str, str],
 ) -> None:
@@ -317,6 +330,9 @@ def _draw_page(
                 width=2,
             )
             body_y += separator_height
+            continue
+        if not line:
+            body_y += blank_line_height
             continue
 
         label, value = _split_label(line)
@@ -429,6 +445,28 @@ def _normalize_width(value: object) -> int:
     except (TypeError, ValueError):
         parsed = DEFAULT_RENDER_WIDTH
     return max(640, min(1600, parsed))
+
+
+def _row_height(
+    line: str,
+    body_line_height: int,
+    blank_line_height: int,
+    separator_height: int,
+) -> int:
+    """返回正文行、段落空行或分隔线占用的高度。"""
+    if line == TEXT_SECTION_SEPARATOR:
+        return separator_height
+    return body_line_height if line else blank_line_height
+
+
+def _normalize_spacing(value: object, default: float, minimum: float) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        parsed = default
+    if parsed != parsed:
+        parsed = default
+    return max(minimum, min(3.0, parsed))
 
 
 def _normalize_font_size(value: object) -> int:

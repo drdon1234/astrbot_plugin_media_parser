@@ -348,7 +348,10 @@ class TextMetadataConfig:
     render_style: str = "fresh"
     render_font_family: str = "noto_sans"
     render_font_size: int = 24
+    render_line_spacing: float = 1.55
+    render_paragraph_spacing: float = 1.0
     render_paginate: bool = False
+    render_separate_sections: bool = False
 
     def visibility(self) -> Dict[str, bool]:
         """返回写入 metadata 的稳定字段名与展示开关。"""
@@ -807,10 +810,32 @@ class ConfigManager:
                         ),
                     ),
                 ),
+                render_line_spacing=min(
+                    3.0,
+                    max(
+                        1.0,
+                        self._parse_non_negative_float(
+                            text_metadata.get("render_line_spacing", 1.55),
+                            1.55,
+                        ),
+                    ),
+                ),
+                render_paragraph_spacing=min(
+                    3.0,
+                    self._parse_non_negative_float(
+                        text_metadata.get("render_paragraph_spacing", 1.0),
+                        1.0,
+                    ),
+                ),
                 render_paginate=self._parse_bool(
                     text_metadata.get("render_paginate", False),
                     False,
                     "message.text_metadata.render_paginate",
+                ),
+                render_separate_sections=self._parse_bool(
+                    text_metadata.get("render_separate_sections", False),
+                    False,
+                    "message.text_metadata.render_separate_sections",
                 ),
             ),
             hot_comments=HotCommentConfig(

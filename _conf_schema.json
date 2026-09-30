@@ -508,6 +508,24 @@
                         "hint": "有效范围 16–42，数值越大图片越长。",
                         "default": 24
                     },
+                    "render_line_spacing": {
+                        "description": "图片行距",
+                        "type": "float",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "hint": "行高相对文字高度的倍数，有效范围 1.0–3.0；数值越大行与行越疏。",
+                        "default": 1.55
+                    },
+                    "render_paragraph_spacing": {
+                        "description": "图片段落间距",
+                        "type": "float",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "hint": "段落之间空行的高度相对行高的倍数，有效范围 0–3.0；填 0 时段落之间不留空白。",
+                        "default": 1.0
+                    },
                     "render_paginate": {
                         "description": "长图自动分页",
                         "type": "bool",
@@ -515,6 +533,15 @@
                             "render_to_image": true
                         },
                         "hint": "开启后文本图片高度超过 1800 像素时按行拆分为多张图片依次发送，适合限制超长图片的聊天平台。",
+                        "default": false
+                    },
+                    "render_separate_sections": {
+                        "description": "正文、热评与翻译分区渲染",
+                        "type": "bool",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "hint": "开启后每条解析结果的基础文本、热评和翻译分别渲染为独立图片，并在各自原本的位置发送，不再合并为一张；可与长图自动分页同时使用。",
                         "default": false
                     }
                 }
