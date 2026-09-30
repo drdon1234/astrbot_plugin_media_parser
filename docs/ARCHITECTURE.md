@@ -489,7 +489,7 @@ ZIP 命令?
          build_all_nodes() + 等待翻译
            ↓
          message.text_metadata.render_to_image=true?
-           ├─ 是 -> 穿插链接原位分段渲染；其余合并文本节点 -> Pillow 生成 PNG（可分页）-> 成功后移除 Plain 节点
+           ├─ 是 -> 穿插链接或分区渲染时原位分段渲染；其余合并文本节点 -> Pillow 生成 PNG（可分页）-> 成功后移除 Plain 节点
            └─ 否/失败 -> 保留原文本节点
            ↓
          summarize_node_counts()
@@ -737,6 +737,7 @@ DASH 临时 `.m4s` 在合并后由 DASH 处理器清理；M3U8 临时分片目�
 
 ```text
 proxy.address
+proxy.font
 proxy.xiaoheihe_video
 proxy.tiktok
 proxy.youtube
@@ -749,6 +750,8 @@ proxy.twitter.video
 proxy.pixiv
 proxy.github
 ```
+
+`proxy.font` 不属于平台解析，仅供 `font_manager.py` 补全默认字体时使用全局代理地址，不写入媒体元数据。
 
 解析器初始化时接收代理配置：
 

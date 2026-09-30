@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.9.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.10.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -66,7 +66,8 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 - 可选附带热评，每个平台可独立开关
 - 可选大模型翻译正文和标题，支持 AstrBot 内置 AI、自定义 OpenAI 兼容接口或 Ollama
 - 支持消息聚合策略：不聚合、全部聚合或按条件聚合
-- 可选将文本元数据、热评和翻译统一渲染为一张图片发送
+- 可选将文本元数据、热评和翻译渲染为图片发送，支持分区渲染、长图分页和行距调整
+- 文章与帖子可按原文顺序穿插发送正文段落和配图
 - 音频可选择以语音或原始文件发送
 - 配置 `引用链接归档命令` 后，可将引用链接的解析结果和已下载媒体导出为 ZIP 文件
 - 可选 B站 Cookie 解锁高画质 + 管理员协助自动续期
