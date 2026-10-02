@@ -29,6 +29,7 @@ class Config:
     
     PLUGIN_NAME = "astrbot_plugin_media_parser"
     CACHE_DIR_NAME = "cache"
+    FONT_DIR_NAME = "font"
     RUNTIME_DIR_NAME = "runtime_manager"
     DEFAULT_CACHE_DIR = "/app/sharedFolder/video_parser/cache"
     DEFAULT_OPENING_CONTENT = "流媒体解析bot为您服务 ٩( 'ω' )و"
@@ -38,6 +39,11 @@ class Config:
     def build_cache_dir(prefix: str) -> str:
         """基于运行环境前缀生成统一的媒体缓存目录。"""
         return os.path.abspath(os.path.join(prefix, Config.CACHE_DIR_NAME))
+
+    @staticmethod
+    def build_font_dir(prefix: str) -> str:
+        """基于插件持久化数据目录生成统一的运行时字体目录。"""
+        return os.path.abspath(os.path.join(prefix, Config.FONT_DIR_NAME))
 
     @staticmethod
     def build_runtime_dir(cache_dir: str, *parts: str) -> str:

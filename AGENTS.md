@@ -11,7 +11,7 @@ _conf_schema.json        # AstrBot WebUI 配置面板 JSON Schema
 metadata.yaml            # AstrBot 插件清单（名称、版本、依赖版本范围）
 requirements.txt         # Python 依赖（aiohttp / cryptography / qrcode / pillow）
 docs/                    # 文档索引、架构说明与平台解析备忘
-resource/font/           # 字体许可证与运行时字体落盘目录
+resource/font/           # 字体许可证与字体资源说明
 core/
   config_manager.py      # 所有配置 dataclass + 类型转换兜底
   constants.py           # 全局常量（Config 类）
@@ -175,6 +175,7 @@ from .base import BaseVideoParser
 - `parse()` 返回 `Optional[MediaMetadata]`；解析失败时抛出异常，由 `ParserManager` 统一转换为含 `"error"` 键的结果。
 - 下载管理器通过回填 `MediaMetadata` 中的下载阶段字段传递结果，不引入额外数据结构。
 - `__init__.py` 作为子包的导出面，使用 `__all__` 暴露公开 API。
+- AstrBot 更新插件时会删除并替换整个插件目录；运行时下载或生成、需要跨插件更新保留的文件（如默认字体）必须落盘到 AstrBot 插件持久化数据目录 `data/plugin_data/astrbot_plugin_media_parser/`，路径统一经 `config_manager` 获取，不得写入插件目录。
 
 ## 运行环境
 

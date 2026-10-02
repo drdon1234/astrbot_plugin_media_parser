@@ -187,36 +187,58 @@ def _is_docker_environment() -> bool:
     return os.path.exists("/.dockerenv")
 
 
-def _get_astrbot_plugin_cache_dir() -> str:
-    """获取默认媒体缓存目录；非 AstrBot 运行时回退到项目 cache 目录。"""
+def _get_astrbot_plugin_data_dir() -> Optional[str]:
+    """获取 AstrBot 插件持久化数据目录；非 AstrBot 运行时返回 None。"""
     try:
         from astrbot.core import astrbot_config
 
         data_dir = str(astrbot_config.get("data_dir") or "").strip()
         if data_dir:
-            prefix = os.path.join(
+            return os.path.join(
                 data_dir,
                 "plugin_data",
                 Config.PLUGIN_NAME,
             )
-            return Config.build_cache_dir(prefix)
     except Exception:
         pass
 
     try:
         from astrbot.core.utils.io import get_astrbot_data_path
 
-        prefix = os.path.join(
+        return os.path.join(
             get_astrbot_data_path(),
             "plugin_data",
             Config.PLUGIN_NAME,
         )
-        return Config.build_cache_dir(prefix)
     except Exception:
         pass
 
-    prefix = os.getcwd()
+    return None
+
+
+def _get_astrbot_plugin_cache_dir() -> str:
+    """获取默认媒体缓存目录；非 AstrBot 运行时回退到项目 cache 目录。"""
+    prefix = _get_astrbot_plugin_data_dir() or os.getcwd()
     return Config.build_cache_dir(prefix)
+
+
+def get_plugin_font_dir() -> str:
+    """获取运行时字体目录
+
+    AstrBot 更新插件时会替换插件目录，因此字体落盘到插件持久化数据目录；
+    非 AstrBot 运行时回退到插件内的 resource/font 目录。
+
+    Returns:
+        运行时字体目录的绝对路径
+    """
+    prefix = _get_astrbot_plugin_data_dir()
+    if prefix:
+        return Config.build_font_dir(prefix)
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "resource",
+        Config.FONT_DIR_NAME,
+    )
 
 
 # ── 配置分组 dataclass ──────────────────────────────────

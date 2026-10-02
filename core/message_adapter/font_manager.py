@@ -11,8 +11,10 @@ from pathlib import Path
 
 import aiohttp
 
+from ..config_manager import get_plugin_font_dir
 
-FONT_DIR = Path(__file__).resolve().parents[2] / "resource" / "font"
+
+FONT_DIR = Path(get_plugin_font_dir())
 FONT_RELEASE_BASE_URL = (
     "https://github.com/drdon1234/fonts/releases/download/v1.0.0"
 )
