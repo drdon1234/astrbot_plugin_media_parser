@@ -182,6 +182,7 @@ from .base import BaseVideoParser
 - 本插件在 AstrBot 框架内运行，不是独立 Python 包。
 - 入口类继承 `astrbot.api.star.Star`，通过 `@register` 装饰器注册。
 - 依赖 AstrBot 的 `Context`、`AstrMessageEvent`、消息组件（`Plain`/`Image`/`Video`/`Record`/`File`、引用与合并转发组件）和 `file_token_service`。
+- 使用任何 AstrBot 内部函数、类或模块属性前，必须在 AstrBot 最新版源码中找到其真实定义，以及以相同导入路径进行的真实调用，并按该路径导入；不得依赖其他模块顺带导入形成的间接导出，也不得只以本地 stub 的验证结果为准。
 - 独立音频走 `audio_urls`、`audio_headers` 和 `audio_modes`，缓存成功后按配置发送语音或原始文件，不复用视频字段；音频文件索引排在视频与图片之后。
 - 本地调试可用 `run_local.py`。
 

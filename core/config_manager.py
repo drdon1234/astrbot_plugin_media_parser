@@ -190,30 +190,15 @@ def _is_docker_environment() -> bool:
 def _get_astrbot_plugin_data_dir() -> Optional[str]:
     """获取 AstrBot 插件持久化数据目录；非 AstrBot 运行时返回 None。"""
     try:
-        from astrbot.core import astrbot_config
+        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+    except ImportError:
+        return None
 
-        data_dir = str(astrbot_config.get("data_dir") or "").strip()
-        if data_dir:
-            return os.path.join(
-                data_dir,
-                "plugin_data",
-                Config.PLUGIN_NAME,
-            )
-    except Exception:
-        pass
-
-    try:
-        from astrbot.core.utils.io import get_astrbot_data_path
-
-        return os.path.join(
-            get_astrbot_data_path(),
-            "plugin_data",
-            Config.PLUGIN_NAME,
-        )
-    except Exception:
-        pass
-
-    return None
+    return os.path.join(
+        get_astrbot_data_path(),
+        "plugin_data",
+        Config.PLUGIN_NAME,
+    )
 
 
 def _get_astrbot_plugin_cache_dir() -> str:
