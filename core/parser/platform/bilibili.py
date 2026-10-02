@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
-from urllib.parse import urlparse, parse_qs, urlencode
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode
 
 import aiohttp
 
@@ -615,9 +615,21 @@ class BilibiliParser(BaseVideoParser):
         result_links_set = set()
         seen_ids = set()
 
-        b23_pattern = r'https?://[Bb]23\.tv/[^\s<>"\'()]+'
+        b23_pattern = r'https?://[Bb]23\.tv/[^\s<>"\'()\[\]]+'
         b23_links = re.findall(b23_pattern, text, re.IGNORECASE)
-        result_links_set.update(b23_links)
+        b23_by_key = {}
+        for link in b23_links:
+            parsed = urlparse(link)
+            # 分享参数仅从去重键中排除，请求仍使用完整原链接。
+            query = tuple(sorted(
+                (key, value)
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+                if key not in {"share_medium", "share_source", "bbid", "ts"}
+            ))
+            key = (parsed.scheme, parsed.netloc.lower(), parsed.path, query, parsed.fragment)
+            if key not in b23_by_key or len(link) > len(b23_by_key[key]):
+                b23_by_key[key] = link
+        result_links_set.update(b23_by_key.values())
 
         bilibili_domains = r"(?:www|m|mobile)\.bilibili\.com"
 
