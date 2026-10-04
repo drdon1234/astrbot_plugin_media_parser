@@ -620,7 +620,6 @@ class BilibiliParser(BaseVideoParser):
         b23_by_key = {}
         for link in b23_links:
             parsed = urlparse(link)
-            # 分享参数仅从去重键中排除，请求仍使用完整原链接。
             query = tuple(sorted(
                 (key, value)
                 for key, value in parse_qsl(parsed.query, keep_blank_values=True)
