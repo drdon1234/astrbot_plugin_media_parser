@@ -45,6 +45,8 @@ HOT_COMMENT_API = "https://api.bilibili.com/x/v2/reply/wbi/main"
 UGC_INFO_API = "https://api.bilibili.com/x/web-interface/view"
 UGC_WBI_INFO_API = "https://api.bilibili.com/x/web-interface/wbi/view"
 UGC_PLAYURL_API = "https://api.bilibili.com/x/player/wbi/playurl"
+TITLE_SEARCH_AUTH_TIMEOUT_SECONDS = 10
+TITLE_SEARCH_TIMEOUT_SECONDS = 20
 VIDEO_SEARCH_API = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2"
 PGC_PLAYURL_API = "https://api.bilibili.com/pgc/player/web/v2/playurl"
 HOT_COMMENT_MODE = 3
@@ -215,7 +217,10 @@ class BilibiliParser(BaseVideoParser):
         self._wbi_mixin_key = ""
         self._wbi_key_expires_at = 0.0
         self._wbi_key_lock = asyncio.Lock()
-        self._title_search_cache: Dict[str, Tuple[float, Optional[str]]] = {}
+        self._title_search_cache: Dict[Tuple[str, str], Tuple[float, Optional[str]]] = {}
+        self._title_search_pending: Dict[Tuple[str, str], asyncio.Future] = {}
+        self._title_search_semaphore = asyncio.Semaphore(2)
+        self._title_search_visitor_cookie = ""
         self._title_search_lock = asyncio.Lock()
         self._title_search_cookie_fingerprint = ""
         self._default_headers = {
@@ -363,7 +368,7 @@ class BilibiliParser(BaseVideoParser):
 
         Args:
             title: QQ 官方卡片提供的视频标题。
-            session: 用于复用访客 Cookie、读取账号凭据并执行搜索的 HTTP 会话。
+            session: 不自动收集 Cookie 的搜索专用 HTTP 会话。
 
         Returns:
             唯一匹配的视频链接；无匹配、存在歧义或请求失败时返回 None。
@@ -371,106 +376,46 @@ class BilibiliParser(BaseVideoParser):
         normalized_title = self._normalize_search_title(title)
         if not normalized_title:
             return None
+        try:
+            cookie_header = await asyncio.wait_for(
+                self._resolve_cookie_header(session), TITLE_SEARCH_AUTH_TIMEOUT_SECONDS
+            )
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as exc:
+            logger.warning(f"B站卡片标题搜索读取凭据失败，跳过本次卡片: {exc}")
+            return None
 
-        async with self._title_search_lock:
-            matched_url = None
+        fingerprint = (
+            hashlib.sha256(cookie_header.encode()).hexdigest() if cookie_header else ""
+        )
+        if fingerprint != self._title_search_cookie_fingerprint:
+            self._title_search_cache.clear()
+            self._title_search_visitor_cookie = ""
+            self._title_search_cookie_fingerprint = fingerprint
+        cache_key = (fingerprint, normalized_title)
+        cached = self._title_search_cache.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+
+        # 同标题共用结果，等待者取消时不取消正在执行的搜索。
+        pending = self._title_search_pending.get(cache_key)
+        if pending is not None:
             try:
-                # 账号请求只使用当前凭据，避免响应 Cookie 覆盖更新后的账号。
-                if self._title_search_cookie_fingerprint:
-                    session.cookie_jar.clear()
-                cookie_header = await self._resolve_cookie_header(session)
-                fingerprint = (
-                    hashlib.sha256(cookie_header.encode()).hexdigest()
-                    if cookie_header
-                    else ""
+                return await asyncio.wait_for(
+                    asyncio.shield(pending), TITLE_SEARCH_TIMEOUT_SECONDS
                 )
-                if cookie_header or fingerprint != self._title_search_cookie_fingerprint:
-                    session.cookie_jar.clear()
-                if fingerprint != self._title_search_cookie_fingerprint:
-                    self._title_search_cache.clear()
-                    self._title_search_cookie_fingerprint = fingerprint
-                cached = self._title_search_cache.get(normalized_title)
-                if cached and cached[0] > time.monotonic():
-                    return cached[1]
-
-                headers = self._build_api_headers(cookie_header=cookie_header)
-                # 无账号时按需获取访客 Cookie，后续搜索沿用会话中的有效值。
-                if not cookie_header and not session.cookie_jar:
-                    async with session.get(
-                        "https://www.bilibili.com/", headers=headers
-                    ) as resp:
-                        resp.raise_for_status()
-                        await resp.read()
-                mixin_key = await self._get_wbi_mixin_key(session, headers)
-                params = self._sign_wbi_params(
-                    {"keyword": title},
-                    mixin_key,
+            except asyncio.TimeoutError:
+                return None
+        pending = asyncio.get_running_loop().create_future()
+        self._title_search_pending[cache_key] = pending
+        matched_url = None
+        try:
+            try:
+                matched_url = await asyncio.wait_for(
+                    self._request_video_by_title(title, session, cookie_header),
+                    TITLE_SEARCH_TIMEOUT_SECONDS,
                 )
-                async with session.get(
-                    VIDEO_SEARCH_API, params=params, headers=headers
-                ) as resp:
-                    resp.raise_for_status()
-                    result = await self._check_json_response(resp)
-                if not isinstance(result, dict):
-                    raise RuntimeError("B站标题搜索返回的数据格式异常")
-                await self._handle_api_response(result, "B站标题搜索")
-                data = result.get("data")
-                if any(
-                    container.get(key)
-                    for container in (result, data if isinstance(data, dict) else {})
-                    for key in ("v_voucher", "gaia_vtoken", "gaia_res_type")
-                ):
-                    raise RuntimeError(
-                        "B站搜索返回风控验证信息，未提供视频列表；请稍后重试或检查服务器出口网络"
-                    )
-                items = data.get("result") if isinstance(data, dict) else None
-                # 无结果时接口可能省略 result 或返回 null，不视为结构异常。
-                if (
-                    items is None
-                    and isinstance(data, dict)
-                    and str(data.get("numResults")) == "0"
-                ):
-                    items = []
-                if not isinstance(items, list):
-                    data_keys = (
-                        sorted(str(key) for key in data)
-                        if isinstance(data, dict)
-                        else []
-                    )
-                    raise RuntimeError(
-                        "B站标题搜索返回的视频列表格式异常: "
-                        f"data类型={type(data).__name__}, data字段={data_keys}, "
-                        f"result类型={type(items).__name__}, "
-                        f"numResults={data.get('numResults') if isinstance(data, dict) else None}"
-                    )
-                videos = []
-                for group in items:
-                    if not isinstance(group, dict) or group.get("result_type") != "video":
-                        continue
-                    group_items = group.get("data") or group.get("result") or []
-                    if not isinstance(group_items, list):
-                        raise RuntimeError("B站综合搜索返回的视频分类格式异常")
-                    videos.extend(group_items)
-                matches = set()
-                for item in videos:
-                    if not isinstance(item, dict):
-                        continue
-                    candidate_title = item.get("title")
-                    bvid = item.get("bvid")
-                    if (
-                        isinstance(candidate_title, str)
-                        and self._normalize_search_title(candidate_title)
-                        == normalized_title
-                        and isinstance(bvid, str)
-                        and re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid)
-                    ):
-                        matches.add(f"https://www.bilibili.com/video/{bvid}")
-                if len(matches) == 1:
-                    matched_url = matches.pop()
-                else:
-                    logger.debug(
-                        f"B站卡片标题搜索未获得唯一同名视频，匹配数={len(matches)}"
-                    )
             except asyncio.CancelledError:
                 raise
             except (
@@ -484,15 +429,114 @@ class BilibiliParser(BaseVideoParser):
             ) as exc:
                 logger.warning(f"B站卡片标题搜索失败，跳过本次卡片: {exc}")
 
-            # 成功缓存五分钟，空结果或失败缓存三十秒；限制容量避免长期累积。
-            self._title_search_cache.pop(normalized_title, None)
-            if len(self._title_search_cache) >= 128:
-                self._title_search_cache.pop(next(iter(self._title_search_cache)))
-            ttl = 300 if matched_url else 30
-            self._title_search_cache[normalized_title] = (
-                time.monotonic() + ttl,
-                matched_url,
+            # 取消不缓存；请求超时属于失败，缓存三十秒避免立即重试。
+            if fingerprint == self._title_search_cookie_fingerprint:
+                self._title_search_cache.pop(cache_key, None)
+                if len(self._title_search_cache) >= 128:
+                    self._title_search_cache.pop(next(iter(self._title_search_cache)))
+                ttl = 300 if matched_url else 30
+                self._title_search_cache[cache_key] = (time.monotonic() + ttl, matched_url)
+            return matched_url
+        finally:
+            self._title_search_pending.pop(cache_key, None)
+            pending.set_result(matched_url)
+
+    async def _get_title_search_visitor_cookie(
+        self, session: aiohttp.ClientSession
+    ) -> str:
+        """仅串行初始化访客 Cookie，不让慢搜索阻塞缓存命中。"""
+        async with self._title_search_lock:
+            if not self._title_search_visitor_cookie:
+                async with session.get(
+                    "https://www.bilibili.com/", headers=self._build_api_headers()
+                ) as resp:
+                    resp.raise_for_status()
+                    await resp.read()
+                    self._title_search_visitor_cookie = "; ".join(
+                        f"{name}={cookie.value}" for name, cookie in resp.cookies.items()
+                    )
+            return self._title_search_visitor_cookie
+
+    async def _request_video_by_title(
+        self, title: str, session: aiohttp.ClientSession, cookie_header: str
+    ) -> Optional[str]:
+        """限制上游并发，并用独立的请求头隔离账号与访客 Cookie。"""
+        async with self._title_search_semaphore:
+            if not cookie_header:
+                cookie_header = await self._get_title_search_visitor_cookie(session)
+            headers = self._build_api_headers(cookie_header=cookie_header)
+            matched_url = None
+            normalized_title = self._normalize_search_title(title)
+            mixin_key = await self._get_wbi_mixin_key(session, headers)
+            params = self._sign_wbi_params(
+                {"keyword": title},
+                mixin_key,
             )
+            async with session.get(
+                VIDEO_SEARCH_API, params=params, headers=headers
+            ) as resp:
+                resp.raise_for_status()
+                result = await self._check_json_response(resp)
+            if not isinstance(result, dict):
+                raise RuntimeError("B站标题搜索返回的数据格式异常")
+            await self._handle_api_response(result, "B站标题搜索")
+            data = result.get("data")
+            if any(
+                container.get(key)
+                for container in (result, data if isinstance(data, dict) else {})
+                for key in ("v_voucher", "gaia_vtoken", "gaia_res_type")
+            ):
+                raise RuntimeError(
+                    "B站搜索返回风控验证信息，未提供视频列表；请稍后重试或检查服务器出口网络"
+                )
+            items = data.get("result") if isinstance(data, dict) else None
+            # 无结果时接口可能省略 result 或返回 null，不视为结构异常。
+            if (
+                items is None
+                and isinstance(data, dict)
+                and str(data.get("numResults")) == "0"
+            ):
+                items = []
+            if not isinstance(items, list):
+                data_keys = (
+                    sorted(str(key) for key in data)
+                    if isinstance(data, dict)
+                    else []
+                )
+                raise RuntimeError(
+                    "B站标题搜索返回的视频列表格式异常: "
+                    f"data类型={type(data).__name__}, data字段={data_keys}, "
+                    f"result类型={type(items).__name__}, "
+                    f"numResults={data.get('numResults') if isinstance(data, dict) else None}"
+                )
+            videos = []
+            for group in items:
+                if not isinstance(group, dict) or group.get("result_type") != "video":
+                    continue
+                group_items = group.get("data") or group.get("result") or []
+                if not isinstance(group_items, list):
+                    raise RuntimeError("B站综合搜索返回的视频分类格式异常")
+                videos.extend(group_items)
+            matches = set()
+            for item in videos:
+                if not isinstance(item, dict):
+                    continue
+                candidate_title = item.get("title")
+                bvid = item.get("bvid")
+                if (
+                    isinstance(candidate_title, str)
+                    and self._normalize_search_title(candidate_title)
+                    == normalized_title
+                    and isinstance(bvid, str)
+                    and re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid)
+                ):
+                    matches.add(f"https://www.bilibili.com/video/{bvid}")
+            if len(matches) == 1:
+                matched_url = matches.pop()
+            else:
+                logger.debug(
+                    f"B站卡片标题搜索未获得唯一同名视频，匹配数={len(matches)}"
+                )
             return matched_url
 
     @staticmethod

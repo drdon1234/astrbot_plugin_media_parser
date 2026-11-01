@@ -323,24 +323,26 @@ class VideoParserPlugin(Star):
         if not isinstance(title, str) or not title.strip():
             return []
 
-        # 跨消息复用搜索会话，保留访客 Cookie，并限制单次搜索总时长。
-        try:
-            if (
-                self._bilibili_search_session is None
-                or self._bilibili_search_session.closed
-            ):
-                self._bilibili_search_session = aiohttp.ClientSession(
-                    timeout=aiohttp.ClientTimeout(total=15)
-                )
-            url = await asyncio.wait_for(
-                self.bilibili_parser.search_video_by_title(
-                    title.strip(), self._bilibili_search_session
-                ),
-                timeout=30,
-            )
-        except asyncio.TimeoutError:
-            self.logger.warning("QQ官方B站卡片标题搜索超时，跳过本次卡片")
+        user_key = ParseRecordManager.build_user_key(
+            event.get_platform_name(), event.get_sender_id()
+        )
+        if not await asyncio.to_thread(
+            self.parse_record_manager.try_acquire_user_attempt, user_key
+        ):
             return []
+
+        # Cookie 由搜索器显式管理，避免并发响应污染其他账号的请求。
+        if (
+            self._bilibili_search_session is None
+            or self._bilibili_search_session.closed
+        ):
+            self._bilibili_search_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=15),
+                cookie_jar=aiohttp.DummyCookieJar(),
+            )
+        url = await self.bilibili_parser.search_video_by_title(
+            title.strip(), self._bilibili_search_session
+        )
         if not url:
             return []
         self.logger.debug(f"QQ官方B站卡片按标题搜索匹配: {title} -> {url}")
@@ -730,6 +732,7 @@ class VideoParserPlugin(Star):
         zip_requested: bool,
         translation_task,
         translation_metadata_list,
+        card_title_matched: bool = False,
     ) -> None:
         """下载、构建和发送结果，并统一管理任务及文件生命周期。"""
         async with self._cache_cleanup_lock:
@@ -871,6 +874,19 @@ class VideoParserPlugin(Star):
                     )
                 )
                 return
+
+            if card_title_matched:
+                # 与可发送结果共用节点队列，提示失败不阻断其他节点的发送。
+                for meta in build_result.link_metadata:
+                    if meta["link_nodes"]:
+                        notice = Plain("按卡片标题搜索匹配：")
+                        meta["link_nodes"].insert(0, notice)
+                        section_starts = meta.get("section_starts", [])
+                        text_node = meta.get("metadata_text_node")
+                        if section_starts and section_starts[0] is text_node:
+                            section_starts[0] = notice
+                        meta["metadata_text_node"] = notice
+                        break
 
             (
                 text_metadata_images,
@@ -1166,6 +1182,7 @@ class VideoParserPlugin(Star):
                 self.parse_record_manager.filter_links,
                 links_with_parser,
                 user_key=rate_limit_user_key,
+                user_attempt_recorded=card_title_matched,
             )
         else:
             blocked_links = []
@@ -1243,9 +1260,6 @@ class VideoParserPlugin(Star):
                     )
                 return
 
-            if card_title_matched:
-                await event.send(event.plain_result("以下视频按卡片标题搜索匹配："))
-
             translation_task, translation_metadata_list = self._start_translation_task(
                 metadata_list, event
             )
@@ -1262,6 +1276,7 @@ class VideoParserPlugin(Star):
                     zip_requested=zip_requested,
                     translation_task=translation_task,
                     translation_metadata_list=translation_metadata_list,
+                    card_title_matched=card_title_matched,
                 )
             finally:
                 await self._cancel_translation_task(translation_task)

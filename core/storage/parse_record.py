@@ -180,14 +180,43 @@ class ParseRecordManager:
         canonical = cls.canonicalize_url(url)
         return f"{parser}:{canonical}" if canonical else ""
 
+    def try_acquire_user_attempt(
+        self, user_key: str, *, now: Optional[float] = None
+    ) -> bool:
+        """为尚未获得链接的搜索原子预占一次用户解析额度。
+
+        Args:
+            user_key: 平台与用户组成的限流键。
+            now: 用于判定时间窗口的时间戳，默认使用当前时间。
+
+        Returns:
+            用户限流未启用或成功预占额度时返回 True。
+        """
+        if not self.same_user.enabled:
+            return True
+        current = int(now or time.time())
+        normalized_user_key = str(user_key or "unknown").strip() or "unknown"
+        with self._lock:
+            self._load()
+            self._prune(current)
+            count = self._count_recent(
+                "users", normalized_user_key, current, self.same_user.window_seconds
+            )
+            if count >= self.same_user.max_count:
+                return False
+            self._append_timestamp("users", normalized_user_key, current)
+            self._save(current)
+            return True
+
     def filter_links(
         self,
         links_with_parser: List[Tuple[str, Any]],
         *,
         user_key: str,
         now: Optional[float] = None,
+        user_attempt_recorded: bool = False,
     ) -> Tuple[List[Tuple[str, Any]], List[BlockedParseItem]]:
-        """返回允许解析的链接，并记录本次允许的解析尝试。"""
+        """返回允许解析的链接；搜索已预占用户额度时只检查并记录链接额度。"""
         if not self.enabled or not links_with_parser:
             return links_with_parser, []
 
@@ -222,7 +251,7 @@ class ParseRecordManager:
                         ))
                         continue
 
-                if self.same_user.enabled:
+                if self.same_user.enabled and not user_attempt_recorded:
                     user_count = self._count_recent(
                         "users",
                         normalized_user_key,
@@ -244,7 +273,7 @@ class ParseRecordManager:
                 if self.same_link.enabled and link_key:
                     self._append_timestamp("links", link_key, current)
                     changed = True
-                if self.same_user.enabled:
+                if self.same_user.enabled and not user_attempt_recorded:
                     self._append_timestamp("users", normalized_user_key, current)
                     changed = True
 
