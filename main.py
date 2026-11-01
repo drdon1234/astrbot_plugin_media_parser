@@ -66,6 +66,7 @@ class VideoParserPlugin(Star):
         parsers = cfg.create_parsers()
         self.parser_manager = ParserManager(parsers)
         self.bilibili_parser = cfg.bilibili_parser
+        self._bilibili_search_session: Optional[aiohttp.ClientSession] = None
         self.metadata_translator = MetadataTranslator(
             cfg.translation,
             self.context,
@@ -128,6 +129,9 @@ class VideoParserPlugin(Star):
             )
 
     async def terminate(self):
+        if self._bilibili_search_session is not None:
+            await self._bilibili_search_session.close()
+            self._bilibili_search_session = None
         await self._shutdown_expired_cache_cleanup()
         await self._shutdown_delayed_cleanups()
         await self.admin_cookie_assist.shutdown()
@@ -319,14 +323,21 @@ class VideoParserPlugin(Star):
         if not isinstance(title, str) or not title.strip():
             return []
 
-        # 保持访客 Cookie 在同一个会话中，限制搜索总时长并允许取消向上传播。
+        # 跨消息复用搜索会话，保留访客 Cookie，并限制单次搜索总时长。
         try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                url = await asyncio.wait_for(
-                    self.bilibili_parser.search_video_by_title(title.strip(), session),
-                    timeout=30,
+            if (
+                self._bilibili_search_session is None
+                or self._bilibili_search_session.closed
+            ):
+                self._bilibili_search_session = aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=15)
                 )
+            url = await asyncio.wait_for(
+                self.bilibili_parser.search_video_by_title(
+                    title.strip(), self._bilibili_search_session
+                ),
+                timeout=30,
+            )
         except asyncio.TimeoutError:
             self.logger.warning("QQ官方B站卡片标题搜索超时，跳过本次卡片")
             return []

@@ -217,6 +217,7 @@ class BilibiliParser(BaseVideoParser):
         self._wbi_key_lock = asyncio.Lock()
         self._title_search_cache: Dict[str, Tuple[float, Optional[str]]] = {}
         self._title_search_lock = asyncio.Lock()
+        self._title_search_cookie_fingerprint = ""
         self._default_headers = {
             "User-Agent": UA,
             "Referer": "https://www.bilibili.com",
@@ -362,7 +363,7 @@ class BilibiliParser(BaseVideoParser):
 
         Args:
             title: QQ 官方卡片提供的视频标题。
-            session: 用于获取访客 Cookie 和执行搜索的 HTTP 会话。
+            session: 用于复用访客 Cookie、读取账号凭据并执行搜索的 HTTP 会话。
 
         Returns:
             唯一匹配的视频链接；无匹配、存在歧义或请求失败时返回 None。
@@ -372,19 +373,34 @@ class BilibiliParser(BaseVideoParser):
             return None
 
         async with self._title_search_lock:
-            cached = self._title_search_cache.get(normalized_title)
-            if cached and cached[0] > time.monotonic():
-                return cached[1]
-
             matched_url = None
             try:
-                # 搜索使用访客身份，无需账号 Cookie；密钥复用已有 WBI 缓存。
-                headers = self._build_api_headers()
-                async with session.get(
-                    "https://www.bilibili.com/", headers=headers
-                ) as resp:
-                    resp.raise_for_status()
-                    await resp.read()
+                # 账号请求只使用当前凭据，避免响应 Cookie 覆盖更新后的账号。
+                if self._title_search_cookie_fingerprint:
+                    session.cookie_jar.clear()
+                cookie_header = await self._resolve_cookie_header(session)
+                fingerprint = (
+                    hashlib.sha256(cookie_header.encode()).hexdigest()
+                    if cookie_header
+                    else ""
+                )
+                if cookie_header or fingerprint != self._title_search_cookie_fingerprint:
+                    session.cookie_jar.clear()
+                if fingerprint != self._title_search_cookie_fingerprint:
+                    self._title_search_cache.clear()
+                    self._title_search_cookie_fingerprint = fingerprint
+                cached = self._title_search_cache.get(normalized_title)
+                if cached and cached[0] > time.monotonic():
+                    return cached[1]
+
+                headers = self._build_api_headers(cookie_header=cookie_header)
+                # 无账号时按需获取访客 Cookie，后续搜索沿用会话中的有效值。
+                if not cookie_header and not session.cookie_jar:
+                    async with session.get(
+                        "https://www.bilibili.com/", headers=headers
+                    ) as resp:
+                        resp.raise_for_status()
+                        await resp.read()
                 mixin_key = await self._get_wbi_mixin_key(session, headers)
                 params = self._sign_wbi_params(
                     {"keyword": title},
