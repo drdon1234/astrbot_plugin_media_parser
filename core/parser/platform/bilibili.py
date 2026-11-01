@@ -45,7 +45,7 @@ HOT_COMMENT_API = "https://api.bilibili.com/x/v2/reply/wbi/main"
 UGC_INFO_API = "https://api.bilibili.com/x/web-interface/view"
 UGC_WBI_INFO_API = "https://api.bilibili.com/x/web-interface/wbi/view"
 UGC_PLAYURL_API = "https://api.bilibili.com/x/player/wbi/playurl"
-VIDEO_SEARCH_API = "https://api.bilibili.com/x/web-interface/wbi/search/type"
+VIDEO_SEARCH_API = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2"
 PGC_PLAYURL_API = "https://api.bilibili.com/pgc/player/web/v2/playurl"
 HOT_COMMENT_MODE = 3
 FNVAL_MP4 = 1
@@ -387,12 +387,7 @@ class BilibiliParser(BaseVideoParser):
                     await resp.read()
                 mixin_key = await self._get_wbi_mixin_key(session, headers)
                 params = self._sign_wbi_params(
-                    {
-                        "search_type": "video",
-                        "keyword": title,
-                        "page": 1,
-                        "page_size": 50,
-                    },
+                    {"keyword": title},
                     mixin_key,
                 )
                 async with session.get(
@@ -432,8 +427,16 @@ class BilibiliParser(BaseVideoParser):
                         f"result类型={type(items).__name__}, "
                         f"numResults={data.get('numResults') if isinstance(data, dict) else None}"
                     )
+                videos = []
+                for group in items:
+                    if not isinstance(group, dict) or group.get("result_type") != "video":
+                        continue
+                    group_items = group.get("data") or group.get("result") or []
+                    if not isinstance(group_items, list):
+                        raise RuntimeError("B站综合搜索返回的视频分类格式异常")
+                    videos.extend(group_items)
                 matches = set()
-                for item in items:
+                for item in videos:
                     if not isinstance(item, dict):
                         continue
                     candidate_title = item.get("title")

@@ -86,7 +86,7 @@ b23.tv / bilibili.com / t.bilibili.com
 
 当正文和 JSON 组件均没有可解析链接时，读取 QQ 官方（WebSocket / Webhook）的原始 `ark_data.fields`。仅当 `source` 为“哔哩哔哩”且 `title` 非空时补充搜索，无需登录。
 
-- 复用现有 WBI 签名，请求 `x/web-interface/wbi/search/type` 的视频首屏（最多 50 项）。
+- 复用现有 WBI 签名，请求 `x/web-interface/wbi/search/all/v2`，仅提取综合搜索返回的视频分类首屏。
 - 去除标题高亮，统一全半角、空白和标点，按 BV 号去重后仅接受唯一同名结果；没有匹配或多个同名视频时跳过。
 - 首屏唯一不代表全站唯一，仍可能匹配到同名搬运；成功获得可发送内容时会提示“按卡片标题搜索匹配”。
 - 成功缓存五分钟，空结果或失败缓存三十秒，缓存最多 128 项；搜索总等待不超过三十秒。
