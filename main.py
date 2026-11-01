@@ -284,6 +284,57 @@ class VideoParserPlugin(Star):
                 self.logger.debug(f"提取JSON卡片链接失败: {e}")
             return []
 
+    async def _try_extract_qqofficial_bilibili_links(
+        self, event: AstrMessageEvent
+    ) -> list:
+        """从无链接的 QQ 官方 B 站卡片中按标题搜索视频。
+
+        Args:
+            event: 已通过入口权限检查且未提取到链接的消息事件。
+
+        Returns:
+            唯一同名视频对应的链接与解析器列表，无法匹配时为空列表。
+        """
+        cfg = self.config_manager
+        if (
+            event.get_platform_name() not in {"qq_official", "qq_official_webhook"}
+            or self.bilibili_parser is None
+            or not cfg.parser_output.controller_has_any_output("bilibili")
+            or not cfg.trigger.should_parse(event.message_str or "")
+        ):
+            return []
+        message = event.message_obj.raw_message
+        raw_data = (
+            message if isinstance(message, dict) else getattr(message, "raw_data", None)
+        )
+        if not isinstance(raw_data, dict):
+            return []
+        ark_data = raw_data.get("ark_data")
+        if not isinstance(ark_data, dict):
+            return []
+        fields = ark_data.get("fields")
+        if not isinstance(fields, dict) or fields.get("source") != "哔哩哔哩":
+            return []
+        title = fields.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return []
+
+        # 保持访客 Cookie 在同一个会话中，限制搜索总时长并允许取消向上传播。
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                url = await asyncio.wait_for(
+                    self.bilibili_parser.search_video_by_title(title.strip(), session),
+                    timeout=30,
+                )
+        except asyncio.TimeoutError:
+            self.logger.warning("QQ官方B站卡片标题搜索超时，跳过本次卡片")
+            return []
+        if not url:
+            return []
+        self.logger.debug(f"QQ官方B站卡片按标题搜索匹配: {title} -> {url}")
+        return self._filter_links_by_output(self.parser_manager.extract_all_links(url))
+
     def _try_extract_reply_links(self, event: AstrMessageEvent):
         messages = event.get_messages()
         if not messages:
@@ -1049,6 +1100,7 @@ class VideoParserPlugin(Star):
         zip_requested = bool(
             zip_command and original_message_text.strip() == zip_command
         )
+        card_title_matched = False
         if zip_requested:
             links_with_parser, reply_message_id = self._try_extract_reply_links(event)
             if reply_message_id:
@@ -1066,6 +1118,10 @@ class VideoParserPlugin(Star):
                 links_with_parser = self._filter_links_by_output(links_with_parser)
                 if not links_with_parser:
                     return
+
+            if not links_with_parser:
+                links_with_parser = await self._try_extract_qqofficial_bilibili_links(event)
+                card_title_matched = bool(links_with_parser)
 
             if not links_with_parser:
                 if cfg.trigger.reply_trigger and cfg.trigger.has_keyword(
@@ -1175,6 +1231,9 @@ class VideoParserPlugin(Star):
                         event.plain_result("引用消息中的链接没有可归档内容。")
                     )
                 return
+
+            if card_title_matched:
+                await event.send(event.plain_result("以下视频按卡片标题搜索匹配："))
 
             translation_task, translation_metadata_list = self._start_translation_task(
                 metadata_list, event
