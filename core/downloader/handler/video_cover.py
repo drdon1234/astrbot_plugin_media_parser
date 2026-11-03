@@ -19,7 +19,7 @@ from ..budget import (
     create_byte_budget,
 )
 from ..fileio import run_blocking
-from ..utils import generate_cache_file_path, strip_media_prefixes
+from ..utils import generate_cache_file_path, request_url, strip_media_prefixes
 
 
 VIDEO_COVER_TIMEOUT = 45
@@ -55,7 +55,7 @@ async def _media_relay(
         try:
             response = await session.request(
                 request.method,
-                source_url,
+                request_url(source_url),
                 headers=upstream_headers,
                 proxy=proxy,
                 timeout=aiohttp.ClientTimeout(total=VIDEO_COVER_TIMEOUT),

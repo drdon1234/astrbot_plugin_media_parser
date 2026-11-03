@@ -12,6 +12,7 @@ from .utils import (
     validate_content_type,
     check_json_error_response,
     extract_size_from_headers,
+    request_url,
     strip_media_prefixes,
 )
 from .image_format import (
@@ -257,7 +258,7 @@ async def get_video_size(
         except (aiohttp.ClientError, asyncio.TimeoutError):
             get_headers = _with_range_header(request_headers)
             response = await session.get(
-                video_url,
+                request_url(video_url),
                 headers=get_headers,
                 timeout=timeout,
                 proxy=proxy,
@@ -332,7 +333,7 @@ async def validate_media_url(
         except (aiohttp.ClientError, asyncio.TimeoutError):
             get_headers = _with_range_header(request_headers)
             response = await session.get(
-                media_url,
+                request_url(media_url),
                 headers=get_headers,
                 timeout=timeout,
                 proxy=proxy,

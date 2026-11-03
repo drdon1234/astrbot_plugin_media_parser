@@ -4,9 +4,34 @@ import os
 import re
 from typing import Optional, List, Dict, Any
 
+from yarl import URL
+
 from ..logger import logger
 from ..storage import stamp_subdir
 from .image_format import infer_image_suffix, is_supported_image_content_type
+
+
+def request_url(url: str) -> URL | str:
+    """构造请求 URL，保留原始的百分号编码
+
+    aiohttp 收到字符串 URL 时会交给 yarl 规范化，把 query 中“安全字符”的百分号编码
+    还原（例如抖音图片直链签名里的 ``%2F`` 会变成 ``/``），服务端按原始 query 校验
+    签名即返回 403。签名类直链必须原样发送，因此只在规范化会改变原串时改用
+    ``encoded=True``，普通 URL 的行为保持不变。
+
+    Args:
+        url: 待请求的 URL
+
+    Returns:
+        原始字符串，或按原样编码构造的 yarl.URL
+    """
+    raw = str(url or "")
+    try:
+        if str(URL(raw)) == raw:
+            return raw
+        return URL(raw, encoded=True)
+    except (TypeError, ValueError):
+        return raw
 
 
 def validate_content_type(content_type: str, is_video: bool = False) -> bool:

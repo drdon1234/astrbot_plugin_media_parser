@@ -25,6 +25,7 @@ from ..budget import (
     create_byte_budget,
 )
 from ..fileio import gather_cancel_on_error, run_blocking
+from ..utils import request_url
 from .base import (
     _format_download_error,
     _is_retryable_exception,
@@ -123,7 +124,7 @@ class M3U8Handler:
         for attempt in range(1, attempts + 1):
             try:
                 response = await self.session.get(
-                    url,
+                    request_url(url),
                     headers=self.headers,
                     proxy=self.proxy,
                     timeout=aiohttp.ClientTimeout(
@@ -179,7 +180,7 @@ class M3U8Handler:
             consumed = 0
             try:
                 response = await self.session.get(
-                    url,
+                    request_url(url),
                     headers=self.headers,
                     proxy=self.proxy,
                     timeout=aiohttp.ClientTimeout(total=Config.VIDEO_DOWNLOAD_TIMEOUT),
@@ -238,7 +239,7 @@ class M3U8Handler:
                     os.makedirs, os.path.dirname(output_path), exist_ok=True
                 )
                 response = await self.session.get(
-                    url,
+                    request_url(url),
                     headers=self.headers,
                     proxy=self.proxy,
                     timeout=aiohttp.ClientTimeout(total=Config.VIDEO_DOWNLOAD_TIMEOUT),
