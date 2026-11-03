@@ -3,10 +3,40 @@
 import os
 import re
 from typing import Optional, List, Dict, Any
+from urllib.parse import quote, urlsplit
+
+from yarl import URL
 
 from ..logger import logger
+
 from ..storage import stamp_subdir
 from .image_format import infer_image_suffix, is_supported_image_content_type
+
+
+def request_url(url: str) -> URL:
+    """构造请求 URL，保留原始的百分号编码
+
+    保留路径与查询参数中已有的百分号编码，避免签名里的 ``%2F`` 被还原为 ``/``。
+    主机名及认证信息沿用 yarl 的规范化，路径、查询和片段补齐中文、空格等必要编码，
+    不能直接把可能尚未编码的整个地址标记为已编码。
+
+    Args:
+        url: 待请求的 URL
+
+    Returns:
+        保留已有转义且完成必要编码的请求地址。
+    """
+    raw = str(url or "")
+    normalized = URL(raw)
+    parts = urlsplit(raw)
+    return URL.build(
+        scheme=normalized.scheme,
+        authority=normalized.raw_authority,
+        path=quote(parts.path, safe="/:@!$&'()*+,;=%"),
+        query_string=quote(parts.query, safe="/?:@!$&'()*+,;=%"),
+        fragment=quote(parts.fragment, safe="/?:@!$&'()*+,;=%"),
+        encoded=True,
+    )
 
 
 def validate_content_type(content_type: str, is_video: bool = False) -> bool:

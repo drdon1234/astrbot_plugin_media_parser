@@ -11,7 +11,7 @@ from ...logger import logger
 from ...constants import Config
 from ...storage import cleanup_file
 from ..budget import ByteBudget, DownloadLimitExceeded
-from ..utils import generate_cache_file_path
+from ..utils import generate_cache_file_path, request_url
 from .base import (
     _format_download_error,
     _is_retryable_exception,
@@ -122,7 +122,7 @@ async def download_audio_to_cache(
                 if key.lower() != "range"
             }
             response = await session.get(
-                audio_url,
+                request_url(audio_url),
                 headers=request_headers,
                 proxy=proxy,
                 timeout=aiohttp.ClientTimeout(total=Config.VIDEO_DOWNLOAD_TIMEOUT),

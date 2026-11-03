@@ -22,7 +22,7 @@ from ..budget import (
     resolve_max_bytes,
 )
 from ..fileio import run_blocking
-from ..utils import extract_size_from_headers
+from ..utils import extract_size_from_headers, request_url
 from ..validator import validate_media_response
 
 
@@ -77,7 +77,7 @@ async def _get_file_size(
         request_headers["Range"] = "bytes=0-0"
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
         response = await session.get(
-            url,
+            request_url(url),
             headers=request_headers,
             timeout=timeout,
             proxy=proxy,
@@ -136,7 +136,7 @@ async def _download_range(
 
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_DOWNLOAD_TIMEOUT)
         response = await session.get(
-            url,
+            request_url(url),
             headers=request_headers,
             timeout=timeout,
             proxy=proxy,
@@ -506,7 +506,7 @@ async def download_media_from_url(
                 else Config.IMAGE_DOWNLOAD_TIMEOUT
             )
             response = await session.get(
-                media_url,
+                request_url(media_url),
                 headers=request_headers,
                 timeout=timeout,
                 proxy=proxy,

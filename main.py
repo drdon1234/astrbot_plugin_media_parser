@@ -53,7 +53,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.12.0",
+    "1.12.1",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -1212,7 +1212,10 @@ class VideoParserPlugin(Star):
         sender_name, sender_id = self.message_sender.get_sender_info(event)
 
         timeout = aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # 保留媒体重定向地址中的签名编码，由 aiohttp 继续处理跳转及跨域认证。
+        async with aiohttp.ClientSession(
+            timeout=timeout, requote_redirect_url=False
+        ) as session:
             metadata_list = await self.parser_manager.parse_text(
                 parse_text, session, links_with_parser=links_with_parser
             )
