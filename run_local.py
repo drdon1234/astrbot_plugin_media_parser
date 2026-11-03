@@ -800,7 +800,7 @@ async def main(
                     enable_cleanup_closed=True,
                 )
                 async with aiohttp.ClientSession(
-                    timeout=timeout, connector=connector
+                    timeout=timeout, connector=connector, requote_redirect_url=False
                 ) as session:
                     await parse_and_confirm_download(
                         text,

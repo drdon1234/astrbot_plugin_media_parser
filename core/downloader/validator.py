@@ -234,7 +234,7 @@ async def get_video_size(
 
         try:
             response = await session.head(
-                video_url,
+                request_url(video_url),
                 headers=request_headers,
                 timeout=timeout,
                 proxy=proxy,
@@ -314,7 +314,7 @@ async def validate_media_url(
 
         try:
             response = await session.head(
-                media_url,
+                request_url(media_url),
                 headers=request_headers,
                 timeout=timeout,
                 proxy=proxy,
