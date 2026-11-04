@@ -169,7 +169,7 @@ astrbot_plugin_media_parser/
 - `仅文本`：解析并发送文本元数据，不进入下载处理、文件 Token 注册和富媒体节点构建。
 - `仅富媒体`：解析并发送图片/视频/音频，不构建文本节点；热评条数会对该平台归零。
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
-- 普通解析的开场语只在富媒体流程中触发，且只有出现可发送媒体时才发送；如果已发送开场语但最终没有节点，会补发空结果说明。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
+- 普通解析的开场语按链接发送：每条通过触发、平台输出和频率限制的链接，在调用解析器前发送一次，不依赖最终结果是富媒体还是文本。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
 `message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 25 个平台开关默认开启（快手、微信、博客园、Twitter/X、GitHub 除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
@@ -799,7 +799,7 @@ metadata.proxy_url > ConfigManager.proxy.address
 
 - `ParserManager.parse_text()` 对去重后的链接并发解析。
 - Pixiv 等平台解析器使用 `Config.PARSER_MAX_CONCURRENT` 控制单平台解析并发，Pixiv 每个作品会依次请求元信息和分页图片接口。
-- `main.py` 在至少一条 metadata 启用富媒体输出时并发处理各条 metadata；普通开场语由锁保护的一次性回调按首个可发送媒体触发，ZIP 流程使用独立的打包文本但共享开关。
+- `main.py` 在至少一条 metadata 启用富媒体输出时并发处理各条 metadata；普通开场语在解析前按已接受的链接逐条发送，ZIP 流程使用独立的打包文本但共享开关。
 - `DownloadManager` 使用实例级 `_download_semaphore` 限制所有本地媒体下载总并发。
 - Range 下载在严格能力探测后使用分片级 semaphore；服务器忽略 Range 时不会读取 N 份完整正文。
 - DASH 音视频子流并发下载。

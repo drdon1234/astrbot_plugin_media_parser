@@ -53,7 +53,7 @@ from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.12.2",
+    "1.12.3",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -719,6 +719,33 @@ class VideoParserPlugin(Star):
                     files.append(path_text)
         return files
 
+    async def _send_opening_message(
+        self,
+        event: AstrMessageEvent,
+        content: str,
+        link: str,
+    ) -> bool:
+        """为一个已接受的解析链接发送开场语。"""
+        if not self.config_manager.message.opening.enabled:
+            if self.config_manager.admin.debug_mode:
+                self.logger.debug(f"开场语未发送，配置已关闭: {link}")
+            return False
+        msg_text = str(content or "").strip()
+        if not msg_text:
+            if self.config_manager.admin.debug_mode:
+                self.logger.debug(f"开场语未发送，内容为空: {link}")
+            return False
+        try:
+            await event.send(event.plain_result(msg_text))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.logger.warning(f"发送开场语失败: {link}, 错误: {exc}")
+            return False
+        if self.config_manager.admin.debug_mode:
+            self.logger.debug(f"已为解析链接发送开场语: {link}")
+        return True
+
     async def _process_and_send_metadata(
         self,
         *,
@@ -760,16 +787,11 @@ class VideoParserPlugin(Star):
                 async with opening_lock:
                     if opening_sent:
                         return
-                    msg_text = str(opening_text or "").strip()
-                    if not msg_text:
-                        return
-                    try:
-                        await event.send(event.plain_result(msg_text))
-                        opening_sent = True
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        self.logger.warning(f"发送开场语失败: {exc}")
+                    opening_sent = await self._send_opening_message(
+                        event,
+                        opening_text,
+                        "ZIP归档",
+                    )
 
             should_process_rich_media = any(
                 bool(metadata.get("_enable_rich_media", True))
@@ -786,7 +808,9 @@ class VideoParserPlugin(Star):
                             session,
                             metadata,
                             proxy_addr=cfg.proxy.address,
-                            on_sendable_media=send_opening_once,
+                            on_sendable_media=(
+                                send_opening_once if zip_requested else None
+                            ),
                             video_cover_only=(False if zip_requested else None),
                         )
                     except asyncio.CancelledError:
@@ -1202,6 +1226,14 @@ class VideoParserPlugin(Star):
                     )
                 )
             return
+
+        if not zip_requested:
+            for link, _parser in links_with_parser:
+                await self._send_opening_message(
+                    event,
+                    cfg.message.opening.content,
+                    link,
+                )
 
         if cfg.admin.debug_mode:
             self.logger.debug(
