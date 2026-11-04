@@ -142,17 +142,25 @@ class TwitterParser(BaseVideoParser):
                 actual_id = url_match.group(1) if url_match else ""
             if actual_id != str(expected_tweet_id):
                 raise FxTwitterTweetUnavailableError("FxTwitter响应不是请求的目标推文")
-        tweet_text = self._twitter_text(tweet)
+        article = tweet.get("article")
+        article_text = self._fxtwitter_article_text(article)
+        tweet_text = article_text or self._twitter_text(tweet)
         author_info = tweet.get("author", {})
         author = self._fxtwitter_author(author_info)
         timestamp = self._parse_twitter_date(tweet.get("created_at"))
         quote = self._extract_fxtwitter_quote(tweet.get("quote"))
         desc = self._build_tweet_desc(tweet_text, quote)
+        article_title = (
+            str(article.get("title") or "").strip()
+            if isinstance(article, dict)
+            else ""
+        )
 
         media_urls = {
             "images": [],
             "videos": [],
-            "title": f"{author} 的推文" if author else "Twitter 推文",
+            "title": article_title
+            or (f"{author} 的推文" if author else "Twitter 推文"),
             "text": desc,
             "author": self._combine_parenthetical(author, quote.get("author", "")),
             "timestamp": self._combine_parenthetical(
@@ -174,6 +182,24 @@ class TwitterParser(BaseVideoParser):
                     }
                 )
         return media_urls
+
+    @staticmethod
+    def _fxtwitter_article_text(article: Any) -> str:
+        """按原顺序提取 FxTwitter Article 正文块。"""
+        if not isinstance(article, dict):
+            return ""
+        content = article.get("content")
+        blocks = content.get("blocks") if isinstance(content, dict) else None
+        if not isinstance(blocks, list):
+            return ""
+        paragraphs = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            text = str(block.get("text") or "").strip()
+            if text:
+                paragraphs.append(text)
+        return "\n\n".join(paragraphs)
 
     @staticmethod
     def _twitter_text(tweet: Dict[str, Any]) -> str:

@@ -1048,6 +1048,7 @@ GraphQL 响应嵌套较深且路径不固定，解析器递归查找带有 tweet
 - 图片取原图地址。
 - 视频与动图从 variants 中选择较高质量的 MP4，并设置 `video_force_download`。
 - 引用推文作为正文补充保留。
+- X Article 从 `tweet.article.title` 提取标题，按 `tweet.article.content.blocks` 原顺序拼接非空文本作为正文；空的原子块跳过。Article 内容存在时不把推文中的短链接误当作正文。
 
 没有图片和视频但有正文的推文同样视为解析成功。
 
