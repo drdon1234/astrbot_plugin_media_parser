@@ -26,6 +26,8 @@ class Config:
     
     DOWNLOAD_MANAGER_MAX_CONCURRENT = 5
     PARSER_MAX_CONCURRENT = 10
+
+    VIDEO_DURATION_LIMIT_REPLY = "视频太长了你自己看去"
     
     PLUGIN_NAME = "astrbot_plugin_media_parser"
     CACHE_DIR_NAME = "cache"
