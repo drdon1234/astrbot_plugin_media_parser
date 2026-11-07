@@ -304,6 +304,21 @@ class OpeningMessageConfig:
 
 
 @dataclass
+class ReactionMessageConfig:
+    """识别链接后对原消息回应表情的配置。
+
+    Attributes:
+        enabled: 是否启用表情回应。
+        emoji_ids: 可使用的表情 ID 列表。
+        strategy: 随机一个或按列表依次回应。
+    """
+
+    enabled: bool = False
+    emoji_ids: List[int] = field(default_factory=lambda: [127827])
+    strategy: str = "随机"
+
+
+@dataclass
 class AggregationConfig:
     mode: str = AGGREGATION_MODE_NONE
     image_threshold: int = 3
@@ -406,6 +421,7 @@ class HotCommentConfig:
 @dataclass
 class MessageConfig:
     opening: OpeningMessageConfig = field(default_factory=OpeningMessageConfig)
+    reaction: ReactionMessageConfig = field(default_factory=ReactionMessageConfig)
     aggregation: AggregationConfig = field(default_factory=AggregationConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     media_display: MediaDisplayConfig = field(default_factory=MediaDisplayConfig)
@@ -691,6 +707,7 @@ class ConfigManager:
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
         opening = self._as_dict(message_raw.get("opening"))
+        reaction = self._as_dict(message_raw.get("reaction"))
         aggregation = self._as_dict(message_raw.get("packing"))
         archive = self._as_dict(message_raw.get("archive"))
         text_metadata = self._as_dict(message_raw.get("text_metadata"))
@@ -704,6 +721,21 @@ class ConfigManager:
             hot_count = 0
 
         self.message = MessageConfig(
+            reaction=ReactionMessageConfig(
+                enabled=self._parse_bool(
+                    reaction.get("enable", False),
+                    False,
+                    "message.reaction.enable",
+                ),
+                emoji_ids=self._parse_reaction_emoji_ids(
+                    reaction.get("emoji_ids", [127827])
+                ),
+                strategy=(
+                    "顺序循环"
+                    if str(reaction.get("strategy", "随机")).strip() == "顺序循环"
+                    else "随机"
+                ),
+            ),
             opening=OpeningMessageConfig(
                 enabled=self._parse_bool(
                     opening.get("enable", True),
@@ -1651,6 +1683,20 @@ class ConfigManager:
             return max(0, int(value))
         except (OverflowError, TypeError, ValueError):
             return max(0, int(default))
+
+    @classmethod
+    def _parse_reaction_emoji_ids(cls, values: Any) -> List[int]:
+        """按参考插件保留前五项中的有效正整数表情 ID。"""
+        if not isinstance(values, list):
+            return []
+        emoji_ids: List[int] = []
+        for value in values[:5]:
+            if isinstance(value, bool):
+                continue
+            emoji_id = cls._parse_non_negative_int(value, 0)
+            if emoji_id > 0 and emoji_id not in emoji_ids:
+                emoji_ids.append(emoji_id)
+        return emoji_ids
 
     @staticmethod
     def _coerce_bool(value: Any) -> Optional[bool]:
