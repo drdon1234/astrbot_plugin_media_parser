@@ -77,6 +77,7 @@ class VideoParserPlugin(Star):
 
         self.download_manager = DownloadManager(
             max_video_size_mb=cfg.download.max_video_size_mb,
+            max_video_duration_seconds=cfg.download.max_video_duration_seconds,
             max_audio_size_mb=cfg.download.max_audio_size_mb,
             large_video_threshold_mb=cfg.download.large_video_threshold_mb,
             cache_dir=cfg.download.cache_dir,
@@ -1266,6 +1267,27 @@ class VideoParserPlugin(Star):
                     )
                 return
             self._apply_output_flags(metadata_list)
+            if not zip_requested:
+                remaining_metadata = []
+                for metadata in metadata_list:
+                    if (
+                        not metadata.get("error")
+                        and metadata.get("_enable_rich_media", True)
+                        and self.download_manager.get_video_duration_skip_reason(metadata)
+                    ):
+                        result, = await asyncio.gather(
+                            event.send(event.plain_result(Config.VIDEO_DURATION_LIMIT_REPLY)),
+                            return_exceptions=True,
+                        )
+                        if isinstance(result, asyncio.CancelledError):
+                            raise result
+                        if isinstance(result, Exception):
+                            self.logger.warning(f"视频时长超限提示发送失败：{result}")
+                    else:
+                        remaining_metadata.append(metadata)
+                metadata_list = remaining_metadata
+                if not metadata_list:
+                    return
             if zip_requested:
                 # 归档是独立导出能力，不继承聊天展示的仅文本/仅媒体开关。
                 for metadata in metadata_list:

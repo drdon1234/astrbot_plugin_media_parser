@@ -971,6 +971,13 @@
                 "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；填 0 不限制。",
                 "default": 1000.0
             },
+            "max_video_duration_seconds": {
+                "description": "视频时长上限（秒）",
+                "type": "int",
+                "hint": "默认 0 不限制，推荐设置 300 秒。单视频结果已知时长超过上限时不下载、不直发，直接回复“视频太长了你自己看去”；未知时长或多视频结果继续原流程。仅发送封面和独立音频不受此项限制。",
+                "default": 0,
+                "min": 0
+            },
             "max_audio_size_mb": {
                 "description": "音频大小上限（MB）",
                 "type": "float",
