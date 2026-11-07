@@ -22,6 +22,7 @@
 - 闲鱼：支持 视频 / 图片 / 文本 / 热评；覆盖短链、H5 商品页和 PC 商品页。
 - 今日头条：支持 视频 / 图片 / 文本 / 热评；覆盖文章、微头条、视频、短链跳转页和 `message.meta.news.jumpUrl` 小程序卡片。
 - 小黑盒：支持 视频 / 图片 / 文本 / 热评；覆盖游戏详情页和 BBS/link 帖子。
+- 酷安：支持 图片 / 文本；匿名客户端签名读取公开帖子与图文长文，按正文块保留原图顺序。
 - 雪球：支持 视频 / 图片 / 文本 / 热评；覆盖普通帖、长文和转发帖，先申请访客令牌再走 `api.xueqiu.com` 详情接口。
 - 微信：支持 视频 / 图片 / 文本；公众号文章匿名提取正文和图片；视频号短链通过腾讯元宝 Cookie 换取 `token/eid`，预览接口返回视频直链与封面。
 - 知乎：支持 图片 / 文本 / 热评；覆盖指定回答和专栏文章，回答使用匿名 API，文章使用匿名访客 `d_c0` 与接口签名。
@@ -90,6 +91,7 @@ astrbot_plugin_media_parser/
     │       ├── xianyu.py            # 闲鱼商品页解析器
     │       ├── toutiao.py           # 今日头条文章/微头条/视频解析器
     │       ├── xiaoheihe.py         # 小黑盒游戏详情/BBS 帖子解析器
+    │       ├── coolapk/              # 酷安子包，公开帖子图文与客户端签名
     │       ├── xueqiu.py            # 雪球帖子/长文解析器
     │       ├── wechat/              # 微信子包
     │       │   ├── parser.py        # 公众号与视频号路由、HTTP 请求
@@ -140,7 +142,7 @@ astrbot_plugin_media_parser/
     │   ├── node_builder.py          # Plain/Image/Video/Record/File 节点构建
     │   ├── font_manager.py          # 中文字体校验、下载与缓存
     │   ├── text_renderer.py         # 文本元数据 PNG 渲染
-    │   ├── readme_renderer.py       # README 网页正文截图与分片
+    │   ├── readme_renderer.py       # 仓库 README 截图、分片
     │   ├── sender.py                # 聚合/独立/文件发送
     │   └── archive_builder.py       # 解析结果 ZIP 归档
     ├── translation/
@@ -175,6 +177,8 @@ astrbot_plugin_media_parser/
 
 Gitee、GitHub 和 GitLab 的仓库根结果提供文本概况以及 `readme_url` / `readme_selector` 截图请求；选择器由各平台模块维护，`ParserManager` 校验目标与当前规范仓库地址一致。`仅文本` 不启动浏览器，`仅富媒体` 只发送 README 截图。仓库概况及 Issue 正文仍复用文本元数据可见性、长度限制和图片渲染链路。Gitee、GitLab 的评论开关仅作用于 Issue，Issue 不请求 README；未知赞数省略。
 
+酷安通过匿名客户端 V3 签名读取帖子 JSON，规范化 `/feed/{id}` 地址并保留 `s` 分享参数；链接按帖子 ID 去重，同帖裸链与分享链接并存时优先使用后者，保留首次位置。运行时设备码持久化于配置管理器提供的数据目录，不保存 Cookie；文件编码损坏时记录原因并重新生成、保存，文件不可读写时沿用一次性设备码处理并记录警告，避免阻断插件初始化。解析器验证帖子 ID 并拒绝摘要，从 `message_raw_output` 或完整 `message` 提取正文与原图，以 `content_blocks` 保留图文顺序；普通动态以正文首行作为标题。接口签名不传递给图片下载，图片请求使用浏览器 User-Agent 与酷安 Referer。酷安结果不含 `readme_url` 或 `readme_selector`，不会启动浏览器，其他平台的截图链路不变。
+
 下载阶段在独立单并发限制下调用 `readme_renderer.py`，使用 Playwright Chromium 截取正文区域。主流程将 `message.text_metadata.render_paginate` 传给下载管理器的 `readme_paginate`，与文本图片共用默认关闭的分页开关；关闭时输出单张长图，开启时按不超过 1800 像素分片，尽量在段落边界截断。两种模式均保留 21600 像素总长上限，超过时在底部说明内容截断。截图按顺序插入本地图片及 `file_paths` 中，音频文件索引相应后移；沿用文件 Token、中转、ZIP 与已标记缓存目录清理。网页 URL 仅作为来源保留，模式只能为成功的 `local` 或失败的 `skip`，不得作为图片直链发送。截图失败写入图片跳过原因且保留仓库概况；仅富媒体模式也显示失败原因。浏览器未安装不会触发运行时下载安装，任务取消或超时会释放浏览器并清理本次生成文件。
 
 评论请求复用对应平台已有的签名、访客会话和代理设置；优先热门或精选列表，也允许默认排序、时间排序评论及游戏评价。评论来源、排序和读取范围由各平台决定，分页请求设有上限；接口失败保留正文及已取得评论，取消操作向上传播。`hot_comments` 中的 `likes` 可以是精确整数或平台提供的缩写字符串；未知时省略，消息节点显示 `-`。
@@ -192,6 +196,10 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 `message.packing.thresholds.image_count`、`video_count`、`node_count` 均为非负整数。阈值为 `0` 时表示不按该项触发聚合。
 
 `message.text_metadata.quote_user_message` 控制非聚合发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
+
+酷安默认“全部发送”；新增配置只在缺省时使用默认值，不迁移或覆盖既有配置值。
+
+本地调试由 `main()` 将实际缓存目录传入 `create_local_parsers()`，构造参数注入阶段用 `Config.build_runtime_dir(cache_dir, "coolapk")` 提供酷安设备码目录，避免依赖解析器的 Docker 默认路径。设备码仍由酷安签名模块生成并持久化，重建本地解析器时复用同一标识。
 
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
 
