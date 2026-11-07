@@ -193,6 +193,8 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.text_metadata.quote_user_message` 控制非聚合发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
 
+表情回应默认关闭；新增配置只在缺省时使用默认值，不迁移或覆盖既有配置值。
+
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
@@ -251,7 +253,7 @@ cache/runtime_manager/bilibili/cookie.json
 
 - `TriggerConfig`：`auto_parse`、`keywords`、`reply_trigger`，提供 `should_parse()` 和 `has_keyword()`。
 - `ParserOutputConfig`：各平台输出模式，负责解析器启用、文本/富媒体输出判定。
-- `MessageConfig`：消息输出域，由 `OpeningMessageConfig`、`AggregationConfig`、`ArchiveConfig`、`MediaDisplayConfig`、`TextMetadataConfig` 和 `HotCommentConfig` 组成。
+- `MessageConfig`：消息输出域，由 `OpeningMessageConfig`、`ReactionMessageConfig`、`AggregationConfig`、`ArchiveConfig`、`MediaDisplayConfig`、`TextMetadataConfig` 和 `HotCommentConfig` 组成。
 - `PermissionConfig`：管理员、白名单、黑名单，提供 `check()`。
 - `DownloadConfig`：大小限制、缓存目录、缓存可用性、下载并发。
 - `ParseRateLimitConfig`：同链接/同用户解析频率限制、时间窗和持久化记录文件。
@@ -473,6 +475,10 @@ parser_output.has_any_output()
 ParseRecordManager.filter_links()
   ├─ 同标准链接或同用户超出时间窗限制 -> 跳过对应链接
   └─ 允许解析 -> 写入本次解析尝试记录
+  ↓
+按 message.reaction 对原 OneBot 群消息回应一次，随机一个或按列表依次回应
+  ├─ 禁用、空列表、非 OneBot 群消息或无协议消息 ID -> 跳过回应
+  └─ 调用 set_msg_emoji_like，每次最多等待 5 秒；协议错误不阻断解析，取消向上传播
   ↓
 创建 aiohttp.ClientSession
   ↓
