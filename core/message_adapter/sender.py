@@ -9,7 +9,12 @@ from astrbot.api.message_components import File, Nodes, Plain, Image, Node, Reco
 
 from ..logger import logger
 
+from ..constants import Config
+from ..message_text import split_message_text
 from .node_builder import is_pure_image_gallery
+
+
+MAX_FORWARD_TEXT_LENGTH = 1000
 
 
 class MessageDeliveryError(RuntimeError):
@@ -18,6 +23,47 @@ class MessageDeliveryError(RuntimeError):
 
 class MessageSender:
     """消息发送器，封装统一的私聊/群聊发送接口。"""
+
+    @staticmethod
+    def _message_contents(
+        nodes: List[Any], preserve_order: bool, image_send_mode: str
+    ) -> List[List[Any]]:
+        """按图片发送方式分组，正文穿插时不跨文字合并图片。"""
+        ordered = [node for node in nodes if node is not None]
+        is_gallery = not preserve_order and is_pure_image_gallery(ordered)
+        if is_gallery:
+            ordered = [node for node in ordered if isinstance(node, Plain)] + [
+                node for node in ordered if isinstance(node, Image)
+            ]
+        group_images = image_send_mode == Config.IMAGE_SEND_MODE_GROUP or (
+            image_send_mode == Config.IMAGE_SEND_MODE_ORIGINAL and is_gallery
+        )
+        contents: List[List[Any]] = []
+        for node in ordered:
+            if (
+                group_images
+                and isinstance(node, Image)
+                and contents
+                and isinstance(contents[-1][0], Image)
+            ):
+                contents[-1].append(node)
+            else:
+                contents.append([node])
+        return contents
+
+    @staticmethod
+    def _build_forward_nodes(
+        content: List[Any], sender_name: str, sender_id: Any
+    ) -> List[Node]:
+        """长文拆为多个转发节点，保留全文、换行和同一合并卡片。"""
+        if len(content) == 1 and isinstance(content[0], Plain):
+            return [
+                Node(name=sender_name, uin=str(sender_id), content=[Plain(chunk)])
+                for chunk in split_message_text(
+                    content[0].text, max_length=MAX_FORWARD_TEXT_LENGTH
+                )
+            ]
+        return [Node(name=sender_name, uin=str(sender_id), content=content)]
 
     @staticmethod
     def _image_from_reference(reference: str) -> Image:
@@ -34,17 +80,16 @@ class MessageSender:
         meta = link_metadata[link_idx]
         return meta if isinstance(meta, dict) else {}
 
-    async def _send_single_node(
+    async def _send_content(
         self,
         event: AstrMessageEvent,
-        node: Any,
+        content: List[Any],
         *,
         quote_message_id: str = "",
     ) -> None:
-        content = []
+        """发送一条消息的组件，引用信息仅添加到本次发送的副本。"""
         if quote_message_id:
-            content.append(Reply(id=quote_message_id))
-        content.append(node)
+            content = [Reply(id=quote_message_id), *content]
         await event.send(event.chain_result(content))
 
     @staticmethod
@@ -62,14 +107,18 @@ class MessageSender:
             raise MessageDeliveryError(
                 f"{label}全部发送失败（{len(errors)}项）"
             ) from errors[0]
-        try:
-            await event.send(
+        result, = await asyncio.gather(
+            event.send(
                 event.plain_result(
                     f"{label}有 {len(errors)} 项发送失败，其余内容已发送。"
                 )
-            )
-        except Exception as exc:
-            logger.warning(f"发送部分失败提示失败: {exc}")
+            ),
+            return_exceptions=True,
+        )
+        if isinstance(result, asyncio.CancelledError):
+            raise result
+        if isinstance(result, Exception):
+            logger.warning(f"发送部分失败提示失败: {result}")
 
     def get_sender_info(self, event: AstrMessageEvent) -> tuple:
         """获取发送者信息
@@ -98,7 +147,8 @@ class MessageSender:
         sender_id: Any,
         large_video_threshold_mb: float = 0.0,
         text_metadata_images: Optional[List[str]] = None,
-    ):
+        image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL,
+    ) -> None:
         """使用 Nodes 合并转发发送结果。
 
         Args:
@@ -108,6 +158,7 @@ class MessageSender:
             sender_id: 发送者ID
             large_video_threshold_mb: 大视频阈值(MB)
             text_metadata_images: 已渲染的文本元数据图片路径或 Token URL，按页排列
+            image_send_mode: 相邻图片合为一条消息或逐张发送。
         """
         normal_metadata = [
             meta for meta in link_metadata if meta.get("is_normal", True)
@@ -148,60 +199,50 @@ class MessageSender:
         for reference in text_metadata_images or []:
             try:
                 rendered_images.append(self._image_from_reference(reference))
-            except Exception as exc:
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 expected += 1
                 errors.append(exc)
                 logger.warning(f"构建文本元数据图片节点失败: {exc}")
 
         if normal_link_nodes or rendered_images:
             flat_nodes = []
-            for rendered_image in rendered_images:
-                flat_nodes.append(
-                    Node(
-                        name=sender_name,
-                        uin=sender_id,
-                        content=[rendered_image],
-                    )
-                )
+            for content in self._message_contents(
+                rendered_images, True, image_send_mode
+            ):
+                flat_nodes.extend(self._build_forward_nodes(
+                    content, sender_name, sender_id
+                ))
             for link_idx, (link_nodes, preserve_order) in enumerate(normal_link_nodes):
-                if not preserve_order and is_pure_image_gallery(link_nodes):
-                    texts = [node for node in link_nodes if isinstance(node, Plain)]
-                    images = [node for node in link_nodes if isinstance(node, Image)]
-                    for text in texts:
-                        flat_nodes.append(
-                            Node(name=sender_name, uin=sender_id, content=[text])
-                        )
-                    if images:
-                        flat_nodes.append(
-                            Node(name=sender_name, uin=sender_id, content=images)
-                        )
-                else:
-                    for node in link_nodes:
-                        if node is not None:
-                            flat_nodes.append(
-                                Node(name=sender_name, uin=sender_id, content=[node])
-                            )
+                for content in self._message_contents(
+                    link_nodes, preserve_order, image_send_mode
+                ):
+                    flat_nodes.extend(self._build_forward_nodes(
+                        content, sender_name, sender_id
+                    ))
                 if link_idx < len(normal_link_nodes) - 1:
-                    flat_nodes.append(
-                        Node(
-                            name=sender_name, uin=sender_id, content=[Plain(separator)]
-                        )
-                    )
+                    flat_nodes.extend(self._build_forward_nodes(
+                        [Plain(separator)], sender_name, sender_id
+                    ))
             if flat_nodes:
                 expected += 1
-                try:
-                    await event.send(event.chain_result([Nodes(flat_nodes)]))
+                result, = await asyncio.gather(
+                    self._send_content(event, [Nodes(flat_nodes)]),
+                    return_exceptions=True,
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    errors.append(result)
+                    logger.warning(f"发送聚合消息失败: {result}")
+                else:
                     succeeded += 1
-                except Exception as exc:
-                    errors.append(exc)
-                    logger.warning(f"发送聚合消息失败: {exc}")
 
         # 语音与音频文件始终独立发送，不依赖客户端对转发内音频的支持。
         for node in audio_nodes:
             expected += 1
             # 适配器异常类型不固定，逐项收集发送结果，并保持发送顺序和取消传播。
             result, = await asyncio.gather(
-                self._send_single_node(event, node), return_exceptions=True
+                self._send_content(event, [node]), return_exceptions=True
             )
             if isinstance(result, asyncio.CancelledError):
                 raise result
@@ -220,6 +261,7 @@ class MessageSender:
                 event,
                 large_media_link_nodes,
                 large_video_threshold_mb,
+                image_send_mode=image_send_mode,
             )
             expected += large_expected
             succeeded += large_succeeded
@@ -238,6 +280,8 @@ class MessageSender:
         event: AstrMessageEvent,
         link_nodes_list: list,
         large_video_threshold_mb: float = 0.0,
+        *,
+        image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL,
     ) -> tuple[int, int, list[Exception]]:
         """发送大媒体结果（单独发送）
 
@@ -245,34 +289,47 @@ class MessageSender:
             event: 消息事件对象
             link_nodes_list: 链接节点列表
             large_video_threshold_mb: 大视频阈值(MB)
+            image_send_mode: 相邻图片合为一条消息或逐张发送。
+
+        Returns:
+            预期发送数量、成功数量和发送错误列表。
         """
         separator = "-------------------------------------"
         threshold_mb = (
             int(large_video_threshold_mb) if large_video_threshold_mb > 0 else 50
         )
         notice_text = f"⚠️ 链接中包含超过{threshold_mb}MB的视频时将单独发送所有媒体"
-        try:
-            await event.send(event.plain_result(notice_text))
-        except Exception as exc:
-            logger.warning(f"发送大媒体提示失败: {exc}")
+        result, = await asyncio.gather(
+            event.send(event.plain_result(notice_text)), return_exceptions=True
+        )
+        if isinstance(result, asyncio.CancelledError):
+            raise result
+        if isinstance(result, Exception):
+            logger.warning(f"发送大媒体提示失败: {result}")
         expected = 0
         succeeded = 0
         errors: list[Exception] = []
         for link_idx, link_nodes in enumerate(link_nodes_list):
-            for node in link_nodes:
-                if node is not None:
-                    expected += 1
-                    try:
-                        await event.send(event.chain_result([node]))
-                        succeeded += 1
-                    except Exception as e:
-                        errors.append(e)
-                        logger.warning(f"发送大媒体节点失败: {e}")
+            for content in self._message_contents(link_nodes, True, image_send_mode):
+                expected += 1
+                result, = await asyncio.gather(
+                    self._send_content(event, content), return_exceptions=True
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    errors.append(result)
+                    logger.warning(f"发送大媒体节点失败: {result}")
+                else:
+                    succeeded += 1
             if link_idx < len(link_nodes_list) - 1:
-                try:
-                    await event.send(event.plain_result(separator))
-                except Exception as e:
-                    logger.warning(f"发送分隔符失败: {e}")
+                result, = await asyncio.gather(
+                    event.send(event.plain_result(separator)), return_exceptions=True
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    logger.warning(f"发送分隔符失败: {result}")
         return expected, succeeded, errors
 
     async def send_individual_results(
@@ -284,6 +341,7 @@ class MessageSender:
         quote_user_message: bool = False,
         quote_message_id: str = "",
         text_metadata_images: Optional[List[str]] = None,
+        image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL,
     ) -> None:
         """发送非聚合结果（逐项独立发送）。
 
@@ -294,29 +352,45 @@ class MessageSender:
             quote_user_message: 文本元数据是否引用对应的用户消息
             quote_message_id: 被引用的用户消息 ID
             text_metadata_images: 已渲染的文本元数据图片路径或 Token URL，按页排列
+            image_send_mode: 相邻图片合为一条消息或逐张发送。
         """
         separator = "-------------------------------------"
         quote_message_id = str(quote_message_id or "").strip()
         expected = 0
         succeeded = 0
         errors: list[Exception] = []
-        for page_index, reference in enumerate(text_metadata_images or []):
-            expected += 1
+        rendered_images = []
+        for reference in text_metadata_images or []:
             try:
-                image_node = self._image_from_reference(reference)
-                await self._send_single_node(
+                rendered_images.append(self._image_from_reference(reference))
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                expected += 1
+                errors.append(exc)
+                logger.warning(f"构建文本元数据图片节点失败: {exc}")
+        for group_index, content in enumerate(self._message_contents(
+            rendered_images, True, image_send_mode
+        )):
+            expected += 1
+            # 与音频发送一致，收集适配器的不同异常类型，并向上传播取消。
+            result, = await asyncio.gather(
+                self._send_content(
                     event,
-                    image_node,
+                    content,
                     quote_message_id=(
                         quote_message_id
-                        if quote_user_message and page_index == 0
+                        if quote_user_message and group_index == 0
                         else ""
                     ),
-                )
+                ),
+                return_exceptions=True,
+            )
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                errors.append(result)
+                logger.warning(f"发送文本元数据图片失败: {result}")
+            else:
                 succeeded += 1
-            except Exception as exc:
-                errors.append(exc)
-                logger.warning(f"发送文本元数据图片失败: {exc}")
 
         non_empty_indexes = [
             index for index, link_nodes in enumerate(all_link_nodes) if link_nodes
@@ -326,59 +400,38 @@ class MessageSender:
                 continue
             meta = self._metadata_for_link(link_metadata, link_idx)
             metadata_text_node = meta.get("metadata_text_node")
-            if not meta.get("preserve_order") and is_pure_image_gallery(link_nodes):
-                texts = [node for node in link_nodes if isinstance(node, Plain)]
-                images = [node for node in link_nodes if isinstance(node, Image)]
-                for text in texts:
-                    expected += 1
-                    try:
-                        await self._send_single_node(
-                            event,
-                            text,
-                            quote_message_id=(
-                                quote_message_id
-                                if quote_user_message and text is metadata_text_node
-                                else ""
-                            ),
-                        )
-                        succeeded += 1
-                    except Exception as exc:
-                        errors.append(exc)
-                        logger.warning(f"发送文本节点失败: {exc}")
-                if images:
-                    expected += 1
-                    try:
-                        await event.send(event.chain_result(images))
-                        succeeded += 1
-                    except Exception as exc:
-                        errors.append(exc)
-                        logger.warning(f"发送图片组失败: {exc}")
-            else:
-                for node in link_nodes:
-                    if node is not None:
-                        expected += 1
-                        try:
-                            await self._send_single_node(
-                                event,
-                                node,
-                                quote_message_id=(
-                                    quote_message_id
-                                    if (
-                                        quote_user_message
-                                        and node is metadata_text_node
-                                    )
-                                    else ""
-                                ),
-                            )
-                            succeeded += 1
-                        except Exception as e:
-                            errors.append(e)
-                            logger.warning(f"发送节点失败: {e}")
+            for content in self._message_contents(
+                link_nodes, bool(meta.get("preserve_order")), image_send_mode
+            ):
+                expected += 1
+                result, = await asyncio.gather(
+                    self._send_content(
+                        event,
+                        content,
+                        quote_message_id=(
+                            quote_message_id
+                            if quote_user_message and len(content) == 1
+                            and content[0] is metadata_text_node
+                            else ""
+                        ),
+                    ),
+                    return_exceptions=True,
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    errors.append(result)
+                    logger.warning(f"发送节点失败: {result}")
+                else:
+                    succeeded += 1
             if link_idx in non_empty_indexes[:-1]:
-                try:
-                    await event.send(event.plain_result(separator))
-                except Exception as exc:
-                    logger.warning(f"发送分隔符失败: {exc}")
+                result, = await asyncio.gather(
+                    event.send(event.plain_result(separator)), return_exceptions=True
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    logger.warning(f"发送分隔符失败: {result}")
         await self._finish_best_effort_delivery(
             event,
             label="解析结果",
@@ -396,7 +449,15 @@ class MessageSender:
         sender_name: str,
         sender_id: Any,
     ) -> None:
-        """发送独立翻译节点。"""
+        """发送独立翻译节点。
+
+        Args:
+            event: 消息事件对象。
+            translation_link_nodes: 各条链接的翻译节点列表。
+            should_aggregate_nodes: 是否使用合并转发。
+            sender_name: 合并转发节点的发送者名称。
+            sender_id: 合并转发节点的发送者 ID。
+        """
         non_empty = [
             (idx, nodes) for idx, nodes in enumerate(translation_link_nodes) if nodes
         ]
@@ -408,23 +469,23 @@ class MessageSender:
             for _, nodes in non_empty:
                 for node in nodes:
                     if node is not None:
-                        flat_nodes.append(
-                            Node(
-                                name=sender_name,
-                                uin=sender_id,
-                                content=[node],
-                            )
-                        )
+                        flat_nodes.extend(self._build_forward_nodes(
+                            [node], sender_name, sender_id
+                        ))
             if flat_nodes:
-                try:
-                    await event.send(event.chain_result([Nodes(flat_nodes)]))
-                except Exception as exc:
+                result, = await asyncio.gather(
+                    self._send_content(event, [Nodes(flat_nodes)]),
+                    return_exceptions=True,
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
                     await self._finish_best_effort_delivery(
                         event,
                         label="翻译结果",
                         expected=1,
                         succeeded=0,
-                        errors=[exc],
+                        errors=[result],
                     )
             return
 
@@ -437,17 +498,24 @@ class MessageSender:
                 if node is None:
                     continue
                 expected += 1
-                try:
-                    await self._send_single_node(event, node)
+                result, = await asyncio.gather(
+                    self._send_content(event, [node]), return_exceptions=True
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    errors.append(result)
+                    logger.warning(f"发送翻译节点失败: {result}")
+                else:
                     succeeded += 1
-                except Exception as e:
-                    errors.append(e)
-                    logger.warning(f"发送翻译节点失败: {e}")
             if item_idx < len(non_empty) - 1:
-                try:
-                    await event.send(event.plain_result(separator))
-                except Exception as exc:
-                    logger.warning(f"发送翻译分隔符失败: {exc}")
+                result, = await asyncio.gather(
+                    event.send(event.plain_result(separator)), return_exceptions=True
+                )
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, Exception):
+                    logger.warning(f"发送翻译分隔符失败: {result}")
         await self._finish_best_effort_delivery(
             event,
             label="翻译结果",
@@ -461,7 +529,12 @@ class MessageSender:
         event: AstrMessageEvent,
         archive_path: str,
     ) -> None:
-        """发送本地 ZIP 文件。"""
+        """发送本地 ZIP 文件。
+
+        Args:
+            event: 消息事件对象。
+            archive_path: 已生成的 ZIP 文件路径。
+        """
         try:
             from astrbot.api.message_components import File
         except ImportError as exc:

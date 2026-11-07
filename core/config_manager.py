@@ -342,6 +342,7 @@ class ArchiveConfig:
 class MediaDisplayConfig:
     video_cover_only: bool = False
     audio_send_mode: str = "语音"
+    image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL
     interleave_images: bool = False
 
 
@@ -753,6 +754,12 @@ class ConfigManager:
                 ),
             ),
             media_display=MediaDisplayConfig(
+                image_send_mode=(
+                    str(media_display.get("image_send_mode", "")).strip()
+                    if str(media_display.get("image_send_mode", "")).strip()
+                    in {Config.IMAGE_SEND_MODE_GROUP, Config.IMAGE_SEND_MODE_SINGLE}
+                    else Config.IMAGE_SEND_MODE_ORIGINAL
+                ),
                 audio_send_mode=(
                     "文件" if str(media_display.get("audio_send_mode", "语音")).strip() == "文件"
                     else "语音"
