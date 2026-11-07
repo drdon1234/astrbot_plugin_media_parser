@@ -53,6 +53,7 @@ PARSER_DISCOVERY_ORDER = (
     "xianyu",
     "toutiao",
     "xiaoheihe",
+    "coolapk",
     "xueqiu",
     "wechat",
     "zhihu",
@@ -152,6 +153,7 @@ def _build_local_parser_kwargs(
     *,
     use_proxy: bool,
     proxy_url: Optional[str],
+    cache_dir: str,
     cache_dir_available: bool,
     bilibili_cookie_runtime_file: str,
 ) -> Dict[str, Any]:
@@ -163,6 +165,7 @@ def _build_local_parser_kwargs(
         "yuanbao_cookie": os.environ.get("YUANBAO_COOKIE", "").strip(),
         "admin_assist_enabled": False,
         "credential_path": bilibili_cookie_runtime_file,
+        "runtime_dir": Config.build_runtime_dir(cache_dir, "coolapk"),
         "max_quality": 0,
         "hot_comment_count": 0,
         "use_proxy": bool(effective_proxy_url),
@@ -215,10 +218,22 @@ def create_local_parsers(
     *,
     use_proxy: bool,
     proxy_url: Optional[str],
+    cache_dir: str,
     cache_dir_available: bool,
     bilibili_cookie_runtime_file: str,
 ) -> List[BaseVideoParser]:
-    """创建本地调试解析器列表，新增平台解析器时自动纳入。"""
+    """创建本地调试解析器列表，新增平台解析器时自动纳入。
+
+    Args:
+        use_proxy: 是否启用本地请求代理。
+        proxy_url: 代理地址。
+        cache_dir: 本次调试选用的缓存目录，用于平台运行时数据。
+        cache_dir_available: 缓存目录是否可写。
+        bilibili_cookie_runtime_file: B 站鉴权运行时文件路径。
+
+    Returns:
+        成功创建的本地解析器列表。
+    """
     parsers = []
     for parser_class in discover_local_parser_classes():
         try:
@@ -226,6 +241,7 @@ def create_local_parsers(
                 parser_class,
                 use_proxy=use_proxy,
                 proxy_url=proxy_url,
+                cache_dir=cache_dir,
                 cache_dir_available=cache_dir_available,
                 bilibili_cookie_runtime_file=bilibili_cookie_runtime_file,
             )
@@ -711,6 +727,7 @@ async def main(
     parsers = create_local_parsers(
         use_proxy=use_proxy,
         proxy_url=proxy_url,
+        cache_dir=cache_dir,
         cache_dir_available=cache_dir_available,
         bilibili_cookie_runtime_file=bilibili_cookie_runtime_file,
     )

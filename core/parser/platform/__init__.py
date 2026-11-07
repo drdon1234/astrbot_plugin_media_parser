@@ -11,6 +11,7 @@ from .xiaohongshu import XiaohongshuParser
 from .xianyu import XianyuParser
 from .toutiao import ToutiaoParser
 from .xiaoheihe import XiaoheiheParser
+from .coolapk import CoolapkParser
 from .xueqiu import XueqiuParser
 from .wechat import WechatParser
 from .zhihu import ZhihuParser
@@ -45,6 +46,7 @@ __all__ = [
     'XianyuParser',
     'ToutiaoParser',
     'XiaoheiheParser',
+    'CoolapkParser',
     'XueqiuParser',
     'WechatParser',
     'ZhihuParser',
