@@ -220,6 +220,8 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ## 🙏 鸣谢
 
+- [astrbot_plugin_coolapk_card](https://github.com/w13630039663-bit/astrbot_plugin_coolapk_card) - 酷安客户端签名实现来源；移植部分保留 MIT 许可证。
+- [coolapk-desktop](https://github.com/daimiaopeng/coolapk-desktop) - 酷安签名算法与密码表来源；移植部分保留 MIT 许可证。
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - B站解析端点
 - [FxEmbed](https://github.com/FxEmbed/FxEmbed) - Twitter/X 解析服务
 - [ParseHub](https://github.com/z-mio/ParseHub) - 小黑盒 BBS 帖子解析方法
