@@ -97,12 +97,14 @@ OUTPUT_MODE_DISABLED = "关闭"
 OUTPUT_MODE_ALL = "全部发送"
 OUTPUT_MODE_TEXT_ONLY = "仅文本"
 OUTPUT_MODE_RICH_ONLY = "仅富媒体"
+OUTPUT_MODE_VIDEO_OR_POST = "视频直发 / 帖子图文"
 
 OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_DISABLED: (False, False),
     OUTPUT_MODE_ALL: (True, True),
     OUTPUT_MODE_TEXT_ONLY: (True, False),
     OUTPUT_MODE_RICH_ONLY: (False, True),
+    OUTPUT_MODE_VIDEO_OR_POST: (True, True),
 }
 
 AGGREGATION_MODE_NONE = "不聚合"
@@ -292,7 +294,12 @@ class ParserOutputConfig:
                 continue
             seen.add(key)
             if key in self.modes:
-                return self._flags_for_mode(self.modes[key])
+                mode = self.modes[key]
+                if mode == OUTPUT_MODE_VIDEO_OR_POST and any(
+                    metadata.get("video_urls") or []
+                ):
+                    return False, True
+                return self._flags_for_mode(mode)
         return OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL]
 
 
@@ -342,6 +349,7 @@ class ArchiveConfig:
 class MediaDisplayConfig:
     video_cover_only: bool = False
     audio_send_mode: str = "语音"
+    image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL
     interleave_images: bool = False
 
 
@@ -753,6 +761,12 @@ class ConfigManager:
                 ),
             ),
             media_display=MediaDisplayConfig(
+                image_send_mode=(
+                    str(media_display.get("image_send_mode", "")).strip()
+                    if str(media_display.get("image_send_mode", "")).strip()
+                    in {Config.IMAGE_SEND_MODE_GROUP, Config.IMAGE_SEND_MODE_SINGLE}
+                    else Config.IMAGE_SEND_MODE_ORIGINAL
+                ),
                 audio_send_mode=(
                     "文件" if str(media_display.get("audio_send_mode", "语音")).strip() == "文件"
                     else "语音"

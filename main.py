@@ -949,6 +949,7 @@ class VideoParserPlugin(Star):
                     sender_id,
                     cfg.download.large_video_threshold_mb,
                     text_metadata_images=text_metadata_images,
+                    image_send_mode=cfg.message.media_display.image_send_mode,
                 )
             else:
                 await self.message_sender.send_individual_results(
@@ -958,6 +959,7 @@ class VideoParserPlugin(Star):
                     quote_user_message=(cfg.message.text_metadata.quote_user_message),
                     quote_message_id=quote_source_message_id,
                     text_metadata_images=text_metadata_images,
+                    image_send_mode=cfg.message.media_display.image_send_mode,
                 )
 
             try:
