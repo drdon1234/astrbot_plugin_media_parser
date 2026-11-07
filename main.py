@@ -720,6 +720,9 @@ class VideoParserPlugin(Star):
                     files.append(path_text)
         return files
 
+    # 表情回应参考 Acacia 的 astrbot_plugin_link_resolver，并适配本项目配置与 OneBot 接口。
+    # 来源：https://github.com/vacacia/astrbot_plugin_link_resolver（AGPL-3.0）。
+    # 适配修改：ssabv，2026-11-08。
     @staticmethod
     def _extract_reaction_message_id(event: AstrMessageEvent) -> Optional[int]:
         """优先从原始事件读取协议消息 ID，兼容卡片消息。"""
