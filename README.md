@@ -215,6 +215,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ## 🙏 鸣谢
 
+- [astrbot_plugin_link_resolver](https://github.com/vacacia/astrbot_plugin_link_resolver) - 合并转发长文分段的参考实现（AGPL-3.0）。
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - B站解析端点
 - [FxEmbed](https://github.com/FxEmbed/FxEmbed) - Twitter/X 解析服务
 - [ParseHub](https://github.com/z-mio/ParseHub) - 小黑盒 BBS 帖子解析方法
