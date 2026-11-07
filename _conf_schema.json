@@ -721,6 +721,31 @@
                     }
                 }
             },
+            "reaction": {
+                "description": "发送行为：识别后表情回应",
+                "type": "object",
+                "hint": "识别到可处理的链接或卡片后，对原群消息点表情，提示开始处理；需要 NapCat 等支持该接口的 OneBot 协议端。",
+                "items": {
+                    "enable": {
+                        "description": "识别后表情回应",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "emoji_ids": {
+                        "description": "回应表情 ID 列表（最多 5 个）",
+                        "type": "list",
+                        "hint": "空列表不回应；默认草莓=127827。常用：棒棒糖=147、OK=124、赞=76、爱心=66。",
+                        "default": [127827]
+                    },
+                    "strategy": {
+                        "description": "回应策略",
+                        "type": "string",
+                        "hint": "随机：每条消息抽一个；顺序循环：对同一消息按列表依次回应，间隔 0.5 秒。",
+                        "options": ["随机", "顺序循环"],
+                        "default": "随机"
+                    }
+                }
+            },
             "opening": {
                 "description": "发送行为：开场语",
                 "type": "object",

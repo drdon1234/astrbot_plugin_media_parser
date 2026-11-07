@@ -198,6 +198,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ## 📝 注意事项
 
+- **识别后表情回应**：默认关闭，可在 `消息输出 → 发送行为：识别后表情回应` 开启，并配置最多 5 个表情 ID 和随机／顺序循环策略。通过触发与频率限制的链接、卡片会在开始处理时对原群消息添加表情；需要 NapCat 等支持该接口的 OneBot 协议端，失败不影响解析。
 - **TikTok / YouTube**：受地区和风控影响较明显，必要时请开启代理
 - **小黑盒 / Steam**：游戏预览视频下载速度不佳（Steam CDN）时建议启用代理
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境
@@ -211,6 +212,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ## 🙏 鸣谢
 
+- [astrbot_plugin_link_resolver](https://github.com/vacacia/astrbot_plugin_link_resolver) - 识别后表情回应的参考实现（AGPL-3.0）。
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - B站解析端点
 - [FxEmbed](https://github.com/FxEmbed/FxEmbed) - Twitter/X 解析服务
 - [ParseHub](https://github.com/z-mio/ParseHub) - 小黑盒 BBS 帖子解析方法

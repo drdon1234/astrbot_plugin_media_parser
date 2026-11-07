@@ -5,6 +5,7 @@ import copy
 import tempfile
 import uuid
 from pathlib import Path
+from random import choice
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -719,6 +720,76 @@ class VideoParserPlugin(Star):
                     files.append(path_text)
         return files
 
+    # 表情回应参考 Acacia 的 astrbot_plugin_link_resolver，并适配本项目配置与 OneBot 接口。
+    # 来源：https://github.com/vacacia/astrbot_plugin_link_resolver（AGPL-3.0）。
+    # 适配修改：ssabv，2026-11-08。
+    @staticmethod
+    def _extract_reaction_message_id(event: AstrMessageEvent) -> Optional[int]:
+        """优先从原始事件读取协议消息 ID，兼容卡片消息。"""
+        raw = getattr(event.message_obj, "raw_message", None)
+        raw_id = (
+            raw.get("message_id")
+            if isinstance(raw, dict)
+            else getattr(raw, "message_id", None)
+        )
+        for value in (raw_id, getattr(event.message_obj, "message_id", None)):
+            if value is None or isinstance(value, bool):
+                continue
+            try:
+                message_id = int(value)
+            except (OverflowError, TypeError, ValueError):
+                continue
+            if message_id != 0:
+                return message_id
+        return None
+
+    async def _send_reaction_emoji(self, event: AstrMessageEvent) -> None:
+        """对开始处理的 OneBot 群消息添加表情，失败时继续解析。"""
+        reaction = self.config_manager.message.reaction
+        if (
+            not reaction.enabled
+            or not reaction.emoji_ids
+            or event.get_platform_name() != "aiocqhttp"
+            or not event.get_group_id()
+        ):
+            return
+        bot = getattr(event, "bot", None)
+        if bot is None or not callable(getattr(bot, "call_action", None)):
+            return
+        message_id = self._extract_reaction_message_id(event)
+        if message_id is None:
+            self.logger.debug("表情回应跳过：无法获取协议消息 ID")
+            return
+
+        from aiocqhttp.exceptions import Error as OneBotError
+
+        emoji_ids = (
+            list(reaction.emoji_ids)
+            if reaction.strategy == "顺序循环"
+            else [choice(reaction.emoji_ids)]
+        )
+        for index, emoji_id in enumerate(emoji_ids):
+            if index:
+                await asyncio.sleep(0.5)
+            try:
+                await asyncio.wait_for(
+                    bot.call_action(
+                        "set_msg_emoji_like",
+                        message_id=message_id,
+                        emoji_id=str(emoji_id),
+                        set=True,
+                    ),
+                    timeout=5.0,
+                )
+            except asyncio.CancelledError:
+                raise
+            except (
+                OneBotError, asyncio.TimeoutError, OSError, RuntimeError, TypeError, ValueError
+            ) as exc:
+                self.logger.warning(
+                    f"表情回应失败：表情 ID={emoji_id}，{type(exc).__name__}: {exc}"
+                )
+
     async def _send_opening_message(
         self,
         event: AstrMessageEvent,
@@ -1226,6 +1297,8 @@ class VideoParserPlugin(Star):
                     )
                 )
             return
+
+        await self._send_reaction_emoji(event)
 
         if not zip_requested:
             for link, _parser in links_with_parser:
