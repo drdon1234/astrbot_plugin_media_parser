@@ -3,3 +3,4 @@ cryptography>=43
 qrcode[pil]>=8.0
 pillow>=10
 playwright>=1.49
+bcrypt>=4.2

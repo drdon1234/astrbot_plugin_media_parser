@@ -22,6 +22,7 @@ from .parser.platform import (
     XianyuParser,
     ToutiaoParser,
     XiaoheiheParser,
+    CoolapkParser,
     XueqiuParser,
     WechatParser,
     ZhihuParser,
@@ -72,6 +73,7 @@ PARSER_OUTPUT_KEYS = (
     "xianyu",
     "toutiao",
     "xiaoheihe",
+    "coolapk",
     "xueqiu",
     "wechat",
     "zhihu",
@@ -668,6 +670,7 @@ class ConfigManager:
         self._enable_xianyu = self._parser_enabled("xianyu")
         self._enable_toutiao = self._parser_enabled("toutiao")
         self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
+        self._enable_coolapk = self._parser_enabled("coolapk")
         self._enable_xueqiu = self._parser_enabled("xueqiu")
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
@@ -1451,6 +1454,12 @@ class ConfigManager:
                     use_video_proxy=self.proxy.xiaoheihe_use_video_proxy,
                     proxy_url=proxy_addr,
                     hot_comment_count=hot_comment_counts["xiaoheihe"],
+                )
+            )
+        if self._enable_coolapk:
+            parsers.append(
+                CoolapkParser(
+                    runtime_dir=Config.build_runtime_dir(self.download.cache_dir, "coolapk")
                 )
             )
         if self._enable_xueqiu:
