@@ -97,12 +97,14 @@ OUTPUT_MODE_DISABLED = "关闭"
 OUTPUT_MODE_ALL = "全部发送"
 OUTPUT_MODE_TEXT_ONLY = "仅文本"
 OUTPUT_MODE_RICH_ONLY = "仅富媒体"
+OUTPUT_MODE_VIDEO_OR_POST = "视频直发 / 帖子图文"
 
 OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_DISABLED: (False, False),
     OUTPUT_MODE_ALL: (True, True),
     OUTPUT_MODE_TEXT_ONLY: (True, False),
     OUTPUT_MODE_RICH_ONLY: (False, True),
+    OUTPUT_MODE_VIDEO_OR_POST: (True, True),
 }
 
 AGGREGATION_MODE_NONE = "不聚合"
@@ -292,7 +294,12 @@ class ParserOutputConfig:
                 continue
             seen.add(key)
             if key in self.modes:
-                return self._flags_for_mode(self.modes[key])
+                mode = self.modes[key]
+                if mode == OUTPUT_MODE_VIDEO_OR_POST and any(
+                    metadata.get("video_urls") or []
+                ):
+                    return False, True
+                return self._flags_for_mode(mode)
         return OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL]
 
 
