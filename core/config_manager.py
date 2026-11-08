@@ -9,6 +9,7 @@ from .logger import logger
 
 from .constants import Config
 from .downloader.utils import check_cache_dir_available
+from .message_text import MAX_MESSAGE_TEXT_LENGTH
 from .parser.platform import (
     BilibiliParser,
     DouyinParser,
@@ -23,6 +24,7 @@ from .parser.platform import (
     ToutiaoParser,
     XiaoheiheParser,
     XueqiuParser,
+    CoolapkParser,
     WechatParser,
     ZhihuParser,
     TiebaParser,
@@ -73,6 +75,7 @@ PARSER_OUTPUT_KEYS = (
     "toutiao",
     "xiaoheihe",
     "xueqiu",
+    "coolapk",
     "wechat",
     "zhihu",
     "tieba",
@@ -97,12 +100,14 @@ OUTPUT_MODE_DISABLED = "关闭"
 OUTPUT_MODE_ALL = "全部发送"
 OUTPUT_MODE_TEXT_ONLY = "仅文本"
 OUTPUT_MODE_RICH_ONLY = "仅富媒体"
+OUTPUT_MODE_VIDEO_OR_POST = "视频直发 / 帖子图文"
 
 OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_DISABLED: (False, False),
     OUTPUT_MODE_ALL: (True, True),
     OUTPUT_MODE_TEXT_ONLY: (True, False),
     OUTPUT_MODE_RICH_ONLY: (False, True),
+    OUTPUT_MODE_VIDEO_OR_POST: (True, True),
 }
 
 AGGREGATION_MODE_NONE = "不聚合"
@@ -292,7 +297,12 @@ class ParserOutputConfig:
                 continue
             seen.add(key)
             if key in self.modes:
-                return self._flags_for_mode(self.modes[key])
+                mode = self.modes[key]
+                if mode == OUTPUT_MODE_VIDEO_OR_POST and any(
+                    metadata.get("video_urls") or []
+                ):
+                    return False, True
+                return self._flags_for_mode(mode)
         return OUTPUT_MODE_FLAGS[OUTPUT_MODE_ALL]
 
 
@@ -324,6 +334,7 @@ class AggregationConfig:
     image_threshold: int = 3
     video_threshold: int = 2
     node_threshold: int = 5
+    forward_text_length: int = MAX_MESSAGE_TEXT_LENGTH
 
     def should_aggregate_nodes(
         self,
@@ -357,6 +368,7 @@ class ArchiveConfig:
 class MediaDisplayConfig:
     video_cover_only: bool = False
     audio_send_mode: str = "语音"
+    image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL
     interleave_images: bool = False
 
 
@@ -402,6 +414,7 @@ class HotCommentConfig:
     toutiao: bool = True
     xiaoheihe: bool = True
     xueqiu: bool = True
+    coolapk: bool = True
     zhihu: bool = True
     tieba: bool = True
     nga: bool = True
@@ -685,6 +698,7 @@ class ConfigManager:
         self._enable_toutiao = self._parser_enabled("toutiao")
         self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
         self._enable_xueqiu = self._parser_enabled("xueqiu")
+        self._enable_coolapk = self._parser_enabled("coolapk")
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
         self._enable_tieba = self._parser_enabled("tieba")
@@ -758,6 +772,16 @@ class ConfigManager:
                 ),
             ),
             aggregation=AggregationConfig(
+                forward_text_length=min(
+                    MAX_MESSAGE_TEXT_LENGTH,
+                    max(
+                        1,
+                        self._parse_non_negative_int(
+                            aggregation.get("forward_text_length", MAX_MESSAGE_TEXT_LENGTH),
+                            MAX_MESSAGE_TEXT_LENGTH,
+                        ),
+                    ),
+                ),
                 mode=self._parse_aggregation_mode(
                     aggregation.get("mode", AGGREGATION_MODE_NONE)
                 ),
@@ -785,6 +809,12 @@ class ConfigManager:
                 ),
             ),
             media_display=MediaDisplayConfig(
+                image_send_mode=(
+                    str(media_display.get("image_send_mode", "")).strip()
+                    if str(media_display.get("image_send_mode", "")).strip()
+                    in {Config.IMAGE_SEND_MODE_GROUP, Config.IMAGE_SEND_MODE_SINGLE}
+                    else Config.IMAGE_SEND_MODE_ORIGINAL
+                ),
                 audio_send_mode=(
                     "文件" if str(media_display.get("audio_send_mode", "语音")).strip() == "文件"
                     else "语音"
@@ -936,6 +966,11 @@ class ConfigManager:
                     hot_comments.get("xueqiu", True),
                     True,
                     "message.hot_comments.xueqiu",
+                ),
+                coolapk=self._parse_bool(
+                    hot_comments.get("coolapk", True),
+                    True,
+                    "message.hot_comments.coolapk",
                 ),
                 zhihu=self._parse_bool(
                     hot_comments.get("zhihu", True),
@@ -1488,6 +1523,10 @@ class ConfigManager:
         if self._enable_xueqiu:
             parsers.append(
                 XueqiuParser(hot_comment_count=hot_comment_counts["xueqiu"])
+            )
+        if self._enable_coolapk:
+            parsers.append(
+                CoolapkParser(hot_comment_count=hot_comment_counts["coolapk"])
             )
         if self._enable_wechat:
             parsers.append(
