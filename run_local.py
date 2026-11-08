@@ -54,6 +54,7 @@ PARSER_DISCOVERY_ORDER = (
     "toutiao",
     "xiaoheihe",
     "xueqiu",
+    "coolapk",
     "wechat",
     "zhihu",
     "tieba",
