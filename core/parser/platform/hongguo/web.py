@@ -1,6 +1,7 @@
-"""红果匿名播放接口的签名请求与响应校验。"""
+"""红果匿名播放与分集弹幕接口的签名请求和响应校验。"""
 
 import json
+import re
 import secrets
 import time
 from typing import Any, Dict
@@ -9,7 +10,7 @@ from urllib.parse import urlencode
 import aiohttp
 from yarl import URL
 
-from .sign import build_signature
+from .sign import build_comment_signature, build_signature
 
 
 _API_BASE = "https://api5-normal-sinfonlineb.fqnovel.com"
@@ -35,12 +36,12 @@ class HongguoClient:
         path: str,
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """请求官方播放接口，并校验有限长度的 JSON 响应。
+        """按固定路径选择播放或弹幕签名，校验有限长度的 JSON 响应。
 
         Args:
             session: 解析器共享的异步网络会话。
-            path: 官方播放接口路径。
-            payload: 播放请求参数。
+            path: 已知的官方播放或分集弹幕接口路径。
+            payload: 对应接口的请求参数。
 
         Returns:
             接口返回的数据对象。
@@ -48,8 +49,9 @@ class HongguoClient:
         Raises:
             ValueError: 接口地址、状态或响应格式无效。
         """
-        if path != _MODEL_PATH:
-            raise ValueError("红果播放接口路径无效")
+        is_comment = re.fullmatch(r"/novel/commentapi/comment/list/[1-9][0-9]{0,31}/v1/", path) is not None
+        if path != _MODEL_PATH and not is_comment:
+            raise ValueError("红果接口路径无效")
         now = time.time()
         params = {
             "aid": "8662",
@@ -82,8 +84,10 @@ class HongguoClient:
             "X-XS-From-Web": "0",
             "Sdk-Version": "2",
             "Content-Type": "application/json; charset=utf-8",
-            **build_signature(query, body, now),
+            **(build_comment_signature(query, now) if is_comment else build_signature(query, body, now)),
         }
+        if is_comment:
+            headers.update({"comment-source": "601", "server-channel": "1000"})
         # 保留签名对应的 %2A 等编码，避免 aiohttp 再次编码导致验签失败。
         url = URL(f"{_API_BASE}{path}?{query}", encoded=True)
         async with session.post(
@@ -94,24 +98,24 @@ class HongguoClient:
             allow_redirects=False,
         ) as response:
             if response.status != 200:
-                raise ValueError(f"红果播放接口请求失败（HTTP {response.status}）")
+                raise ValueError(f"红果接口请求失败（HTTP {response.status}）")
             content = bytearray()
             async for chunk in response.content.iter_chunked(64 * 1024):
                 content.extend(chunk)
                 if len(content) > _MAX_RESPONSE_BYTES:
-                    raise ValueError("红果播放接口响应过大")
+                    raise ValueError("红果接口响应过大")
         if not content:
-            raise ValueError("红果播放接口未返回有效数据")
+            raise ValueError("红果接口未返回有效数据")
         try:
             result = json.loads(content)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ValueError("红果播放接口响应格式异常") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
+            raise ValueError("红果接口响应格式异常") from exc
         if not isinstance(result, dict):
-            raise ValueError("红果播放接口响应格式异常")
+            raise ValueError("红果接口响应格式异常")
         codes = [result[key] for key in ("code", "Code", "status_code") if key in result]
         base_response = result.get("BaseResp")
         if isinstance(base_response, dict) and "StatusCode" in base_response:
             codes.append(base_response["StatusCode"])
         if any(code not in (0, "0") for code in codes):
-            raise ValueError("红果播放接口返回失败状态")
+            raise ValueError("红果接口返回失败状态")
         return result

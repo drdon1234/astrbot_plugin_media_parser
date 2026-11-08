@@ -333,7 +333,8 @@ def build_hot_comments_node(
     if not isinstance(hot_comments, list) or not hot_comments:
         return None
 
-    text_parts = [f"热评（{len(hot_comments)}条）："]
+    label = "分集弹幕" if metadata.get("hot_comments_label") == "分集弹幕" else "热评"
+    text_parts = [f"{label}（{len(hot_comments)}条）："]
     total = len(hot_comments)
     for idx, item in enumerate(hot_comments, start=1):
         if not isinstance(item, dict):

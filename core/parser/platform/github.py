@@ -1,12 +1,15 @@
-"""GitHub 仓库解析器，提取公开仓库概况与 README 截图入口。"""
+"""GitHub 解析器，提取公开仓库概况、README 截图入口及议题评论。"""
 
 import asyncio
+import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
 
 import aiohttp
+
+from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
@@ -31,6 +34,33 @@ RESERVED_ROUTES = frozenset({
 MAX_DESCRIPTION_LENGTH = 400
 MAX_REDIRECTS = 2
 README_SELECTOR = 'article.markdown-body, #readme .markdown-body'
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_COMMENT_PAGES = 3
+
+
+def _link_parts(url: str) -> Optional[Tuple[str, str, str]]:
+    """识别仓库根或明确的正整数 Issue 编号，不截断其他子页。"""
+    repository = _repository_parts(url)
+    if repository:
+        return *repository, ""
+    if not isinstance(url, str) or re.search(r"[\s\x00-\x1f\x7f\\]", url):
+        return None
+    value = url.strip()
+    if value.startswith("//"):
+        value = "https:" + value
+    elif "://" not in value:
+        value = "https://" + value
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    match = re.fullmatch(r"/([^/]+/[^/]+)/issues/([1-9][0-9]{0,19})/?", parsed.path)
+    if not match:
+        return None
+    repository = _repository_parts(f"{parsed.scheme}://{parsed.netloc}/{match[1]}")
+    if not repository or match[1].lower().endswith(".git"):
+        return None
+    return *repository, match[2]
 
 
 def _repository_parts(url: str) -> Optional[Tuple[str, str]]:
@@ -86,43 +116,48 @@ def _api_url(url: str) -> bool:
 
 
 class GitHubParser(BaseVideoParser):
-    """通过官方接口解析公开仓库，并提供首页 README 截图入口。"""
+    """通过官方接口解析公开仓库概况、README 截图入口和议题评论。"""
 
-    def __init__(self, proxy_url: Optional[str] = None) -> None:
+    def __init__(self, proxy_url: Optional[str] = None, hot_comment_count: int = 0) -> None:
         """初始化仓库解析器。
 
         Args:
             proxy_url: 供仓库接口和 README 页面截图使用的代理地址。
+            hot_comment_count: 议题普通评论条数上限，零表示不请求。
         """
         super().__init__("github")
         self.proxy_url = proxy_url
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError):
+            self.hot_comment_count = 0
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 
     def can_parse(self, url: str) -> bool:
-        """判断是否为受支持的 GitHub 仓库根链接。
+        """判断是否为受支持的 GitHub 仓库或议题链接。
 
         Args:
             url: 待判断的链接。
 
         Returns:
-            是否为仓库根链接。
+            是否为仓库根链接或指定议题。
         """
-        return _repository_parts(url) is not None
+        return _link_parts(url) is not None
 
     def extract_links(self, text: str) -> List[str]:
-        """从消息中提取仓库根链接，并按仓库身份去重。
+        """从消息中提取仓库与议题链接，按内容身份去重。
 
         Args:
             text: 包含链接的消息文本。
 
         Returns:
-            保留首次出现形式的仓库链接，供路由器按消息位置排序。
+            保留首次出现形式的内容链接，供路由器按消息位置排序。
         """
         links: List[str] = []
         seen = set()
         for match in GITHUB_URL_RE.finditer(text or ""):
             candidate = match.group(0).rstrip(".,!?:")
-            parts = _repository_parts(candidate)
+            parts = _link_parts(candidate)
             if not parts:
                 continue
             identity = "/".join(parts).lower()
@@ -130,6 +165,84 @@ class GitHubParser(BaseVideoParser):
                 seen.add(identity)
                 links.append(candidate)
         return links
+
+    async def _issue_json(
+        self, session: aiohttp.ClientSession, path: str, params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """读取有限大小的官方议题响应，不跟随议题转移跳转。"""
+        try:
+            async with session.get(
+                "https://api.github.com/repos/" + path, params=params,
+                headers=build_request_headers(custom_headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}),
+                proxy=self.proxy_url, allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT),
+            ) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"GitHub 议题接口请求失败（HTTP {response.status}），内容可能不可见或访问受限")
+                chunks, size = [], 0
+                async for chunk in response.content.iter_chunked(65536):
+                    size += len(chunk)
+                    if size > MAX_RESPONSE_BYTES:
+                        raise RuntimeError("GitHub 议题响应过大，已停止读取")
+                    chunks.append(chunk)
+                return json.loads(b"".join(chunks))
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RecursionError) as exc:
+            raise RuntimeError("GitHub 议题网络请求失败或响应格式无效") from exc
+
+    @staticmethod
+    def _comment_time(value: Any) -> str:
+        """将明确带时区的时间转换为北京时间。"""
+        try:
+            date = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None
+            if date is not None and date.tzinfo is not None:
+                return date.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, OverflowError):
+            pass
+        return ""
+
+    async def _comments(
+        self, session: aiohttp.ClientSession, path: str, issue_id: str,
+    ) -> List[Dict[str, Any]]:
+        """限量读取普通评论，校验归属并保留失败前已取得的结果。"""
+        comments, seen = [], set()
+        page_size = min(100, self.hot_comment_count)
+        if page_size <= 0:
+            return comments
+        try:
+            for page in range(1, MAX_COMMENT_PAGES + 1):
+                rows = await self._issue_json(session, f"{path}/issues/{issue_id}/comments", {"per_page": page_size, "page": page})
+                if not isinstance(rows, list):
+                    raise RuntimeError("GitHub 议题评论列表格式无效")
+                previous = len(seen)
+                for row in rows:
+                    if not isinstance(row, dict) or row.get("issue_url") != f"https://api.github.com/repos/{path}/issues/{issue_id}":
+                        continue
+                    identity, message, user = row.get("id"), row.get("body"), row.get("user")
+                    if type(identity) is not int or identity <= 0 or identity in seen or not isinstance(message, str) or not message.strip():
+                        continue
+                    user = user if isinstance(user, dict) else {}
+                    seen.add(identity)
+                    comment = {
+                        "id": str(identity), "username": str(user.get("login") or "未知用户"),
+                        "uid": str(user.get("id") or ""), "message": message.strip(),
+                        "time": self._comment_time(row.get("created_at")),
+                    }
+                    reactions = row.get("reactions")
+                    likes = reactions.get("+1") if isinstance(reactions, dict) else None
+                    if type(likes) is int and likes >= 0:
+                        comment["likes"] = likes
+                    comments.append(comment)
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                if len(rows) < page_size or len(seen) == previous:
+                    break
+        except asyncio.CancelledError:
+            raise
+        except RuntimeError as exc:
+            logger.warning(f"GitHub 议题评论获取失败，保留正文及已取得评论：{exc}")
+        return comments
 
     async def _fetch_repository(
         self, session: aiohttp.ClientSession, owner: str, repo: str
@@ -254,20 +367,43 @@ class GitHubParser(BaseVideoParser):
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
-        """解析公开仓库根链接，返回概况与 README 截图入口。
+        """解析公开仓库概况或议题正文与有限评论。
 
         Args:
             session: 已有的异步 HTTP 会话。
-            url: GitHub 仓库根链接。
+            url: GitHub 仓库根链接或 Issue 链接。
 
         Returns:
-            包含仓库名、作者、简短概况和规范链接的元数据。
+            仓库概况与截图请求，或议题正文及可选普通评论。
         """
-        parts = _repository_parts(url)
+        parts = _link_parts(url)
         if not parts:
-            raise RuntimeError("不支持此 GitHub 链接，仅支持公开仓库首页")
+            raise RuntimeError("不支持此 GitHub 链接，仅支持公开仓库首页和 Issue")
+        owner, repo, issue_id = parts
         async with self.semaphore:
-            repository = await self._fetch_repository(session, *parts)
+            repository = await self._fetch_repository(session, owner, repo)
+            if issue_id:
+                path = repository["full_name"]
+                issue = await self._issue_json(session, f"{path}/issues/{issue_id}")
+                expected_url = f"https://github.com/{path}/issues/{issue_id}"
+                if (not isinstance(issue, dict) or type(issue.get("number")) is not int
+                        or str(issue["number"]) != issue_id or issue.get("html_url") != expected_url
+                        or issue.get("repository_url") != f"https://api.github.com/repos/{path}"
+                        or "pull_request" in issue or not isinstance(issue.get("title"), str)
+                        or not issue["title"].strip() or not isinstance(issue.get("user"), dict)):
+                    raise RuntimeError("GitHub 返回的议题身份与目标不一致或内容不是 Issue")
+                body = issue.get("body")
+                state = {"open": "开放", "closed": "已关闭"}.get(issue.get("state"), "未知")
+                metadata: MediaMetadata = {
+                    "url": expected_url, "platform": self.name, "title": f"{path} #{issue_id} · {issue['title'].strip()}",
+                    "author": str(issue["user"].get("login") or "未知用户"),
+                    "timestamp": self._comment_time(issue.get("created_at")),
+                    "desc": f"状态：{state}\n\n" + (body.strip() if isinstance(body, str) and body.strip() else "暂无议题正文"),
+                    "video_urls": [], "image_urls": [],
+                }
+                if self.hot_comment_count:
+                    metadata["hot_comments"] = await self._comments(session, path, issue_id)
+                return metadata
         return {
             "url": "https://github.com/" + repository["full_name"],
             "title": repository["full_name"],

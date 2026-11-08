@@ -46,6 +46,8 @@ class MediaMetadata(TypedDict, total=False):
     available_length_ms: Optional[int]
     # 评论字段：id、username、uid、message、time；likes 可为整数或平台缩写，未知时缺省。
     hot_comments: List[Dict[str, Any]]
+    # 弹幕沿用评论数据契约，但在消息及归档中明确区分来源。
+    hot_comments_label: str
 
     use_image_proxy: bool
     use_video_proxy: bool

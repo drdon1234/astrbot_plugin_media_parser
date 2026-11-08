@@ -21,6 +21,7 @@ _PARSER_STRING_FIELDS = frozenset(
         "access_status",
         "author",
         "desc",
+        "hot_comments_label",
         "image_tls_ciphers",
         "platform",
         "readme_selector",

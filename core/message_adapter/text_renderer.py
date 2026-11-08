@@ -402,7 +402,7 @@ def _layout_text(
         if label.rstrip("：:") == "标题":
             kind, value, label = "title", content.strip(), ""
         elif value in ("简介/正文：", "简介/正文:", "翻译") or re.fullmatch(
-            r"(?:热评|翻译)[（(].+?[）)][：:]?", value,
+            r"(?:热评|分集弹幕|翻译)[（(].+?[）)][：:]?", value,
         ):
             kind, label = "section", ""
             value = value.rstrip("：:")

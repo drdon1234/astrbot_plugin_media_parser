@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
+from ....logger import logger
+
 from ....constants import Config
 from ....types import MediaMetadata
 from ...utils import build_request_headers
@@ -150,8 +152,17 @@ class _PageState(HTMLParser):
 class HongguoParser(BaseVideoParser):
     """解析红果短链、剧集详情与指定分集，不展开整部短剧。"""
 
-    def __init__(self) -> None:
+    def __init__(self, hot_comment_count: int = 0) -> None:
+        """初始化分集解析器。
+
+        Args:
+            hot_comment_count: 有限弹幕窗口的输出条数上限，零表示不请求。
+        """
         super().__init__("hongguo")
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError):
+            self.hot_comment_count = 0
         self.client = HongguoClient()
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.headers = build_request_headers(referer=BASE_URL + "/")
@@ -304,19 +315,96 @@ class HongguoParser(BaseVideoParser):
             raise RuntimeError("红果未返回可用的完整视频，编码或媒体密钥可能不受支持")
         return urls, keys
 
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, series_id: str, video_id: str, duration_ms: int,
+    ) -> List[Dict[str, Any]]:
+        """读取至多三个分集弹幕窗口，校验归属并保留失败前的有效内容。"""
+        comments, seen, cursors = [], set(), set()
+        if self.hot_comment_count <= 0:
+            return comments
+        offset, cursor = 0, ""
+        try:
+            for _ in range(3):
+                payload = await self.client.request(session, f"/novel/commentapi/comment/list/{video_id}/v1/", {
+                    "comment_source": 601, "server_channel": 1000, "group_id": video_id,
+                    "group_type": 30, "comment_type": 20, "sort": 1,
+                    "count": min(90, self.hot_comment_count - len(comments)), "cursor": cursor,
+                    "aid": 8662, "compliance_status": 0,
+                    "business_param": {"book_id": series_id, "start_offset_time": offset,
+                                       "playlet_item_duration": duration_ms, "need_danmaku_guide_type": [1, 3, 4, 2]},
+                })
+                data = payload.get("data")
+                if not isinstance(data, dict) or not isinstance(data.get("data_list"), list):
+                    raise ValueError("红果弹幕列表格式无效")
+                for row in data["data_list"]:
+                    comment = row.get("comment") if isinstance(row, dict) else None
+                    if not isinstance(comment, dict):
+                        continue
+                    common, expand, stat = (comment.get(key) for key in ("common", "expand", "stat"))
+                    if not isinstance(common, dict) or str(common.get("group_id")) != video_id:
+                        continue
+                    content, identity = common.get("content"), comment.get("comment_id")
+                    if type(identity) not in (str, int) or not NUMERIC_ID.fullmatch(str(identity)) or str(identity) in seen:
+                        continue
+                    message = content.get("text") if isinstance(content, dict) else None
+                    if not isinstance(message, str) or not message.strip():
+                        continue
+                    user = common.get("user_info")
+                    user = user if isinstance(user, dict) else {}
+                    profile = user.get("base_info")
+                    profile = profile if isinstance(profile, dict) else {}
+                    position = expand.get("offset_time") if isinstance(expand, dict) else None
+                    if type(position) is int and position >= 0 and (not duration_ms or position < duration_ms):
+                        seconds = position // 1000
+                        message = f"[弹幕位置 {seconds // 60:02d}:{seconds % 60:02d}] {message.strip()}"
+                    time_text = ""
+                    created = common.get("create_timestamp")
+                    if type(created) is int and created > 0:
+                        try:
+                            time_text = datetime.fromtimestamp(created, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+                        except (ValueError, OverflowError, OSError):
+                            pass
+                    item = {
+                        "id": str(identity), "username": str(profile.get("name") or "未知用户"),
+                        "uid": str(user.get("user_id") or ""),
+                        "message": message.strip(), "time": time_text,
+                    }
+                    likes = stat.get("digg_count") if isinstance(stat, dict) else None
+                    if type(likes) is int and likes >= 0:
+                        item["likes"] = likes
+                    seen.add(str(identity))
+                    comments.append(item)
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+                info, extra = data.get("common_list_info"), data.get("extra")
+                if not isinstance(info, dict) or info.get("has_more") is not True or not isinstance(extra, dict):
+                    break
+                next_cursor, next_offset = info.get("cursor"), extra.get("next_query_danmaku_list_time")
+                if (not isinstance(next_cursor, str) or not next_cursor or next_cursor in cursors
+                        or type(next_offset) is not int or next_offset <= offset
+                        or (duration_ms > 0 and next_offset >= duration_ms)):
+                    break
+                cursors.add(next_cursor)
+                cursor, offset = next_cursor, next_offset
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RuntimeError) as exc:
+            logger.warning(f"红果分集弹幕获取失败，已保留已有内容与弹幕：{type(exc).__name__}")
+        return comments
+
     async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[MediaMetadata]:
-        """读取剧集资料并获取分享指定集的完整播放候选。
+        """读取剧集资料、指定集播放候选与可选分集弹幕。
 
         Args:
             session: 解析管理器提供的 HTTP 会话。
             url: 红果短链、详情或分集链接。
 
         Returns:
-            指定分集的视频、封面、介绍和下载解密信息。
+            剧集资料、可用视频及解密信息、可选弹幕；取流失败时说明视频不可用。
 
         Raises:
             ValueError: 入口不受支持。
-            RuntimeError: 剧集身份不符、接口失效或完整视频不可用。
+            RuntimeError: 剧集身份不符或详情接口不可用。
         """
         canonical, _, _ = _identity(url)
         if not canonical:
@@ -337,23 +425,32 @@ class HongguoParser(BaseVideoParser):
                 if video_id not in videos:
                     raise RuntimeError("红果剧集不包含所请求的分集")
                 episode = videos.index(video_id) + 1
-                payload = await self.client.request(session, "/novel/player/video_model/v1/", {
-                    "video_id": video_id, "content_type": 1,
-                    "biz_param": {"need_all_video_definition": True, "video_platform": 3},
-                })
-                data = payload.get("data")
-                model = data.get("video_model") if isinstance(data, dict) else None
-                if isinstance(model, str):
-                    model = json.loads(model)
-                if not isinstance(model, dict):
-                    raise RuntimeError("红果播放信息格式无效")
-                addresses, keys = self._select_media(model)
+                addresses, keys, duration = [], {}, 0
+                video_error = False
                 try:
-                    duration = float(model.get("video_duration", 0))
-                except (TypeError, ValueError, OverflowError):
-                    duration = 0
-                if not math.isfinite(duration) or duration <= 0:
-                    raise RuntimeError("红果完整视频时长无效")
+                    payload = await self.client.request(session, "/novel/player/video_model/v1/", {
+                        "video_id": video_id, "content_type": 1,
+                        "biz_param": {"need_all_video_definition": True, "video_platform": 3},
+                    })
+                    data = payload.get("data")
+                    model = data.get("video_model") if isinstance(data, dict) else None
+                    if isinstance(model, str):
+                        model = json.loads(model)
+                    if not isinstance(model, dict):
+                        raise RuntimeError("红果播放信息格式无效")
+                    addresses, keys = self._select_media(model)
+                    try:
+                        duration = float(model.get("video_duration", 0))
+                    except (TypeError, ValueError, OverflowError):
+                        duration = 0
+                    if not math.isfinite(duration) or duration <= 0:
+                        raise RuntimeError("红果完整视频时长无效")
+                except asyncio.CancelledError:
+                    raise
+                except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RuntimeError, UnicodeError) as exc:
+                    addresses, keys, duration = [], {}, 0
+                    video_error = True
+                    logger.warning(f"红果完整视频取流失败，继续保留剧集资料与分集弹幕：{type(exc).__name__}")
             except asyncio.CancelledError:
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError, ValueError) as exc:
@@ -364,12 +461,15 @@ class HongguoParser(BaseVideoParser):
         metadata: MediaMetadata = {
             "url": canonical, "platform": "hongguo", "title": f"{title.strip()} 第{episode}集",
             "desc": f"第{episode}集 / 共{len(videos)}集" + (f"\n{desc.strip()}" if isinstance(desc, str) and desc.strip() else ""),
-            "video_urls": [addresses], "video_cover_urls": [[cover]] if cover else [],
+            "video_urls": [addresses] if addresses else [], "video_cover_urls": [[cover]] if cover and addresses else [],
             "image_headers": self.headers.copy(),
             "video_headers": build_request_headers(is_video=True, referer="https://novel.snssdk.com/"),
             "video_force_download": True,
-            "timelength_ms": round(duration * 1000),
+            "timelength_ms": round(duration * 1000) if duration else None,
         }
+        if video_error:
+            metadata["access_status"] = "unavailable"
+            metadata["access_message"] = "当前完整视频取流失败，已保留剧集资料及可获取的分集弹幕"
         if keys:
             metadata["video_decryption_keys"] = keys
         celebrities = detail.get("celebrities")
@@ -386,4 +486,10 @@ class HongguoParser(BaseVideoParser):
                 ).strftime("%Y-%m-%d %H:%M:%S")
         except (TypeError, ValueError, OSError, OverflowError):
             pass
+        if self.hot_comment_count:
+            async with self.semaphore:
+                comments = await self._fetch_hot_comments(session, series_id, video_id, (metadata.get("timelength_ms") or 0))
+            if comments:
+                metadata["hot_comments"] = comments
+                metadata["hot_comments_label"] = "分集弹幕"
         return metadata

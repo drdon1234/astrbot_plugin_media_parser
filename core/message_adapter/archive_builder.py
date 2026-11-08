@@ -154,7 +154,8 @@ def format_archive_metadata(
 
     comments = _format_hot_comments(metadata.get("hot_comments"))
     if comments:
-        lines.append("热评：")
+        label = "分集弹幕" if metadata.get("hot_comments_label") == "分集弹幕" else "热评"
+        lines.append(label + "：")
         lines.extend(f"- {comment}" for comment in comments)
 
     translated_fields = (

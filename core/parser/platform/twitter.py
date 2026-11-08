@@ -3,9 +3,10 @@
 import asyncio
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Optional, Dict, Any, List
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 
@@ -25,6 +26,33 @@ class FxTwitterTweetUnavailableError(RuntimeError):
     """FxTwitter 可访问，但目标推文不可用或响应不是目标内容。"""
 
 
+class _ReplyPage(HTMLParser):
+    """只收集页面内联脚本，避免把正文中的同名文本当作回复数据。"""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.scripts: List[str] = []
+        self._active = False
+        self._parts: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: List) -> None:
+        """记录没有外部地址的脚本。"""
+        if tag == "script":
+            self._active = not dict(attrs).get("src")
+            self._parts = []
+
+    def handle_data(self, data: str) -> None:
+        """收集脚本原始字符，保留 JSON 转义。"""
+        if self._active:
+            self._parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        """封存完整脚本。"""
+        if tag == "script" and self._active:
+            self.scripts.append("".join(self._parts))
+            self._active = False
+
+
 def json_dumps_compact(value: Any) -> str:
     """生成无多余空白的 JSON 查询参数。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -39,7 +67,8 @@ class TwitterParser(BaseVideoParser):
         use_image_proxy: bool = False,
         use_video_proxy: bool = False,
         proxy_url: str = None,
-    ):
+        hot_comment_count: int = 0,
+    ) -> None:
         """初始化Twitter解析器
 
         Args:
@@ -47,12 +76,17 @@ class TwitterParser(BaseVideoParser):
             use_image_proxy: 图片下载是否使用代理
             use_video_proxy: 视频下载是否使用代理
             proxy_url: 代理地址（格式：http://host:port 或 https://host:port）
+            hot_comment_count: 当前匿名网页首屏直接回复的输出上限。
         """
         super().__init__("twitter")
         self.use_parse_proxy = use_parse_proxy
         self.use_image_proxy = use_image_proxy
         self.use_video_proxy = use_video_proxy
         self.proxy_url = proxy_url
+        try:
+            self.hot_comment_count = max(0, int(hot_comment_count))
+        except (TypeError, ValueError):
+            self.hot_comment_count = 0
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         self.headers = {
             "User-Agent": (
@@ -615,6 +649,111 @@ class TwitterParser(BaseVideoParser):
             logger.warning(f"FxTwitter不可用，尝试GraphQL回退: {e}")
             return await self._fetch_graphql_info(session, tweet_id)
 
+    def _page_replies(self, page: str, tweet_id: str) -> List[Dict[str, Any]]:
+        """静态解码当前网页的回复列表，严格限定父推文并保留首屏顺序。"""
+        if self.hot_comment_count <= 0:
+            return []
+        parser = _ReplyPage()
+        parser.feed(page)
+        parser.close()
+        comments, seen = [], set()
+        decoder = json.JSONDecoder()
+        for script in parser.scripts:
+            for match in re.finditer(r'kind:"Result\.Ok",value:', script):
+                try:
+                    value, _ = decoder.raw_decode(script, match.end())
+                    payload = json.loads(value) if isinstance(value, str) else None
+                except (ValueError, RecursionError):
+                    continue
+                data = payload.get("data") if isinstance(payload, dict) else None
+                timeline = data.get("threaded_conversation_with_injections_v2") if isinstance(data, dict) else None
+                pending = [timeline]
+                # 使用显式栈限制嵌套遍历，不跟进任何远端游标。
+                while pending:
+                    node = pending.pop()
+                    if isinstance(node, list):
+                        pending.extend(reversed(node))
+                        continue
+                    if not isinstance(node, dict):
+                        continue
+                    pending.extend(reversed(list(node.values())))
+                    parent, details = node.get("reply_to_results"), node.get("details")
+                    identity = node.get("rest_id")
+                    if (node.get("__typename") != "Tweet" or not isinstance(parent, dict)
+                            or parent.get("rest_id") != tweet_id or not isinstance(details, dict)
+                            or not isinstance(identity, str) or not re.fullmatch(r"[0-9]+", identity)
+                            or identity == tweet_id or identity in seen):
+                        continue
+                    message = details.get("full_text")
+                    if not isinstance(message, str) or not message.strip():
+                        continue
+                    core = node.get("core")
+                    user_results = core.get("user_results") if isinstance(core, dict) else None
+                    user = user_results.get("result") if isinstance(user_results, dict) else None
+                    user = user if isinstance(user, dict) else {}
+                    profile = user.get("core")
+                    profile = profile if isinstance(profile, dict) else {}
+                    timestamp = details.get("created_at_ms")
+                    time_text = ""
+                    if type(timestamp) is int and timestamp > 0:
+                        try:
+                            time_text = datetime.fromtimestamp(timestamp / 1000, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+                        except (ValueError, OverflowError, OSError):
+                            pass
+                    comment = {
+                        "id": identity,
+                        "username": str(profile.get("name") or profile.get("screen_name") or "未知用户"),
+                        "uid": str(user.get("rest_id") or ""),
+                        "message": message.strip(), "time": time_text,
+                    }
+                    counts = node.get("counts")
+                    likes = counts.get("favorite_count") if isinstance(counts, dict) else None
+                    if type(likes) is int and likes >= 0:
+                        comment["likes"] = likes
+                    comments.append(comment)
+                    seen.add(identity)
+                    if len(comments) >= self.hot_comment_count:
+                        return comments
+        return comments
+
+    async def _fetch_hot_comments(
+        self, session: aiohttp.ClientSession, tweet_id: str, url: str,
+    ) -> List[Dict[str, Any]]:
+        """读取当前匿名网页首屏回复，失败不影响主推文与媒体。"""
+        if self.hot_comment_count <= 0:
+            return []
+        current = "https://x.com" + urlparse(url).path
+        try:
+            for _ in range(3):
+                async with session.get(
+                    current, headers=build_request_headers(referer="https://x.com/"),
+                    proxy=self.proxy_url if self.use_parse_proxy else None,
+                    timeout=aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT), allow_redirects=False,
+                ) as response:
+                    if response.status in {301, 302, 303, 307, 308}:
+                        target = urljoin(current, response.headers.get("Location", ""))
+                        parsed = urlparse(target)
+                        if (not response.headers.get("Location") or parsed.scheme != "https"
+                                or parsed.netloc != "x.com" or not re.search(r"/status/" + re.escape(tweet_id) + r"(?:/|$)", parsed.path)):
+                            raise RuntimeError("X 回复页面返回了无效跳转")
+                        current = target
+                        continue
+                    if response.status != 200:
+                        raise RuntimeError(f"X 回复页面请求失败（HTTP {response.status}）")
+                    chunks, size = [], 0
+                    async for chunk in response.content.iter_chunked(65536):
+                        size += len(chunk)
+                        if size > 8 * 1024 * 1024:
+                            raise RuntimeError("X 回复页面过大，已停止读取")
+                        chunks.append(chunk)
+                    return self._page_replies(b"".join(chunks).decode("utf-8"), tweet_id)
+            raise RuntimeError("X 回复页面跳转次数过多")
+        except asyncio.CancelledError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, UnicodeError, RecursionError) as exc:
+            logger.warning(f"X 首屏回复获取失败，已保留主推文与媒体：{type(exc).__name__}")
+            return []
+
     async def parse(
         self, session: aiohttp.ClientSession, url: str
     ) -> Optional[MediaMetadata]:
@@ -681,6 +820,10 @@ class TwitterParser(BaseVideoParser):
                 if (self.use_image_proxy or self.use_video_proxy)
                 else None,
             }
+            if self.hot_comment_count:
+                comments = await self._fetch_hot_comments(session, tweet_id, url)
+                if comments:
+                    metadata_base["hot_comments"] = comments
 
             if has_videos and has_images:
                 result_dict = {

@@ -55,7 +55,7 @@
             "hongguo": {
                 "description": "红果短剧",
                 "type": "string",
-                "hint": "每个分享链接解析指定一集；视频需要本地缓存，加密视频需要 ffmpeg。",
+                "hint": "每个分享链接解析指定一集；视频需要本地缓存和 ffmpeg。可选读取分集弹幕；完整视频取流失败时保留剧集资料及可取得的弹幕。",
                 "options": [
                     "关闭",
                     "全部发送",
@@ -376,7 +376,7 @@
             "github": {
                 "description": "GitHub",
                 "type": "string",
-                "hint": "公开仓库首页可发送概况与 README 截图；截图需要安装 Chromium。仅文本时不截图，仅富媒体时只发送 README。",
+                "hint": "公开仓库首页可发送概况与 README 截图，截图需要 Chromium；公开 Issue 发送正文及可选普通评论，不请求 README。",
                 "options": [
                     "关闭",
                     "全部发送",
@@ -640,7 +640,7 @@
             "hot_comments": {
                 "description": "附加内容：热评",
                 "type": "object",
-                "hint": "仅对输出模式包含文本的支持平台生效；先将条数设为大于 0。优先热门或精选评论，没有此类排序时可展示普通评论或游戏评价。",
+                "hint": "仅对输出模式包含文本的支持平台生效；先将条数设为大于 0。来源包括热门或普通评论、游戏评价、Issue 讨论及明确标注的分集弹幕。",
                 "items": {
                     "count": {
                         "description": "热评条数",
@@ -661,6 +661,12 @@
                     "acfun": {
                         "description": "AcFun",
                         "type": "bool",
+                        "default": true
+                    },
+                    "hongguo": {
+                        "description": "红果短剧：分集弹幕",
+                        "type": "bool",
+                        "hint": "读取指定分集的有限弹幕窗口，消息中标为分集弹幕；不代表普通评论区或全量弹幕。",
                         "default": true
                     },
                     "netease": {
@@ -768,9 +774,21 @@
                         "type": "bool",
                         "default": true
                     },
+                    "twitter": {
+                        "description": "Twitter/X",
+                        "type": "bool",
+                        "hint": "读取当前匿名网页下发的首屏直接回复，条数受公开首屏范围限制。",
+                        "default": true
+                    },
                     "pixiv": {
                         "description": "Pixiv",
                         "type": "bool",
+                        "default": true
+                    },
+                    "github": {
+                        "description": "GitHub",
+                        "type": "bool",
+                        "hint": "仅对公开 Issue 读取有限普通评论，仓库概况不附加评论。",
                         "default": true
                     },
                     "gitlab": {

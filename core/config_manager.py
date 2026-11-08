@@ -391,6 +391,7 @@ class HotCommentConfig:
     bilibili: bool = True
     douyin: bool = True
     acfun: bool = True
+    hongguo: bool = True
     netease: bool = True
     ximalaya: bool = True
     weibo: bool = True
@@ -412,7 +413,9 @@ class HotCommentConfig:
     tiktok: bool = True
     youtube: bool = True
     steam: bool = True
+    twitter: bool = True
     pixiv: bool = True
+    github: bool = True
     gitlab: bool = True
 
 
@@ -895,6 +898,11 @@ class ConfigManager:
                     True,
                     "message.hot_comments.acfun",
                 ),
+                hongguo=self._parse_bool(
+                    hot_comments.get("hongguo", True),
+                    True,
+                    "message.hot_comments.hongguo",
+                ),
                 netease=self._parse_bool(
                     hot_comments.get("netease", True),
                     True,
@@ -1000,10 +1008,20 @@ class ConfigManager:
                     True,
                     "message.hot_comments.steam",
                 ),
+                twitter=self._parse_bool(
+                    hot_comments.get("twitter", True),
+                    True,
+                    "message.hot_comments.twitter",
+                ),
                 pixiv=self._parse_bool(
                     hot_comments.get("pixiv", True),
                     True,
                     "message.hot_comments.pixiv",
+                ),
+                github=self._parse_bool(
+                    hot_comments.get("github", True),
+                    True,
+                    "message.hot_comments.github",
                 ),
                 gitlab=self._parse_bool(
                     hot_comments.get("gitlab", True),
@@ -1444,7 +1462,7 @@ class ConfigManager:
                 AcfunParser(hot_comment_count=hot_comment_counts["acfun"])
             )
         if self._enable_hongguo:
-            parsers.append(HongguoParser())
+            parsers.append(HongguoParser(hot_comment_count=hot_comment_counts["hongguo"]))
         if self._enable_netease:
             parsers.append(
                 NeteaseParser(hot_comment_count=hot_comment_counts["netease"])
@@ -1575,6 +1593,7 @@ class ConfigManager:
                     use_image_proxy=self.proxy.twitter_use_image_proxy,
                     use_video_proxy=self.proxy.twitter_use_video_proxy,
                     proxy_url=proxy_addr,
+                    hot_comment_count=hot_comment_counts["twitter"],
                 )
             )
         if self._enable_pixiv:
@@ -1589,6 +1608,7 @@ class ConfigManager:
             parsers.append(
                 GitHubParser(
                     proxy_url=proxy_addr if self.proxy.github_use_proxy else None,
+                    hot_comment_count=hot_comment_counts["github"],
                 )
             )
         if self._enable_gitlab:

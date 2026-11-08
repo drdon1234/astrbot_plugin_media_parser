@@ -2,6 +2,8 @@
 
 本文记录当前 32 个平台解析器的链接范围、取数路径、字段来源与处理边界，平台顺序与配置、解析器工厂及本地发现列表一致。内容以代码实现为准；文中的上游接口与页面结构属于平台未公开承诺的协议，历史样本验证不代表其持续可用。使用配置见 [README](../README.md)，公共数据流见 [架构说明](ARCHITECTURE.md)。
 
+逐站的文本、图片、视频、独立音频与评论能力，统一登记于[平台能力与实测登记](PLATFORM_CAPABILITIES.md)，包含数据来源、不解析的范围与原因、实测日期、公开样本和验证缺口。本备忘保留详细协议与处理流程；能力变动时同步更新登记，区分未实现、权限限制、环境失败和已验证结果。
+
 ## 一、通用约定
 
 ### 数据来源
@@ -50,7 +52,9 @@
 - 酷安、虎扑、豆瓣、V2EX、稀土掘金、Gitee、GitLab 与 Pixiv 在点赞数未知时省略该字段，消息中显示 `-`，其余平台按接口返回值展示。缩写赞数与相对时间保留平台原文。
 - 评论失败时保留正文、媒体及已取得的评论；`asyncio.CancelledError` 继续向上传播。
 
-快手、红果短剧、微信、博客园、Twitter/X 与 GitHub 未接入评论。
+快手、微信与博客园未接入评论。红果接入的是指定分集弹幕，不是普通评论区；GitHub 的评论仅适用于指定 Issue，仓库概况不附加评论；Twitter/X 只读取匿名网页下发的首屏直接回复。
+
+2026-11-08 已将 GitHub 公开 Issue 评论、Twitter/X 匿名首屏直接回复及红果分集弹幕接入生产解析器、配置门控、消息与归档。快手完整评论查询提示验证码，公众号评论缺少有效会话，博客园评论明确要求登录，保持未接入。具体样本、签名对照、字段和未验证范围统一见[评论补充实测](PLATFORM_CAPABILITIES.md#评论补充实测2026-11-08)与该文档的接入验收。
 
 ### 正文配图位置
 
@@ -308,7 +312,15 @@ window.videoInfo / window.articleInfo / window.bangumiData
 
 视频强制使用本地缓存；既有普通视频下载器保留字节预算和大小上限，下载后由 ffmpeg 读取本地加密文件、解密并重新封装为 MP4，成功后才交给消息流程。缺少 ffmpeg、解密失败、超时或取消时清理加密文件与临时输出，不发送加密直链。没有平台封面时，加密候选不走普通首帧截取。
 
-实测样例为《有趣赎罪之孤灯遇暖》第四集（系列 `7687536297627372569`、分集 `7687540967632571416`），完整时长约 63.855 秒，1080P HEVC 与 AAC 下载解密后通过全片解码。可解析的具体内容、清晰度仍由上游接口决定；不接入热评、搜索、整剧批量下载或第三方解析站。
+历史实测样例为《有趣赎罪之孤灯遇暖》第四集（系列 `7687536297627372569`、分集 `7687540967632571416`），完整时长约 63.855 秒，1080P HEVC 与 AAC 下载解密后通过全片解码。2026-11-08 取流接口仍未返回有效数据：当前入口明确标记完整视频不可用，同时保留已核验的剧集资料和可取得的分集弹幕。搜索、整剧批量下载与第三方解析站不接入。
+
+### 分集弹幕
+
+由 `message.hot_comments.hongguo` 和统一条数控制，请求 `POST /novel/commentapi/comment/list/{vid}/v1/`。复用解析器生命周期内的匿名设备，使用独立的评论签名（含 X-Argus、X-Ladon、空 X-SS-STUB）及 `comment-source: 601`、`server-channel: 1000`，不复用播放签名。字段参考 [guoapp 评论协议实现](https://github.com/xiaoguan521/guoapp/blob/main/native/core/provider_hongguo_comment_sign.go)，加密只使用现有 cryptography 依赖。
+
+从首个时间窗口开始，按实际返回的游标与下一窗口位置读取，最多 3 个窗口；每次最多请求 90 条并受剩余配置条数限制，不把游标里的计数当实际条数。按 `comment_id` 去重，校验 `common.group_id` 等于当前分集；正文、创建时间和赞数来自 `common.content.text`、`common.create_timestamp` 和 `stat.digg_count`。缺失昵称显示未知用户，保留用户 ID；正文注明可用的播放时间点。视频时长未知时不编造时长，仍按有界窗口读取。
+
+弹幕沿用 `hot_comments` 契约，附带 `hot_comments_label="分集弹幕"`，经解析管理器传递给消息节点和 ZIP 元数据；文本图片渲染识别同名分区。请求失败保留已取得的弹幕与剧集资料，取消向上传播。不宣称普通评论、全量弹幕或热门排序。
 
 ## 七、网易云音乐
 
@@ -1051,7 +1063,7 @@ steamcommunity.com/sharedfiles/filedetails/?id={id}&l=schinese
 
 ## 三十、Twitter/X
 
-支持能力：视频 / 图片 / 文本
+支持能力：视频 / 图片 / 文本 / 热评
 
 ### 链接范围与取数流程
 
@@ -1090,6 +1102,12 @@ GraphQL 响应嵌套较深且路径不固定，解析器递归查找带有 tweet
 - X Article 从 `tweet.article.title` 提取标题，按 `tweet.article.content.blocks` 原顺序拼接非空文本作为正文；空的原子块跳过。Article 内容存在时不把推文中的短链接误当作正文。
 
 没有图片和视频但有正文的推文同样视为解析成功。
+
+### 评论
+
+主推仍使用现有 FxTwitter／Guest 路径。有效热评条数大于 0 时额外请求当前 `x.com` 作品页，复用 `proxy.twitter.parse`；响应上限 8 MiB，只允许有限次同主机、同目标推文的跳转。只收集内联脚本中的 `kind:"Result.Ok",value:`，用 JSON 解码器静态解出字符串，再读取 `threaded_conversation_with_injections_v2`，不执行脚本。
+
+仅接受 `reply_to_results.rest_id` 与目标推文 ID 一致的直接回复，按 `rest_id` 去重并保留首屏顺序。正文、时间、赞数、作者分别来自 `details.full_text`、`details.created_at_ms`、`counts.favorite_count`、`core.user_results.result`。主推、推荐、子回复及其他会话不进入评论；不跟分页游标，不声明全量或官方热评。页面失败或结构变化只影响评论，保留主推及媒体，取消向上传播。
 
 ## 三十一、Pixiv
 
@@ -1138,11 +1156,17 @@ image_urls = [
 
 ## 三十二、GitHub
 
-支持能力：文本 / 图片
+支持能力：文本 / 图片 / 热评
 
-仅解析 `github.com/{owner}/{repo}` 公开仓库首页，接受 `.git` 后缀、尾斜杠、查询参数与锚点，仓库身份由所有者与仓库名确定。Issue、Pull Request、Release 与代码文件等子页不按仓库首页解析。
+接入 `github.com/{owner}/{repo}` 公开仓库首页及 `/issues/{正整数编号}`。仓库根接受 `.git` 后缀、尾斜杠、查询参数与锚点；Pull Request、Release 与代码文件等其他子页不截断为仓库根。仓库与不同 Issue 分别去重，并保留首次出现位置。
 
-请求官方匿名接口 `GET https://api.github.com/repos/{owner}/{repo}`，提取仓库名、所有者、简介 `description`、主要语言、Star / Fork 数、许可证、归档状态与更新时间，写入 `MediaMetadata` 文本字段并保留仓库链接。另提供规范仓库地址 `readme_url` 与平台自己的 `readme_selector`，供富媒体阶段直接截取原网页 README 正文，不调用大模型生成摘要，不解析代码或评论。
+请求官方匿名接口 `GET https://api.github.com/repos/{owner}/{repo}`，提取仓库名、所有者、简介 `description`、主要语言、Star / Fork 数、许可证、归档状态与更新时间，写入 `MediaMetadata` 文本字段并保留仓库链接。仓库根结果另提供规范地址 `readme_url` 与平台自己的 `readme_selector`，供富媒体阶段截取原网页 README 正文，不调用大模型生成摘要，不解析仓库文件或为仓库根附加议题评论。
+
+### Issue 与评论
+
+先核验公开仓库，再请求 `/repos/{owner}/{repo}/issues/{编号}`，校验议题编号、规范链接与仓库接口地址，排除带 `pull_request` 的对象。保留标题、作者、正文、创建时间和状态；Issue 不提供 README 截图请求。议题转移等重定向不自动跨仓库跟随。
+
+有效条数大于 0 时请求同一 Issue 的 `/comments`，最多 3 页、每页最多 100 条，按接口普通顺序读取并按 ID 去重；每条校验 `issue_url`。正文使用原始 Markdown，赞数只取 `reactions["+1"]`，不把所有表情总数当点赞数，未知时省略。复用现有 GitHub 代理，单次议题响应上限 4 MiB；评论失败保留正文和先前评论，取消向上传播。接口定义见 [GitHub 官方文档](https://docs.github.com/en/rest/issues/comments#list-issue-comments)。
 
 `全部发送` 输出仓库概况与 README 截图，`仅文本` 跳过浏览器，`仅富媒体` 只发送 README 截图。`proxy.github` 默认关闭，开启后仓库 API 和截图浏览器均使用 `proxy.address`，通过现有 `proxy_url` 字段传递。没有 README 或截图失败时记录媒体跳过原因，保留概况；仅富媒体模式也会显示失败原因。不配置 Cookie 或 Token，匿名接口受 GitHub 频率限制；限流、私有或不存在的仓库返回明确错误，不用截图绕过接口失败。
 
