@@ -26,6 +26,10 @@ class Config:
     
     DOWNLOAD_MANAGER_MAX_CONCURRENT = 5
     PARSER_MAX_CONCURRENT = 10
+
+    IMAGE_SEND_MODE_ORIGINAL = "保持原方式"
+    IMAGE_SEND_MODE_GROUP = "多图一条"
+    IMAGE_SEND_MODE_SINGLE = "逐张发送"
     
     PLUGIN_NAME = "astrbot_plugin_media_parser"
     CACHE_DIR_NAME = "cache"
