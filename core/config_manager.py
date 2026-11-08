@@ -474,6 +474,8 @@ class PermissionConfig:
 @dataclass
 class DownloadConfig:
     max_video_size_mb: float = 1000.0
+    max_video_duration_seconds: int = 0
+    video_duration_limit_reply: str = Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY
     max_audio_size_mb: float = 30.0
     large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
     cache_dir: str = ""
@@ -1176,6 +1178,14 @@ class ConfigManager:
 
         self.download = DownloadConfig(
             max_video_size_mb=max_video_size_mb,
+            max_video_duration_seconds=self._parse_non_negative_int(
+                download_raw.get("max_video_duration_seconds", 0), 0
+            ),
+            video_duration_limit_reply=(
+                str(download_raw.get("video_duration_limit_reply") or "").strip()
+                if isinstance(download_raw.get("video_duration_limit_reply"), str)
+                else ""
+            ) or Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY,
             max_audio_size_mb=self._parse_non_negative_float(
                 download_raw.get("max_audio_size_mb", 30.0), 30.0
             ),

@@ -201,6 +201,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ## 📝 注意事项
 
+- **视频时长上限**：在 `下载与缓存 → 视频时长上限（秒）` 设置，默认 0 不限制。超限时跳过该视频，保留正文和其他媒体；可在同处自定义“视频时长超限提示”。试看按实际可播放时长判断；未知时长、多视频结果、仅发送封面和独立音频不受此项限制。
 - **TikTok / YouTube**：受地区和风控影响较明显，必要时请开启代理
 - **小黑盒 / Steam**：游戏预览视频下载速度不佳（Steam CDN）时建议启用代理
 - **Twitter/X**：图片和视频 CDN 大多需要代理环境
@@ -214,7 +215,7 @@ Cookie 会过期失效。开启 `管理员协助登录` 后，Cookie 失效时�
 
 ## 🙏 鸣谢
 
-- [astrbot_plugin_link_resolver](https://github.com/vacacia/astrbot_plugin_link_resolver) - 合并转发长文分段的参考实现（AGPL-3.0）。
+- [astrbot_plugin_link_resolver](https://github.com/vacacia/astrbot_plugin_link_resolver) - 合并转发长文分段与视频时长限制的参考实现（AGPL-3.0）。
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - B站解析端点
 - [FxEmbed](https://github.com/FxEmbed/FxEmbed) - Twitter/X 解析服务
 - [ParseHub](https://github.com/z-mio/ParseHub) - 小黑盒 BBS 帖子解析方法
