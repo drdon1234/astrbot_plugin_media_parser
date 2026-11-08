@@ -164,88 +164,14 @@ def _translated_text(metadata: MediaMetadata, field: str) -> str:
     return ""
 
 
-def build_text_node(
-    metadata: MediaMetadata,
-    max_video_size_mb: float = 0.0,
-    enable_text_metadata: bool = True,
-    include_description: bool = True,
-) -> Optional[Plain]:
-    """构建文本节点
-
-    Args:
-        metadata: 元数据字典
-        max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
-        enable_text_metadata: 是否包含视频图文文本信息的附加文本
-        include_description: 是否写入简介/正文；为否时只保留正文标题，正文由后续节点发送
-
-    Returns:
-        Plain文本节点，无内容时为None
-    """
-    if not enable_text_metadata:
-        error = str(metadata.get("error") or "").strip()
-        if not error and metadata.get("readme_url") and not metadata.get("has_valid_media"):
-            error = next(
-                (str(reason) for reason in metadata.get("image_skip_reasons", []) if reason),
-                "",
-            )
-        if not error:
-            return None
-        url = str(metadata.get("url") or metadata.get("source_url") or "").strip()
-        text = f"解析失败：{error}"
-        if url:
-            text += f"\n原始链接：{url}"
-        return Plain(text)
-
-    text_parts = []
-    desc_text = (
-        str(metadata.get("desc") or "").strip()
-        if text_metadata_field_enabled(metadata, "description")
-        else ""
-    )
-
-    if text_metadata_field_enabled(metadata, "title") and metadata.get("title"):
-        text_parts.append(f"标题：{metadata['title']}")
-    if text_metadata_field_enabled(metadata, "author") and metadata.get("author"):
-        text_parts.append(f"作者：{metadata['author']}")
-    if text_metadata_field_enabled(metadata, "timestamp") and metadata.get("timestamp"):
-        text_parts.append(f"发布时间：{metadata['timestamp']}")
-
-    video_count = metadata.get("video_count", 0)
-    if video_count > 0:
-        actual_max_video_size_mb = metadata.get("largest_video_size_mb")
-        total_video_size_mb = metadata.get("total_video_size_mb", 0.0)
-        video_modes = metadata.get("video_modes")
-        sendable_video_count = (
-            sum(mode in ("local", "direct") for mode in video_modes)
-            if isinstance(video_modes, list)
-            else video_count
-        )
-
-        if actual_max_video_size_mb is not None:
-            if sendable_video_count == 1:
-                text_parts.append(f"视频大小：{actual_max_video_size_mb:.1f} MB")
-            else:
-                text_parts.append(
-                    f"视频大小：最大 {actual_max_video_size_mb:.1f} MB "
-                    f"(共 {sendable_video_count} 个可发送视频, "
-                    f"总计 {total_video_size_mb:.1f} MB)"
-                )
-
+def _append_media_status(
+    text_parts: List[str], metadata: MediaMetadata, max_video_size_mb: float
+) -> None:
+    """追加访问状态与媒体失败原因，不受正常正文开关影响。"""
     has_valid_media = metadata.get("has_valid_media")
     video_urls = metadata.get("video_urls", [])
     image_urls = metadata.get("image_urls", [])
     audio_urls = metadata.get("audio_urls", [])
-
-    has_text_metadata = bool(
-        (text_metadata_field_enabled(metadata, "title") and metadata.get("title"))
-        or (text_metadata_field_enabled(metadata, "author") and metadata.get("author"))
-        or desc_text
-        or (
-            text_metadata_field_enabled(metadata, "timestamp")
-            and metadata.get("timestamp")
-        )
-    )
-
     access_status = metadata.get("access_status")
     access_message = metadata.get("access_message")
     available_length_ms = metadata.get("available_length_ms")
@@ -281,7 +207,6 @@ def build_text_node(
     if (
         has_valid_media is False
         and (video_urls or image_urls or audio_urls)
-        and has_text_metadata
         and not metadata.get("exceeds_max_size")
     ):
         if metadata.get("has_access_denied"):
@@ -311,8 +236,79 @@ def build_text_node(
 
     _append_media_skip_summary(text_parts, metadata)
 
-    if text_metadata_field_enabled(metadata, "original_link") and metadata.get("url"):
-        text_parts.append(f"原始链接：{metadata['url']}")
+
+def build_text_node(
+    metadata: MediaMetadata,
+    max_video_size_mb: float = 0.0,
+    enable_text_metadata: bool = True,
+    include_description: bool = True,
+) -> Optional[Plain]:
+    """构建文本节点
+
+    Args:
+        metadata: 元数据字典
+        max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
+        enable_text_metadata: 是否包含视频图文文本信息的附加文本
+        include_description: 是否写入简介/正文；为否时只保留正文标题，正文由后续节点发送
+
+    Returns:
+        Plain文本节点，无内容时为None
+    """
+    text_parts = []
+    desc_text = (
+        str(metadata.get("desc") or "").strip()
+        if enable_text_metadata and text_metadata_field_enabled(metadata, "description")
+        else ""
+    )
+
+    if (
+        enable_text_metadata
+        and text_metadata_field_enabled(metadata, "title")
+        and metadata.get("title")
+    ):
+        text_parts.append(f"标题：{metadata['title']}")
+    if (
+        enable_text_metadata
+        and text_metadata_field_enabled(metadata, "author")
+        and metadata.get("author")
+    ):
+        text_parts.append(f"作者：{metadata['author']}")
+    if (
+        enable_text_metadata
+        and text_metadata_field_enabled(metadata, "timestamp")
+        and metadata.get("timestamp")
+    ):
+        text_parts.append(f"发布时间：{metadata['timestamp']}")
+
+    video_count = metadata.get("video_count", 0)
+    if enable_text_metadata and video_count > 0:
+        actual_max_video_size_mb = metadata.get("largest_video_size_mb")
+        total_video_size_mb = metadata.get("total_video_size_mb", 0.0)
+        video_modes = metadata.get("video_modes")
+        sendable_video_count = (
+            sum(mode in ("local", "direct") for mode in video_modes)
+            if isinstance(video_modes, list)
+            else video_count
+        )
+
+        if actual_max_video_size_mb is not None:
+            if sendable_video_count == 1:
+                text_parts.append(f"视频大小：{actual_max_video_size_mb:.1f} MB")
+            else:
+                text_parts.append(
+                    f"视频大小：最大 {actual_max_video_size_mb:.1f} MB "
+                    f"(共 {sendable_video_count} 个可发送视频, "
+                    f"总计 {total_video_size_mb:.1f} MB)"
+                )
+
+    _append_media_status(text_parts, metadata, max_video_size_mb)
+
+    url = str(metadata.get("url") or metadata.get("source_url") or "").strip()
+    if url and (
+        (enable_text_metadata and text_metadata_field_enabled(metadata, "original_link"))
+        or (not enable_text_metadata and text_parts)
+    ):
+        text_parts.append(f"原始链接：{url}")
 
     if desc_text:
         if text_parts:

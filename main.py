@@ -950,6 +950,8 @@ class VideoParserPlugin(Star):
                     sender_id,
                     cfg.download.large_video_threshold_mb,
                     text_metadata_images=text_metadata_images,
+                    image_send_mode=cfg.message.media_display.image_send_mode,
+                    forward_text_length=cfg.message.aggregation.forward_text_length,
                 )
             else:
                 await self.message_sender.send_individual_results(
@@ -959,6 +961,7 @@ class VideoParserPlugin(Star):
                     quote_user_message=(cfg.message.text_metadata.quote_user_message),
                     quote_message_id=quote_source_message_id,
                     text_metadata_images=text_metadata_images,
+                    image_send_mode=cfg.message.media_display.image_send_mode,
                 )
 
             try:
@@ -968,6 +971,8 @@ class VideoParserPlugin(Star):
                     should_aggregate_nodes=should_aggregate_nodes,
                     sender_name=sender_name,
                     sender_id=sender_id,
+                    forward_text_length=cfg.message.aggregation.forward_text_length,
+                    image_send_mode=cfg.message.media_display.image_send_mode,
                 )
             except MessageDeliveryError as exc:
                 self.logger.warning(f"媒体已发送，但翻译结果发送失败: {exc}")
