@@ -45,7 +45,17 @@ class DownloadManager:
         video_cover_only: bool = False,
         max_audio_size_mb: float = 30.0,
         readme_paginate: bool = False,
+        max_video_duration_seconds: int = 0,
+        video_duration_limit_reply: str = Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY,
     ):
+        try:
+            self.max_video_duration_seconds = max(0, int(max_video_duration_seconds))
+        except (OverflowError, TypeError, ValueError):
+            self.max_video_duration_seconds = 0
+        self.video_duration_limit_reply = (
+            video_duration_limit_reply.strip()
+            if isinstance(video_duration_limit_reply, str) else ""
+        ) or Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY
         try:
             normalized_max_size = float(max_video_size_mb)
             self.max_video_size_mb = (
@@ -88,6 +98,45 @@ class DownloadManager:
         self._shutting_down = False
 
     # ── 决策辅助 ────────────────────────────────────────
+
+    def get_video_duration_skip_reason(
+        self, metadata: MediaMetadata, *, video_cover_only: Optional[bool] = None
+    ) -> Optional[str]:
+        """检查单视频的已知时长是否超过上限。
+
+        Args:
+            metadata: 解析器返回的元数据。
+            video_cover_only: 本次封面模式，缺省时使用管理器配置。
+
+        Returns:
+            超限时的跳过原因；不限时长、未知时长或仅发送封面时返回 None。
+        """
+        cover_only = (
+            self.video_cover_only if video_cover_only is None else bool(video_cover_only)
+        )
+        video_urls = metadata.get("video_urls") or []
+        if cover_only or len(video_urls) != 1 or not video_urls[0]:
+            return None
+        duration_ms = metadata.get("timelength_ms")
+        available_ms = metadata.get("available_length_ms")
+        if (
+            metadata.get("is_preview_only")
+            and isinstance(available_ms, int)
+            and not isinstance(available_ms, bool)
+            and available_ms > 0
+        ):
+            duration_ms = available_ms
+        if (
+            self.max_video_duration_seconds > 0
+            and isinstance(duration_ms, int)
+            and not isinstance(duration_ms, bool)
+            and duration_ms > self.max_video_duration_seconds * 1000
+        ):
+            return (
+                f"{self.video_duration_limit_reply}（{duration_ms / 1000:g}秒 > "
+                f"{self.max_video_duration_seconds}秒）"
+            )
+        return None
 
     @staticmethod
     def _copy_url_groups(field_name: str, value: Any) -> List[List[str]]:
@@ -629,7 +678,14 @@ class DownloadManager:
             f"缓存目录可用={self.cache_dir_available}"
         )
 
+        # 现有时长字段是单个标量，多视频结果不能把它套用到每个媒体。
+        duration_reason = self.get_video_duration_skip_reason(
+            metadata, video_cover_only=video_cover_only
+        )
         for idx, url_list in enumerate(video_urls):
+            if url_list and duration_reason:
+                video_skip_reasons[idx] = duration_reason
+                continue
             encrypted = any(candidate in decryption_keys for candidate in url_list)
             requires_local = self._video_requires_local(
                 url_list, force_download or encrypted

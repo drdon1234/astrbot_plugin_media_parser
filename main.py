@@ -78,6 +78,8 @@ class VideoParserPlugin(Star):
 
         self.download_manager = DownloadManager(
             max_video_size_mb=cfg.download.max_video_size_mb,
+            max_video_duration_seconds=cfg.download.max_video_duration_seconds,
+            video_duration_limit_reply=cfg.download.video_duration_limit_reply,
             max_audio_size_mb=cfg.download.max_audio_size_mb,
             large_video_threshold_mb=cfg.download.large_video_threshold_mb,
             cache_dir=cfg.download.cache_dir,
