@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
 
-from .font_manager import FONT_DIR, ensure_default_fonts
+from .font_manager import FONT_DIR, ensure_default_fonts, ensure_emoji_font
 
 
 DEFAULT_RENDER_WIDTH = 960
@@ -90,6 +91,8 @@ async def render_text_metadata_images(
         raise ValueError("没有可渲染的文本元数据")
 
     await ensure_render_fonts(font_family, font_proxy_url)
+    if _has_emoji(str(text) + str(title)) and not await asyncio.to_thread(_emoji_font_is_available):
+        await ensure_emoji_font(font_proxy_url)
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     render_timeout = max(10, int(timeout_seconds or 60))
@@ -238,6 +241,11 @@ def _render_text_metadata_image_sync(
         "meta": _load_font(ImageFont, meta_size, font_family=font_family),
         "label": _load_font(ImageFont, meta_size, True, font_family),
     }
+    if _has_emoji(text + title):
+        fonts = {
+            key: _FallbackFont(font, _load_emoji_font(ImageFont, font.size))
+            for key, font in fonts.items()
+        }
     with Image.new("RGB", (width, 1), palette["background"]) as probe:
         probe_draw = ImageDraw.Draw(probe)
         margin = max(24, width // 30)
@@ -368,8 +376,150 @@ def _draw_page(
 
 def _draw_text(draw: Any, x: float, y: float, text: str, font: object, color: str) -> None:
     """按字形实际边界对齐，避免字体上边距或负左边距导致溢出。"""
-    left = draw.textbbox((0, 0), text, font=font, anchor="lt")[0]
-    draw.text((x - left, y), text, font=font, fill=color, anchor="lt")
+    for value, run_font in _font_runs(text, font):
+        bbox = draw.textbbox((0, 0), value, font=run_font, anchor="lt")
+        draw.text((x - bbox[0], y), value, font=run_font, fill=color, anchor="lt")
+        x += bbox[2] - bbox[0]
+
+
+class _FallbackFont:
+    """保存正文和表情字体，让测量与绘制共用分段规则。"""
+
+    def __init__(self, primary: object, emoji: object) -> None:
+        self.primary = primary
+        self.emoji = emoji
+        self.coverage: dict[str, bool] = {}
+        missing = emoji.getmask("\U0010ffff")
+        self.missing = (missing.size, bytes(missing))
+
+    def _supports_emoji(self, text: str) -> bool:
+        """检查表情字体字形，避免原本可显示的符号被替换成缺字符。"""
+        for char in text:
+            if char in "\ufe0e\ufe0f\u200d" or 0xE0020 <= ord(char) <= 0xE007F:
+                continue
+            if char not in self.coverage:
+                glyph = self.emoji.getmask(char)
+                self.coverage[char] = (glyph.size, bytes(glyph)) != self.missing
+            if not self.coverage[char]:
+                return False
+        return True
+
+
+def _has_emoji(text: str) -> bool:
+    """识别表情符号、旗帜、键帽和表情显示选择符。"""
+    return bool(re.search(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u20E3]", text))
+
+
+def _text_clusters(text: str) -> List[str]:
+    """保留组合附加符、肤色、连接符序列及成对地区指示符。"""
+    clusters: List[str] = []
+    for char in text:
+        code = ord(char)
+        if clusters and (
+            unicodedata.combining(char) or char in "\ufe0e\ufe0f\u20e3\u200d"
+            or clusters[-1].endswith("\u200d")
+            or 0x1F3FB <= code <= 0x1F3FF or 0xE0020 <= code <= 0xE007F
+            or (0x1F1E6 <= code <= 0x1F1FF and len(clusters[-1]) == 1
+                and 0x1F1E6 <= ord(clusters[-1]) <= 0x1F1FF)
+        ):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    return clusters
+
+
+def _font_runs(text: str, font: object) -> List[tuple[str, object]]:
+    """按完整表情序列选择字体，相邻同字体文字合并以保留字距。"""
+    if not isinstance(font, _FallbackFont):
+        return [(text, font)]
+    runs: List[tuple[str, object]] = []
+    for cluster in _text_clusters(text):
+        selected = (
+            font.emoji if _has_emoji(cluster) and "\ufe0e" not in cluster
+            and font._supports_emoji(cluster) else font.primary
+        )
+        if runs and runs[-1][1] is selected:
+            runs[-1] = (runs[-1][0] + cluster, selected)
+        else:
+            runs.append((cluster, selected))
+    return runs
+
+
+def _text_bbox(draw: Any, text: str, font: object) -> tuple[int, int, int, int]:
+    """测量与实际绘制一致的混排宽度和可见高度。"""
+    boxes = [draw.textbbox((0, 0), value, font=run_font, anchor="lt")
+             for value, run_font in _font_runs(text, font)]
+    return (0, 0, sum(box[2] - box[0] for box in boxes),
+            max((box[3] - box[1] for box in boxes), default=0))
+
+
+def _clean_inline_markdown(text: str) -> str:
+    """去除成对强调标记，保留代码字面量和链接目标。"""
+    # 代码、转义符和 URL 作为独立词元保留，不把其中的星号或下划线当成强调。
+    tokens: dict[str, str] = {}
+
+    def protect(match: re.Match[str]) -> str:
+        key = f"\x00{len(tokens)}\x00"
+        value = match[0]
+        tokens[key] = value
+        if value.startswith("\\"):
+            tokens[key] = value[1:]
+        return key
+
+    def protect_code(match: re.Match[str]) -> str:
+        key = f"\x00{len(tokens)}\x00"
+        tokens[key] = match[2]
+        return key
+
+    text = re.sub(r"(`+)(.*?)\1", protect_code, text)
+    text = re.sub(r"\\[\\`*_{}\[\]()#+.!~\-]", protect, text)
+    text = re.sub(r"!?\[([^]\n]+)\]\((https?://[^\s)]+)\)",
+                  lambda m: m[1] if m[1] == m[2] else f"{m[1]}（{m[2]}）", text)
+    # 成对强调的右边界可能紧随链接，用非贪婪匹配保留边界标记。
+    text = re.sub(r"https?://[^\s<>（）]+?(?=\*\*(?:\s|$)|[\s<>（）]|$)", protect, text)
+    for _ in range(2):
+        previous = text
+        for pattern in (
+            r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)",
+            r"~~(?=\S)(.+?)(?<=\S)~~", r"(?<!\*)\*(?=\S)(.+?)(?<=\S)\*(?!\*)",
+            r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)",
+        ):
+            text = re.sub(pattern, r"\1", text)
+        if text == previous:
+            break
+    return re.sub(r"\x00\d+\x00", lambda m: tokens.get(m[0], m[0]), text)
+
+
+def _load_emoji_font(image_font: Any, size: int) -> object:
+    """优先加载可缩放的单色表情字体，避免位图字体字号限制。"""
+    for path in (
+        str(FONT_DIR / "NotoEmoji.ttf"),
+        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoEmoji.ttf",
+        "C:/Windows/Fonts/seguiemj.ttf",
+    ):
+        if not os.path.isfile(path):
+            continue
+        try:
+            font = image_font.truetype(path, size)
+            glyph, missing = font.getmask("💫"), font.getmask("\U0010ffff")
+            if glyph.size != missing.size or bytes(glyph) != bytes(missing):
+                return font
+        except (OSError, ValueError):
+            continue
+    raise RuntimeError("未找到可用表情字体，请补全 Noto Emoji 字体")
+
+
+def _emoji_font_is_available() -> bool:
+    """确认本地表情字体可在正文和标题字号下绘制。"""
+    from PIL import ImageFont
+
+    try:
+        _load_emoji_font(ImageFont, MIN_RENDER_FONT_SIZE)
+        _load_emoji_font(ImageFont, round(MAX_RENDER_FONT_SIZE * 1.5))
+    except RuntimeError:
+        return False
+    return True
 
 
 def _layout_text(
@@ -383,8 +533,17 @@ def _layout_text(
     """按标题、辅助信息、正文与评论角色测量每一行。"""
     lines: List[_TextLine] = []
     body_height = _line_height(draw, fonts["body"], line_spacing)
+    fence = ""
     for raw_line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         value = raw_line.strip()
+        marker = re.match(r"^(`{3,}|~{3,})(.*)$", value)
+        if marker:
+            if not fence:
+                fence = marker[1]
+                continue
+            if marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = ""
+                continue
         if not value:
             if lines and lines[-1].kind not in ("blank", "separator"):
                 lines.append(_TextLine(
@@ -392,24 +551,29 @@ def _layout_text(
                     keep_with_next=lines[-1].keep_with_next,
                 ))
             continue
-        if value == TEXT_SECTION_SEPARATOR:
+        if not fence and value == TEXT_SECTION_SEPARATOR:
             if lines and lines[-1].kind == "blank":
                 lines.pop()
             lines.append(_TextLine("", "separator", body_height, keep_with_next=True))
             continue
-        label, content = _split_label(value)
+        label, content = _split_label(value) if not fence else ("", "")
         kind = "body"
-        if label.rstrip("：:") == "标题":
+        heading = re.match(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", value) if not fence else None
+        if heading:
+            kind, value, label = "section", heading[1], ""
+        elif label.rstrip("：:") == "标题":
             kind, value, label = "title", content.strip(), ""
-        elif value in ("简介/正文：", "简介/正文:", "翻译") or re.fullmatch(
+        elif not fence and (value in ("简介/正文：", "简介/正文:", "翻译") or re.fullmatch(
             r"(?:热评|分集弹幕|翻译)[（(].+?[）)][：:]?", value,
-        ):
+        )):
             kind, label = "section", ""
             value = value.rstrip("：:")
-        elif re.match(r"^\[\d+\]\s+", value):
+        elif not fence and re.match(r"^\[\d+\]\s+", value):
             kind, label = "author", ""
         elif label:
             kind, value = "meta", content
+        if not fence:
+            value = _clean_inline_markdown(value)
         font = fonts[kind]
         first_width = max_width - (
             _text_width(draw, label, fonts["label"]) if label else 0
@@ -421,10 +585,10 @@ def _layout_text(
             kind in ("title", "section", "author") or label.rstrip("：:") == "点赞"
         )
         for index, line in enumerate(wrapped):
-            bbox = draw.textbbox((0, 0), line, font=font)
+            bbox = _text_bbox(draw, line, font)
             actual_height = bbox[3] - bbox[1]
             if index == 0 and label:
-                label_bbox = draw.textbbox((0, 0), label, font=fonts["label"])
+                label_bbox = _text_bbox(draw, label, fonts["label"])
                 actual_height = max(actual_height, label_bbox[3] - label_bbox[1])
             lines.append(_TextLine(
                 line, kind, max(height, actual_height + 2),
@@ -447,33 +611,34 @@ def _wrap_text(
     if not value:
         return [""]
     lines: List[str] = []
+    units = _text_clusters(value)
     start = 0
-    while start < len(value):
+    while start < len(units):
         available = (
             first_line_width if not lines and first_line_width is not None else max_width
         )
         end = start + 1
-        while end < len(value) and _text_width(draw, value[start:end + 1], font) <= available:
+        while end < len(units) and _text_width(draw, "".join(units[start:end + 1]), font) <= available:
             end += 1
-        if end < len(value):
+        if end < len(units):
             boundary = end
             # 能在一个单词前断行时保留单词，超长英文词或链接按字形拆分。
             if (
-                value[end - 1].isascii() and value[end].isascii()
-                and value[end - 1].isalnum() and value[end].isalnum()
+                units[end - 1].isascii() and units[end].isascii()
+                and units[end - 1].isalnum() and units[end].isalnum()
             ):
-                space = value.rfind(" ", start, end)
+                space = next((i for i in range(end - 1, start, -1) if units[i] == " "), -1)
                 if space > start:
                     boundary = space + 1
             while boundary > start + 1 and (
-                value[boundary] in NO_LINE_START_CHARS
-                or value[boundary - 1] in NO_LINE_END_CHARS
+                units[boundary] in NO_LINE_START_CHARS
+                or units[boundary - 1] in NO_LINE_END_CHARS
             ):
                 boundary -= 1
             end = boundary
-        lines.append(value[start:end].rstrip())
+        lines.append("".join(units[start:end]).rstrip())
         start = end
-        while start < len(value) and value[start] == " ":
+        while start < len(units) and units[start] == " ":
             start += 1
     return lines or [value]
 
@@ -492,12 +657,12 @@ def _split_label(line: str) -> tuple[str, str]:
 
 
 def _text_width(draw: object, text: str, font: object) -> int:
-    bbox = draw.textbbox((0, 0), str(text or ""), font=font)
+    bbox = _text_bbox(draw, str(text or ""), font)
     return max(1, int(bbox[2] - bbox[0]))
 
 
 def _line_height(draw: object, font: object, factor: float) -> int:
-    bbox = draw.textbbox((0, 0), "媒体解析Ag", font=font)
+    bbox = _text_bbox(draw, "媒体解析Ag", font)
     return max(1, int((bbox[3] - bbox[1]) * factor))
 
 

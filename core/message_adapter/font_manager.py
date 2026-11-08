@@ -33,11 +33,12 @@ class FontAsset:
     filename: str
     size: int
     sha256: str
+    source_url: str = ""
 
     @property
     def url(self) -> str:
-        """返回固定版本的 Release 资源地址。"""
-        return f"{FONT_RELEASE_BASE_URL}/{self.filename}"
+        """返回固定版本的字体资源地址。"""
+        return self.source_url or f"{FONT_RELEASE_BASE_URL}/{self.filename}"
 
 
 FONT_ASSETS = (
@@ -59,8 +60,46 @@ FONT_ASSETS = (
     ),
 )
 
+EMOJI_FONT_ASSET = FontAsset(
+    filename="NotoEmoji.ttf",
+    size=1982596,
+    sha256="de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
+    source_url=(
+        "https://raw.githubusercontent.com/google/fonts/"
+        "b979dba422e445492b0eb9951ac52ee0b4d648c3/"
+        "ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
+    ),
+)
+_emoji_lock = asyncio.Lock()
+_emoji_ready = False
 _ensure_lock = asyncio.Lock()
 _fonts_ready = False
+
+
+async def ensure_emoji_font(proxy_url: str = "") -> None:
+    """校验并补全单色表情字体。
+
+    Args:
+        proxy_url: 下载字体使用的代理地址，为空时直接连接。
+    """
+    global _emoji_ready
+
+    async with _emoji_lock:
+        target = FONT_DIR / EMOJI_FONT_ASSET.filename
+        if _emoji_ready and _font_has_expected_size(target, EMOJI_FONT_ASSET):
+            return
+        _emoji_ready = False
+        if await asyncio.to_thread(_font_is_valid, target, EMOJI_FONT_ASSET):
+            _emoji_ready = True
+            return
+        try:
+            FONT_DIR.mkdir(parents=True, exist_ok=True)
+            timeout = aiohttp.ClientTimeout(total=FONT_DOWNLOAD_TIMEOUT_SECONDS)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                await _download_font(session, EMOJI_FONT_ASSET, target, proxy_url)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            raise FontDownloadError(f"补全表情字体失败: {exc}") from exc
+        _emoji_ready = True
 
 
 async def ensure_default_fonts(proxy_url: str = "") -> None:
