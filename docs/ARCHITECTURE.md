@@ -195,7 +195,6 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.text_metadata.quote_user_message` 控制非聚合发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
 
-时长上限默认 0；新增配置只在缺省时使用默认值，不迁移或覆盖既有配置值。
 文本元数据渲染后的分页图片与原图共用发送器的图片分组逻辑，遵守 `message.media_display.image_send_mode`；分页图片按页序发送，多图一条时作为同一消息或同一转发节点。非聚合发送仅首个正文图片分组引用用户消息，引用组件不会修改原图片分组。构建失败的页面保留错误记录，其余页面继续按所选方式发送；适配器发送错误沿用逐项记录与取消传播处理。
 
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
@@ -368,7 +367,7 @@ video_count + image_count ..                  音频
 
 每个视频独立决策：
 
-- `download.max_video_duration_seconds` 默认 0 不限制，推荐 300 秒。`get_video_duration_skip_reason()` 对单视频结果使用现有 `timelength_ms` 检查：普通聊天在启动翻译、下载和节点构建之前排除超限结果，直接回复“视频太长了你自己看去”，不进入合并转发或文本图片渲染；提示发送失败只记录警告，同条消息其他链接继续处理，取消操作继续向上传播。下载管理器复用该检查，为 ZIP 的超限视频写入 `video_skip_reasons` 并设为 `skip`，不改写体积超限标记。未知时长与多视频结果不根据标量时长推断，视频仅封面转换和仅文本输出保持原流程。
+- `download.max_video_duration_seconds` 默认 0 不限制。下载层通过 `get_video_duration_skip_reason()` 对单视频的 `timelength_ms` 检查，试看场景优先使用有效的 `available_length_ms`。超限视频仅回填 `video_skip_reasons` 并保持 `skip`，不预检、不下载、不直发，也不移除整条 metadata；正文、配图、音频继续原流程。提示使用 `download.video_duration_limit_reply`，默认“视频时长超过配置上限，已跳过该视频。”，空白或非字符串回退默认值，并附实际时长及限制；聊天与 ZIP 共用同一原因。时长超限不改写体积超限标记；未知时长、多视频、视频仅封面和仅文本输出保持原流程。
 - `video_force_download` 为真：该解析结果中的视频必须 `local`。
 - DASH/M3U8 候选必须本地处理；无缓存时只有同组提供普通直链且未强制缓存，才可筛选这些直链并预检后 `direct`。
 - 缓存可用的普通视频：`local`。

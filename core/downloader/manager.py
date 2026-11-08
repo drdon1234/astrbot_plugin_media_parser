@@ -46,11 +46,16 @@ class DownloadManager:
         max_audio_size_mb: float = 30.0,
         readme_paginate: bool = False,
         max_video_duration_seconds: int = 0,
+        video_duration_limit_reply: str = Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY,
     ):
         try:
             self.max_video_duration_seconds = max(0, int(max_video_duration_seconds))
         except (OverflowError, TypeError, ValueError):
             self.max_video_duration_seconds = 0
+        self.video_duration_limit_reply = (
+            video_duration_limit_reply.strip()
+            if isinstance(video_duration_limit_reply, str) else ""
+        ) or Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY
         try:
             normalized_max_size = float(max_video_size_mb)
             self.max_video_size_mb = (
@@ -113,6 +118,14 @@ class DownloadManager:
         if cover_only or len(video_urls) != 1 or not video_urls[0]:
             return None
         duration_ms = metadata.get("timelength_ms")
+        available_ms = metadata.get("available_length_ms")
+        if (
+            metadata.get("is_preview_only")
+            and isinstance(available_ms, int)
+            and not isinstance(available_ms, bool)
+            and available_ms > 0
+        ):
+            duration_ms = available_ms
         if (
             self.max_video_duration_seconds > 0
             and isinstance(duration_ms, int)
@@ -120,7 +133,7 @@ class DownloadManager:
             and duration_ms > self.max_video_duration_seconds * 1000
         ):
             return (
-                f"视频时长超过限制（{duration_ms / 1000:g}秒 > "
+                f"{self.video_duration_limit_reply}（{duration_ms / 1000:g}秒 > "
                 f"{self.max_video_duration_seconds}秒）"
             )
         return None
