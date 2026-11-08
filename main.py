@@ -5,6 +5,7 @@ import copy
 import tempfile
 import uuid
 from pathlib import Path
+from random import choice
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -77,6 +78,8 @@ class VideoParserPlugin(Star):
 
         self.download_manager = DownloadManager(
             max_video_size_mb=cfg.download.max_video_size_mb,
+            max_video_duration_seconds=cfg.download.max_video_duration_seconds,
+            video_duration_limit_reply=cfg.download.video_duration_limit_reply,
             max_audio_size_mb=cfg.download.max_audio_size_mb,
             large_video_threshold_mb=cfg.download.large_video_threshold_mb,
             cache_dir=cfg.download.cache_dir,
@@ -88,6 +91,7 @@ class VideoParserPlugin(Star):
 
         self.message_sender = MessageSender()
         self._cleanup_tasks: set[asyncio.Task] = set()
+        self._reaction_tasks: set[asyncio.Task] = set()
         self._expired_cleanup_task: Optional[asyncio.Task] = None
         self._active_media_flows = 0
         self._cache_cleanup_lock = asyncio.Lock()
@@ -128,7 +132,13 @@ class VideoParserPlugin(Star):
                 f"字体资源补全失败，插件将继续加载，文本图片渲染会回退原文本: {exc}"
             )
 
-    async def terminate(self):
+    async def terminate(self) -> None:
+        reaction_tasks = list(self._reaction_tasks)
+        for task in reaction_tasks:
+            task.cancel()
+        if reaction_tasks:
+            await asyncio.gather(*reaction_tasks, return_exceptions=True)
+        self._reaction_tasks.clear()
         if self._bilibili_search_session is not None:
             await self._bilibili_search_session.close()
             self._bilibili_search_session = None
@@ -443,19 +453,17 @@ class VideoParserPlugin(Star):
         )
         return task, translation_metadata_list
 
-    async def _cancel_translation_task(self, task) -> None:
+    async def _cancel_background_task(
+        self, task: Optional[asyncio.Task], label: str
+    ) -> None:
+        """结束并观察后台任务，避免解析结束后遗留发送或未处理异常。"""
         if task is None:
             return
-        if task.done():
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                self.logger.warning(f"后台翻译任务失败: {exc}")
-            return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        result, = await asyncio.gather(task, return_exceptions=True)
+        if isinstance(result, Exception):
+            self.logger.warning(f"{label}任务失败: {result}")
 
     async def _build_translation_nodes_after_task(
         self,
@@ -718,6 +726,82 @@ class VideoParserPlugin(Star):
                     seen.add(path_text)
                     files.append(path_text)
         return files
+
+    # 表情回应参考 Acacia 的 astrbot_plugin_link_resolver，并适配本项目配置与 OneBot 接口。
+    # 来源：https://github.com/vacacia/astrbot_plugin_link_resolver（AGPL-3.0）。
+    @staticmethod
+    def _extract_reaction_message_id(event: AstrMessageEvent) -> Optional[int]:
+        """优先从原始事件读取协议消息 ID，兼容卡片消息。"""
+        raw = getattr(event.message_obj, "raw_message", None)
+        raw_id = (
+            raw.get("message_id")
+            if isinstance(raw, dict)
+            else getattr(raw, "message_id", None)
+        )
+        for value in (raw_id, getattr(event.message_obj, "message_id", None)):
+            if value is None or isinstance(value, bool):
+                continue
+            try:
+                message_id = int(value)
+            except (OverflowError, TypeError, ValueError):
+                continue
+            if message_id != 0:
+                return message_id
+        return None
+
+    async def _send_reaction_emoji(self, event: AstrMessageEvent) -> None:
+        """对开始处理的 OneBot 群消息添加表情，失败时继续解析。"""
+        reaction = self.config_manager.message.reaction
+        if (
+            not reaction.enabled
+            or not reaction.emoji_ids
+            or event.get_platform_name() != "aiocqhttp"
+            or not event.get_group_id()
+        ):
+            return
+        bot = getattr(event, "bot", None)
+        if bot is None or not callable(getattr(bot, "call_action", None)):
+            return
+        message_id = self._extract_reaction_message_id(event)
+        if message_id is None:
+            self.logger.debug("表情回应跳过：无法获取协议消息 ID")
+            return
+
+        self_id = str(event.get_self_id() or "").strip()
+        if not self_id:
+            self.logger.debug("表情回应跳过：无法获取机器人 ID")
+            return
+
+        from aiocqhttp.exceptions import Error as OneBotError
+
+        emoji_ids = (
+            list(reaction.emoji_ids)
+            if reaction.strategy == "依次回应"
+            else [choice(reaction.emoji_ids)]
+        )
+        for index, emoji_id in enumerate(emoji_ids):
+            if index:
+                await asyncio.sleep(0.5)
+            try:
+                await asyncio.wait_for(
+                    bot.call_action(
+                        "set_msg_emoji_like",
+                        message_id=message_id,
+                        self_id=self_id,
+                        emoji_id=str(emoji_id),
+                        set=True,
+                    ),
+                    timeout=5.0,
+                )
+            except asyncio.CancelledError:
+                raise
+            except (
+                OneBotError, asyncio.TimeoutError, OSError, RuntimeError, TypeError, ValueError
+            ) as exc:
+                self.logger.warning(
+                    f"表情回应失败：表情 ID={emoji_id}，{type(exc).__name__}: {exc}"
+                )
+                return
 
     async def _send_opening_message(
         self,
@@ -1232,91 +1316,99 @@ class VideoParserPlugin(Star):
                 )
             return
 
-        if not zip_requested:
-            for link, _parser in links_with_parser:
-                await self._send_opening_message(
-                    event,
-                    cfg.message.opening.content,
-                    link,
+        reaction_task = None
+        if cfg.message.reaction.enabled and cfg.message.reaction.emoji_ids:
+            reaction_task = asyncio.create_task(self._send_reaction_emoji(event))
+            self._reaction_tasks.add(reaction_task)
+            reaction_task.add_done_callback(self._reaction_tasks.discard)
+        try:
+            if not zip_requested:
+                for link, _parser in links_with_parser:
+                    await self._send_opening_message(
+                        event,
+                        cfg.message.opening.content,
+                        link,
+                    )
+
+            if cfg.admin.debug_mode:
+                self.logger.debug(
+                    f"提取到 {len(links_with_parser)} 个可解析链接: "
+                    f"{[link for link, _ in links_with_parser]}"
                 )
 
-        if cfg.admin.debug_mode:
-            self.logger.debug(
-                f"提取到 {len(links_with_parser)} 个可解析链接: "
-                f"{[link for link, _ in links_with_parser]}"
-            )
+            sender_name, sender_id = self.message_sender.get_sender_info(event)
 
-        sender_name, sender_id = self.message_sender.get_sender_info(event)
-
-        timeout = aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT)
-        # 保留媒体重定向地址中的签名编码，由 aiohttp 继续处理跳转及跨域认证。
-        async with aiohttp.ClientSession(
-            timeout=timeout, requote_redirect_url=False
-        ) as session:
-            metadata_list = await self.parser_manager.parse_text(
-                parse_text, session, links_with_parser=links_with_parser
-            )
-            if self.parse_record_manager.same_link.enabled:
-                await asyncio.to_thread(
-                    self.parse_record_manager.record_metadata_links,
-                    metadata_list,
+            timeout = aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT)
+            # 保留媒体重定向地址中的签名编码，由 aiohttp 继续处理跳转及跨域认证。
+            async with aiohttp.ClientSession(
+                timeout=timeout, requote_redirect_url=False
+            ) as session:
+                metadata_list = await self.parser_manager.parse_text(
+                    parse_text, session, links_with_parser=links_with_parser
                 )
-            self._trigger_bilibili_cookie_assist_if_needed()
-            if not metadata_list:
-                if cfg.admin.debug_mode:
-                    self.logger.debug("解析后未获得任何元数据")
+                if self.parse_record_manager.same_link.enabled:
+                    await asyncio.to_thread(
+                        self.parse_record_manager.record_metadata_links,
+                        metadata_list,
+                    )
+                self._trigger_bilibili_cookie_assist_if_needed()
+                if not metadata_list:
+                    if cfg.admin.debug_mode:
+                        self.logger.debug("解析后未获得任何元数据")
+                    if zip_requested:
+                        await event.send(
+                            event.plain_result("引用消息中的链接未获得可归档解析结果。")
+                        )
+                    return
+                self._apply_output_flags(metadata_list)
                 if zip_requested:
-                    await event.send(
-                        event.plain_result("引用消息中的链接未获得可归档解析结果。")
-                    )
-                return
-            self._apply_output_flags(metadata_list)
-            if zip_requested:
-                # 归档是独立导出能力，不继承聊天展示的仅文本/仅媒体开关。
-                for metadata in metadata_list:
-                    metadata["_enable_text_metadata"] = True
-                    metadata["_enable_rich_media"] = True
-                    metadata["_text_metadata_fields"] = {
-                        "title": True,
-                        "author": True,
-                        "timestamp": True,
-                        "original_link": True,
-                        "description": True,
-                    }
+                    # 归档是独立导出能力，不继承聊天展示的仅文本/仅媒体开关。
+                    for metadata in metadata_list:
+                        metadata["_enable_text_metadata"] = True
+                        metadata["_enable_rich_media"] = True
+                        metadata["_text_metadata_fields"] = {
+                            "title": True,
+                            "author": True,
+                            "timestamp": True,
+                            "original_link": True,
+                            "description": True,
+                        }
 
-            has_valid_metadata = any(
-                self._metadata_has_output_candidate(metadata)
-                for metadata in metadata_list
-            )
-
-            if not has_valid_metadata:
-                if cfg.admin.debug_mode:
-                    self.logger.debug(
-                        "解析后未获得任何有效元数据（可能是直播链接或解析失败）"
-                    )
-                if zip_requested:
-                    await event.send(
-                        event.plain_result("引用消息中的链接没有可归档内容。")
-                    )
-                return
-
-            translation_task, translation_metadata_list = self._start_translation_task(
-                metadata_list, event
-            )
-
-            try:
-                await self._process_and_send_metadata(
-                    event=event,
-                    session=session,
-                    metadata_list=metadata_list,
-                    cfg=cfg,
-                    sender_name=sender_name,
-                    sender_id=sender_id,
-                    quote_source_message_id=quote_source_message_id,
-                    zip_requested=zip_requested,
-                    translation_task=translation_task,
-                    translation_metadata_list=translation_metadata_list,
-                    card_title_matched=card_title_matched,
+                has_valid_metadata = any(
+                    self._metadata_has_output_candidate(metadata)
+                    for metadata in metadata_list
                 )
-            finally:
-                await self._cancel_translation_task(translation_task)
+
+                if not has_valid_metadata:
+                    if cfg.admin.debug_mode:
+                        self.logger.debug(
+                            "解析后未获得任何有效元数据（可能是直播链接或解析失败）"
+                        )
+                    if zip_requested:
+                        await event.send(
+                            event.plain_result("引用消息中的链接没有可归档内容。")
+                        )
+                    return
+
+                translation_task, translation_metadata_list = self._start_translation_task(
+                    metadata_list, event
+                )
+
+                try:
+                    await self._process_and_send_metadata(
+                        event=event,
+                        session=session,
+                        metadata_list=metadata_list,
+                        cfg=cfg,
+                        sender_name=sender_name,
+                        sender_id=sender_id,
+                        quote_source_message_id=quote_source_message_id,
+                        zip_requested=zip_requested,
+                        translation_task=translation_task,
+                        translation_metadata_list=translation_metadata_list,
+                        card_title_matched=card_title_matched,
+                    )
+                finally:
+                    await self._cancel_background_task(translation_task, "后台翻译")
+        finally:
+            await self._cancel_background_task(reaction_task, "表情回应")

@@ -798,6 +798,31 @@
                     }
                 }
             },
+            "reaction": {
+                "description": "发送行为：识别后表情回应",
+                "type": "object",
+                "hint": "识别到可处理的链接或卡片后，对原群消息点表情；与解析并行，解析结束时取消未完成回应，需要 NapCat 等支持该接口的 OneBot 协议端。",
+                "items": {
+                    "enable": {
+                        "description": "识别后表情回应",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "emoji_ids": {
+                        "description": "回应表情 ID 列表（最多 5 个）",
+                        "type": "list",
+                        "hint": "空列表不回应；默认草莓=127827。常用：棒棒糖=147、OK=124、赞=76、爱心=66。",
+                        "default": [127827]
+                    },
+                    "strategy": {
+                        "description": "回应策略",
+                        "type": "string",
+                        "hint": "随机：每条消息抽一个；依次回应：对同一消息按列表依次回应，间隔 0.5 秒。",
+                        "options": ["随机", "依次回应"],
+                        "default": "随机"
+                    }
+                }
+            },
             "opening": {
                 "description": "发送行为：开场语",
                 "type": "object",
@@ -1053,6 +1078,19 @@
                 "type": "float",
                 "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；填 0 不限制。",
                 "default": 1000.0
+            },
+            "max_video_duration_seconds": {
+                "description": "视频时长上限（秒）",
+                "type": "int",
+                "hint": "默认 0 不限制，推荐设置 300 秒。仅跳过已知时长超限的单个视频，保留正文与其他媒体；试看按可播放时长判断。未知时长、多视频、仅发送封面和独立音频不受此项限制。",
+                "default": 0,
+                "min": 0
+            },
+            "video_duration_limit_reply": {
+                "description": "视频时长超限提示",
+                "type": "string",
+                "hint": "跳过超长视频时显示的提示，后附实际时长与上限；留空使用默认提示。",
+                "default": "视频时长超过配置上限，已跳过该视频。"
             },
             "max_audio_size_mb": {
                 "description": "音频大小上限（MB）",

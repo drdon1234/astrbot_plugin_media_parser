@@ -314,6 +314,21 @@ class OpeningMessageConfig:
 
 
 @dataclass
+class ReactionMessageConfig:
+    """识别链接后对原消息回应表情的配置。
+
+    Attributes:
+        enabled: 是否启用表情回应。
+        emoji_ids: 可使用的表情 ID 列表。
+        strategy: 随机一个或按列表依次回应。
+    """
+
+    enabled: bool = False
+    emoji_ids: List[int] = field(default_factory=lambda: [127827])
+    strategy: str = "随机"
+
+
+@dataclass
 class AggregationConfig:
     mode: str = AGGREGATION_MODE_NONE
     image_threshold: int = 3
@@ -422,6 +437,7 @@ class HotCommentConfig:
 @dataclass
 class MessageConfig:
     opening: OpeningMessageConfig = field(default_factory=OpeningMessageConfig)
+    reaction: ReactionMessageConfig = field(default_factory=ReactionMessageConfig)
     aggregation: AggregationConfig = field(default_factory=AggregationConfig)
     archive: ArchiveConfig = field(default_factory=ArchiveConfig)
     media_display: MediaDisplayConfig = field(default_factory=MediaDisplayConfig)
@@ -477,6 +493,8 @@ class PermissionConfig:
 @dataclass
 class DownloadConfig:
     max_video_size_mb: float = 1000.0
+    max_video_duration_seconds: int = 0
+    video_duration_limit_reply: str = Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY
     max_audio_size_mb: float = 30.0
     large_video_threshold_mb: float = Config.DEFAULT_LARGE_VIDEO_THRESHOLD_MB
     cache_dir: str = ""
@@ -708,6 +726,7 @@ class ConfigManager:
         # --- message ---
         message_raw = self._as_dict(config.get("message"))
         opening = self._as_dict(message_raw.get("opening"))
+        reaction = self._as_dict(message_raw.get("reaction"))
         aggregation = self._as_dict(message_raw.get("packing"))
         archive = self._as_dict(message_raw.get("archive"))
         text_metadata = self._as_dict(message_raw.get("text_metadata"))
@@ -721,6 +740,21 @@ class ConfigManager:
             hot_count = 0
 
         self.message = MessageConfig(
+            reaction=ReactionMessageConfig(
+                enabled=self._parse_bool(
+                    reaction.get("enable", False),
+                    False,
+                    "message.reaction.enable",
+                ),
+                emoji_ids=self._parse_reaction_emoji_ids(
+                    reaction.get("emoji_ids", [127827])
+                ),
+                strategy=(
+                    "依次回应"
+                    if str(reaction.get("strategy", "随机")).strip() == "依次回应"
+                    else "随机"
+                ),
+            ),
             opening=OpeningMessageConfig(
                 enabled=self._parse_bool(
                     opening.get("enable", True),
@@ -1194,6 +1228,14 @@ class ConfigManager:
 
         self.download = DownloadConfig(
             max_video_size_mb=max_video_size_mb,
+            max_video_duration_seconds=self._parse_non_negative_int(
+                download_raw.get("max_video_duration_seconds", 0), 0
+            ),
+            video_duration_limit_reply=(
+                str(download_raw.get("video_duration_limit_reply") or "").strip()
+                if isinstance(download_raw.get("video_duration_limit_reply"), str)
+                else ""
+            ) or Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY,
             max_audio_size_mb=self._parse_non_negative_float(
                 download_raw.get("max_audio_size_mb", 30.0), 30.0
             ),
@@ -1710,6 +1752,20 @@ class ConfigManager:
             return max(0, int(value))
         except (OverflowError, TypeError, ValueError):
             return max(0, int(default))
+
+    @classmethod
+    def _parse_reaction_emoji_ids(cls, values: Any) -> List[int]:
+        """保留前五项中的有效正整数表情 ID，并去重。"""
+        if not isinstance(values, list):
+            return []
+        emoji_ids: List[int] = []
+        for value in values[:5]:
+            if isinstance(value, bool):
+                continue
+            emoji_id = cls._parse_non_negative_int(value, 0)
+            if emoji_id > 0 and emoji_id not in emoji_ids:
+                emoji_ids.append(emoji_id)
+        return emoji_ids
 
     @staticmethod
     def _coerce_bool(value: Any) -> Optional[bool]:
