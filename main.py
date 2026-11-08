@@ -132,7 +132,7 @@ class VideoParserPlugin(Star):
                 f"字体资源补全失败，插件将继续加载，文本图片渲染会回退原文本: {exc}"
             )
 
-    async def terminate(self):
+    async def terminate(self) -> None:
         reaction_tasks = list(self._reaction_tasks)
         for task in reaction_tasks:
             task.cancel()
