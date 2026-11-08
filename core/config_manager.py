@@ -9,6 +9,7 @@ from .logger import logger
 
 from .constants import Config
 from .downloader.utils import check_cache_dir_available
+from .message_text import MAX_MESSAGE_TEXT_LENGTH
 from .parser.platform import (
     BilibiliParser,
     DouyinParser,
@@ -316,6 +317,7 @@ class AggregationConfig:
     image_threshold: int = 3
     video_threshold: int = 2
     node_threshold: int = 5
+    forward_text_length: int = MAX_MESSAGE_TEXT_LENGTH
 
     def should_aggregate_nodes(
         self,
@@ -734,6 +736,16 @@ class ConfigManager:
                 ),
             ),
             aggregation=AggregationConfig(
+                forward_text_length=min(
+                    MAX_MESSAGE_TEXT_LENGTH,
+                    max(
+                        1,
+                        self._parse_non_negative_int(
+                            aggregation.get("forward_text_length", MAX_MESSAGE_TEXT_LENGTH),
+                            MAX_MESSAGE_TEXT_LENGTH,
+                        ),
+                    ),
+                ),
                 mode=self._parse_aggregation_mode(
                     aggregation.get("mode", AGGREGATION_MODE_NONE)
                 ),

@@ -195,8 +195,6 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 文本元数据渲染后的分页图片与原图共用发送器的图片分组逻辑，遵守 `message.media_display.image_send_mode`；分页图片按页序发送，多图一条时作为同一消息或同一转发节点。非聚合发送仅首个正文图片分组引用用户消息，引用组件不会修改原图片分组。构建失败的页面保留错误记录，其余页面继续按所选方式发送；适配器发送错误沿用逐项记录与取消传播处理。
 
-`image_send_mode` 默认“保持原方式”：普通纯图集沿用原项目的多图一条，其余混合内容、正文穿插、大媒体与分页图片逐项发送；明确配置“多图一条”或“逐张发送”时保留用户选择。新增配置只在缺省时使用默认值，不迁移或覆盖既有配置值。
-
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
@@ -208,6 +206,8 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 `ensure_render_fonts()` 仅在启用文本图片时于加载阶段准备字体，实际渲染前再次确认。优先以真实加载检查有效的自定义、配置字体族和本地字体，缺少粗体时沿用所选字体族的常规字体；本地可用时不要求默认资源下载。全部本地候选不可用时由 `font_manager.py` 从固定版本 Release 补全默认 Noto Sans CJK，校验大小和 SHA256 后原子落盘。`proxy.font` 开启且代理地址非空时经代理下载。字体保存在 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_media_parser/font`，非 AstrBot 运行时回退插件内 `resource/font/`；可用 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。渲染图片记入 `build_result.temp_files` 统一清理；启用文件 Token 中转时逐页注册 Token，并纳入同一 TTL 清理流程。
 
 `message.media_display.interleave_images` 开启后，`node_builder.py` 对提供 `content_blocks` 的链接按正文块顺序输出文字节点与已构建的配图节点：基础文本节点保留“简介/正文：”标题但不再写入正文，正文块之后依次为热评和未穿插的剩余媒体。需要同时满足文本元数据与富媒体输出开启、简介/正文可见且无解析错误，并至少有一张配图节点构建成功，否则回退原有布局。穿插链接在 `LinkBuildMeta.preserve_order` 中标记，发送阶段不再按纯图集把文字与图片分组。
+
+“视频直发 / 帖子图文”按解析阶段的 `video_urls` 决定是否展示正常文本元数据；“视频仅发送封面”继续由下载层转换媒体，不改变内容类别。访问限制、媒体跳过原因、大小限制和解析错误由 `node_builder.py` 统一构建，不受正常文本元数据开关影响。
 
 `message.media_display.image_send_mode` 控制图片分组，默认 `保持原方式`，也可选择 `多图一条` 或 `逐张发送`。默认沿用原项目的纯图集合并和其他内容逐项发送行为；明确选择多图一条时，发送器对相邻图片分组，普通发送使用一条消息中的多个 Image，合并转发使用一个 Node 中的多个 Image；逐张模式每个消息或 Node 仅含一张图片。分组不跨正文、视频或链接边界，大媒体独立发送时同样生效；图片数量与聚合阈值仍按原始节点计数。
 
@@ -679,7 +679,7 @@ source_url/parser_name
 
 `content_blocks` 仅由能识别正文配图位置的解析器提供，元素为 `{"type": "text", "text": ...}` 或 `{"type": "image", "index": ...}`，按原文顺序覆盖 `desc` 的全部内容，`index` 指向 `image_urls` 下标。解析器在文字片段中穿插配图下标，再调用 `core/parser/utils.py` 的 `build_content_blocks()` 按平台自身的正文清洗函数生成；同一配图只保留首次位置，缺少文字或配图时不输出该字段。`ParserManager` 校验块类型与下标范围，空列表直接移除。“视频仅发送封面”把封面插入图片列表前部时，下载层同步后移配图下标。
 
-合并转发阶段将长文本进一步拆成每个节点最多 1000 字，优先按换行切分，保留全文与图文顺序；所有节点仍发送为同一张合并卡片。普通发送沿用单消息 4000 字上限。
+合并转发阶段按 `message.packing.forward_text_length` 拆分文本节点，默认沿用 `core/message_text.py` 的 4000 字上限，有效范围 1–4000；需要时可调低至 1000。分片优先按换行切分，保留全文与图文顺序，所有节点仍发送为同一张合并卡片。普通发送沿用单消息 4000 字上限；翻译文本与翻译分页图片复用相同的分段和图片分组策略。
 
 流程控制、错误与翻译层回填：
 
