@@ -745,8 +745,8 @@ class ConfigManager:
                     reaction.get("emoji_ids", [127827])
                 ),
                 strategy=(
-                    "顺序循环"
-                    if str(reaction.get("strategy", "随机")).strip() == "顺序循环"
+                    "依次回应"
+                    if str(reaction.get("strategy", "随机")).strip() == "依次回应"
                     else "随机"
                 ),
             ),
@@ -1725,7 +1725,7 @@ class ConfigManager:
 
     @classmethod
     def _parse_reaction_emoji_ids(cls, values: Any) -> List[int]:
-        """按参考插件保留前五项中的有效正整数表情 ID。"""
+        """保留前五项中的有效正整数表情 ID，并去重。"""
         if not isinstance(values, list):
             return []
         emoji_ids: List[int] = []
