@@ -24,6 +24,7 @@ from .parser.platform import (
     ToutiaoParser,
     XiaoheiheParser,
     XueqiuParser,
+    CoolapkParser,
     WechatParser,
     ZhihuParser,
     TiebaParser,
@@ -74,6 +75,7 @@ PARSER_OUTPUT_KEYS = (
     "toutiao",
     "xiaoheihe",
     "xueqiu",
+    "coolapk",
     "wechat",
     "zhihu",
     "tieba",
@@ -397,6 +399,7 @@ class HotCommentConfig:
     toutiao: bool = True
     xiaoheihe: bool = True
     xueqiu: bool = True
+    coolapk: bool = True
     zhihu: bool = True
     tieba: bool = True
     nga: bool = True
@@ -679,6 +682,7 @@ class ConfigManager:
         self._enable_toutiao = self._parser_enabled("toutiao")
         self._enable_xiaoheihe = self._parser_enabled("xiaoheihe")
         self._enable_xueqiu = self._parser_enabled("xueqiu")
+        self._enable_coolapk = self._parser_enabled("coolapk")
         self._enable_wechat = self._parser_enabled("wechat")
         self._enable_zhihu = self._parser_enabled("zhihu")
         self._enable_tieba = self._parser_enabled("tieba")
@@ -930,6 +934,11 @@ class ConfigManager:
                     hot_comments.get("xueqiu", True),
                     True,
                     "message.hot_comments.xueqiu",
+                ),
+                coolapk=self._parse_bool(
+                    hot_comments.get("coolapk", True),
+                    True,
+                    "message.hot_comments.coolapk",
                 ),
                 zhihu=self._parse_bool(
                     hot_comments.get("zhihu", True),
@@ -1482,6 +1491,10 @@ class ConfigManager:
         if self._enable_xueqiu:
             parsers.append(
                 XueqiuParser(hot_comment_count=hot_comment_counts["xueqiu"])
+            )
+        if self._enable_coolapk:
+            parsers.append(
+                CoolapkParser(hot_comment_count=hot_comment_counts["coolapk"])
             )
         if self._enable_wechat:
             parsers.append(
