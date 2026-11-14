@@ -396,10 +396,10 @@ window.videoInfo / window.articleInfo / window.bangumiData
 
 ### 链接范围与取数流程
 
-支持 `xhslink.com` / `xhslink.cn` 短链与 `xiaohongshu.com` 笔记页。短链必须先展开到正式笔记页；解析器需兼容移动端与 PC 端两套状态树。
+支持 `xhslink.com` / `xhslink.cn` 短链与 `xiaohongshu.com` / `rednote.com` 笔记页，覆盖短链跳转至 RedNote 和 RedNote 笔记直链。按主机名识别短链，展开后沿用正式笔记页的路径与笔记身份校验；解析器需兼容移动端与 PC 端两套状态树。
 
 ```text
-xhslink.com / xhslink.cn / xiaohongshu.com
+xhslink.com / xhslink.cn / xiaohongshu.com / rednote.com
   ↓
 展开短链
   ↓
@@ -412,7 +412,7 @@ xhslink.com / xhslink.cn / xiaohongshu.com
   └─ PC 端：note.noteDetailMap[目标笔记 ID].note
 ```
 
-移动端 `discovery/item` 分享链接只移除 `source` 与 `xhsshare` 参数，随后改写为对应的 PC `explore` 页面并保留其余查询参数。PC 链接中的访问参数可能影响页面是否返回完整状态，不做额外删除。
+移动端 `discovery/item` 分享链接只移除 `source` 与 `xhsshare` 参数，随后改写为对应的 PC `explore` 页面并保留其余查询参数；桌面页未取得有效目标数据时，回退到原移动详情页。PC 链接中的访问参数可能影响页面是否返回完整状态，不做额外删除。
 
 正文、媒体与评论都依据实际响应的最终笔记页 ID 选择，并校验节点显式声明的笔记身份。桌面状态按目标键取节点，移动状态必须声明相同 ID；目标缺失或身份不符时报告失败，不取其他笔记代替。
 
