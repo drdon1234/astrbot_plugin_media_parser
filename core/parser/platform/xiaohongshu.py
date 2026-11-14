@@ -34,7 +34,10 @@ PC_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0"
 )
-XHS_DOMAINS = ("xiaohongshu.com", "xhslink.com", "xhslink.cn")
+XHS_NOTE_DOMAINS = ("xiaohongshu.com", "rednote.com")
+XHS_SHORT_LINK_DOMAINS = ("xhslink.com", "xhslink.cn")
+XHS_DOMAINS = XHS_NOTE_DOMAINS + XHS_SHORT_LINK_DOMAINS
+XHS_NOTE_DOMAIN_PATTERN = "|".join(re.escape(domain) for domain in XHS_NOTE_DOMAINS)
 
 class XiaohongshuParser(BaseVideoParser):
     "XiaohongshuParser 类。"
@@ -105,7 +108,7 @@ class XiaohongshuParser(BaseVideoParser):
                 result_links_set.add(link)
 
         long_pattern = (
-            r"https?://(?:www\.)?xiaohongshu\.com/"
+            rf"https?://(?:www\.)?(?:{XHS_NOTE_DOMAIN_PATTERN})/"
             r'(?:explore|discovery/item)/[^\s<>"\'()]+'
         )
         long_links = re.findall(long_pattern, text, re.IGNORECASE)
@@ -408,7 +411,10 @@ class XiaohongshuParser(BaseVideoParser):
             raise RuntimeError("小红书笔记地址无效") from exc
         if (
             parsed.scheme.lower() not in {"http", "https"}
-            or not cls._host_matches(parsed.hostname or "", "xiaohongshu.com")
+            or not any(
+                cls._host_matches(parsed.hostname or "", domain)
+                for domain in XHS_NOTE_DOMAINS
+            )
         ):
             raise RuntimeError("小红书页面未返回正式笔记地址")
         match = re.fullmatch(r"/(?:explore|discovery/item)/([^/]+)/?", parsed.path)
@@ -701,15 +707,11 @@ class XiaohongshuParser(BaseVideoParser):
         """
         logger.debug(f"[{self.name}] parse: 开始解析 {url}")
         async with self.semaphore:
-            if "xhslink.com" in url or "xhslink.cn" in url:
-                full_url = await self._get_redirect_url(session, url)
+            full_url = url if url.lower().startswith(("http://", "https://")) else f"https://{url}"
+            host = urlparse(full_url).hostname or ""
+            if any(self._host_matches(host, domain) for domain in XHS_SHORT_LINK_DOMAINS):
+                full_url = await self._get_redirect_url(session, full_url)
                 logger.debug(f"[{self.name}] parse: 短链展开 {url} -> {full_url}")
-            else:
-                full_url = url
-                if not full_url.startswith("http://") and not full_url.startswith(
-                    "https://"
-                ):
-                    full_url = "https://" + full_url
 
             if is_live_url(full_url) or is_live_url(url):
                 logger.debug(
