@@ -1082,7 +1082,7 @@ class XiaoheiheParser(BaseVideoParser):
     async def _fetch_signed_api(
         self, session: aiohttp.ClientSession, path: str, params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """请求小黑盒签名 API，并对 token/captcha 状态做有限重试。"""
+        """请求小黑盒签名接口，缺少设备凭据时重试，要求人工验证时直接提示。"""
         base_params = {
             "os_type": "web",
             "app": "heybox",
@@ -1125,7 +1125,9 @@ class XiaoheiheParser(BaseVideoParser):
             if status == "ok":
                 result = data.get("result")
                 return result if isinstance(result, dict) else {}
-            if status in {"lack_token", "show_captcha"} and attempt == 0:
+            if status == "show_captcha":
+                raise RuntimeError("小黑盒要求验证码，请在小黑盒中打开原链接查看")
+            if status == "lack_token" and attempt == 0:
                 last_error = RuntimeError(str(data.get("msg") or status))
                 continue
             raise RuntimeError(f"小黑盒API返回异常: {status} {data.get('msg')}")

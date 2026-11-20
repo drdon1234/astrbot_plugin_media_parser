@@ -12,6 +12,9 @@ from .logger import logger
 
 from .constants import Config
 from .downloader.utils import check_cache_dir_available
+from .message_adapter.render_options import (
+    FONT_IDS, FONT_NAMES, STYLE_IDS, STYLE_NAMES, normalize_font_family, normalize_style,
+)
 from .message_text import MAX_MESSAGE_TEXT_LENGTH
 from .parser.platform import (
     BilibiliParser,
@@ -47,7 +50,7 @@ from .parser.platform import (
     GitHubParser,
     GitLabParser,
 )
-from .summary_types import CATEGORY_LABELS
+from .summary_types import CATEGORY_LABELS, LINK_TYPES
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
     LLM_PROVIDER_OPTIONS,
@@ -114,7 +117,12 @@ OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_VIDEO_OR_POST: (True, True),
 }
 
-TEXT_FIELDS = ("title", "author", "timestamp", "original_link", "description")
+VIDEO_OUTPUT_PLATFORMS = frozenset((
+    "bilibili", "douyin", "kuaishou", "acfun", "hongguo", "weibo", "xiaohongshu",
+    "xianyu", "toutiao", "xiaoheihe", "xueqiu", "wechat", "tieba", "hupu", "douban",
+    "tiktok", "youtube", "steam", "twitter",
+))
+TEXT_FIELDS = ("title", "author", "timestamp", "original_link", "body", "summary")
 PROXY_DEFAULTS = {"font": False, "xiaoheihe_video": True, "tiktok": False, "youtube": True,
                   "steam.parse": False, "steam.image": True, "steam.video": True,
                   "twitter.parse": False, "twitter.image": True, "twitter.video": True,
@@ -150,59 +158,6 @@ TRANSLATION_TARGET_LANGUAGES = {
 TRANSLATION_CONTENT_SCOPES = {
     "仅正文",
     "正文和标题",
-}
-
-TEXT_RENDER_STYLE_ALIASES = {
-    "清新便签": "fresh",
-    "清新": "fresh",
-    "便签": "fresh",
-    "粉色便签": "fresh",
-    "fresh": "fresh",
-    "bilinote": "fresh",
-    "科技感": "tech",
-    "科技": "tech",
-    "tech": "tech",
-    "technology": "tech",
-    "专业严肃": "serious",
-    "严肃": "serious",
-    "专业": "serious",
-    "serious": "serious",
-    "professional": "serious",
-    "温和卡片": "card",
-    "卡片": "card",
-    "card": "card",
-    "soft_card": "card",
-}
-
-TEXT_RENDER_FONT_ALIASES = {
-    "默认黑体": "noto_sans",
-    "黑体": "noto_sans",
-    "思源黑体": "noto_sans",
-    "noto_sans": "noto_sans",
-    "noto sans": "noto_sans",
-    "default": "noto_sans",
-    "专业宋体": "noto_serif",
-    "宋体": "noto_serif",
-    "思源宋体": "noto_serif",
-    "noto_serif": "noto_serif",
-    "noto serif": "noto_serif",
-    "serif": "noto_serif",
-    "清新文楷": "lxgw_wenkai",
-    "文楷": "lxgw_wenkai",
-    "霞鹜文楷": "lxgw_wenkai",
-    "lxgw_wenkai": "lxgw_wenkai",
-    "lxgw wenkai": "lxgw_wenkai",
-    "wenkai": "lxgw_wenkai",
-    "标题手札": "zcool_xiaowei",
-    "站酷小薇": "zcool_xiaowei",
-    "zcool_xiaowei": "zcool_xiaowei",
-    "zcool xiaowei": "zcool_xiaowei",
-    "xiaowei": "zcool_xiaowei",
-    "科技窄体": "zcool_qingke",
-    "站酷庆科黄油体": "zcool_qingke",
-    "zcool_qingke": "zcool_qingke",
-    "zcool qingke": "zcool_qingke",
-    "qingke": "zcool_qingke",
 }
 
 
@@ -408,6 +363,7 @@ class TextMetadataConfig:
     render_paragraph_spacing: float = 0.5
     render_paginate: bool = False
     render_separate_sections: bool = False
+    show_summary: bool = True
 
     def visibility(self) -> Dict[str, bool]:
         """返回写入 metadata 的稳定字段名与展示开关。"""
@@ -417,6 +373,7 @@ class TextMetadataConfig:
             "timestamp": self.show_timestamp,
             "original_link": self.show_original_link,
             "description": self.show_description,
+            "summary": self.show_summary,
         }
 
 
@@ -520,6 +477,7 @@ class DownloadConfig:
     cache_dir: str = ""
     cache_dir_available: bool = False
     max_concurrent_downloads: int = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
+    shared_image_dir: str = ""
 
 
 @dataclass
@@ -632,6 +590,7 @@ class TranslationConfig:
     max_text_chars_per_request: int = 4000
     summary_categories: set = field(default_factory=set)
     summary_exclusions: set = field(default_factory=set)
+    summary_read_images: bool = True
 
     @property
     def repository_summary(self) -> bool:
@@ -877,7 +836,8 @@ class ConfigManager:
                 ),
             ),
             text_metadata=TextMetadataConfig(
-                **{"show_" + key: key in visible_fields for key in TEXT_FIELDS},
+                **{"show_" + key: key in visible_fields for key in TEXT_FIELDS if key != "body"},
+                show_description="body" in visible_fields,
                 quote_user_message=self._parse_bool(
                     message_raw.get("quote_user_message", False), False, "message.quote_user_message"
                 ),
@@ -893,12 +853,8 @@ class ConfigManager:
                     text_metadata.get("share_cover", True), True, "message.text_metadata.share_cover"
                 ),
                 original_keyword=str(text_metadata.get("original_keyword", "原图") or "").strip(),
-                render_style=self._parse_text_render_style(
-                    text_metadata.get("render_style", "清新便签")
-                ),
-                render_font_family=self._parse_text_render_font_family(
-                    text_metadata.get("render_font_family", "默认黑体")
-                ),
+                render_style=normalize_style(text_metadata.get("render_style")),
+                render_font_family=normalize_font_family(text_metadata.get("render_font_family")),
                 render_font_size=min(
                     42,
                     max(
@@ -1011,7 +967,9 @@ class ConfigManager:
             )
 
         configured_cache_dir = str(download_raw.get("cache_dir", "") or "").strip()
+        shared_image_dir = ""
         if _is_docker_environment():
+            shared_image_dir = configured_cache_dir
             cache_dir = configured_cache_dir or Config.DEFAULT_CACHE_DIR
         else:
             cache_dir = _get_astrbot_plugin_cache_dir()
@@ -1078,6 +1036,9 @@ class ConfigManager:
         self.translation = TranslationConfig(
             summary_categories=_selection(translation_raw, "summary_categories") & CATEGORY_LABELS.keys(),
             summary_exclusions=_selection(translation_raw, "summary_exclusions"),
+            summary_read_images=self._parse_bool(
+                translation_raw.get("summary_read_images", True), True, "translation.summary_read_images"
+            ),
             enabled=self._parse_bool(
                 translation_raw.get("enable", False),
                 False,
@@ -1122,6 +1083,7 @@ class ConfigManager:
             large_video_threshold_mb=large_video_threshold_mb,
             cache_dir=cache_dir,
             cache_dir_available=cache_dir_available,
+            shared_image_dir=shared_image_dir if cache_dir_available else "",
             max_concurrent_downloads=max_concurrent,
         )
 
@@ -1282,20 +1244,30 @@ class ConfigManager:
         if self.admin.debug_mode:
             logger.debug("Debug模式已启用")
 
-        if (
-            self.message.archive.command
-            and self.message.archive.command == self.admin.clean_cache_keyword
-        ):
-            logger.warning(
-                "引用链接归档命令与清缓存命令冲突，已禁用归档命令；请配置两个不同命令"
-            )
-            self.message.archive.command = ""
+        # 清缓存优先，其次是启用的管理员登录指令。只有登录指令忽略大小写。
+        clean = self.admin.clean_cache_keyword
+        login = self.bilibili.admin_cookie_update_command
+        if not (self.bilibili.cookie_runtime_enabled and self.bilibili.enable_admin_assist):
+            self.bilibili.admin_cookie_update_command = ""
+        elif login and login.casefold() == clean.casefold():
+            logger.warning("B站主动更新 Cookie 指令与清缓存关键词冲突，本次禁用主动更新指令")
+            self.bilibili.admin_cookie_update_command = ""
 
-        if self.message.text_metadata.original_keyword and self.message.text_metadata.original_keyword in (
-            self.message.archive.command, self.admin.clean_cache_keyword, self.bilibili.admin_cookie_update_command,
+        login = self.bilibili.admin_cookie_update_command
+        reserved = {clean: "清缓存关键词"}
+        for owner, field_name, label in (
+            (self.message.archive, "command", "引用链接归档命令"),
+            (self.message.text_metadata, "original_keyword", "引用取原图关键词"),
         ):
-            logger.warning("引用取原图关键词与已有命令冲突，本次禁用取原图；请设置不同关键词")
-            self.message.text_metadata.original_keyword = ""
+            value = getattr(owner, field_name)
+            if not value:
+                continue
+            conflict = "B站主动更新 Cookie 指令" if value.casefold() == login.casefold() else reserved.get(value)
+            if conflict:
+                logger.warning(f"{label}与{conflict}冲突，本次禁用{label}")
+                setattr(owner, field_name, "")
+            else:
+                reserved[value] = label
 
     # ── 工厂方法 ────────────────────────────────────────
 
@@ -1322,7 +1294,7 @@ class ConfigManager:
 
         def summarize(platform: str) -> bool:
             return (self.translation.repository_summary and platform not in self.translation.summary_exclusions
-                    and platform + ".repo" not in self.translation.summary_exclusions and self.message.text_metadata.show_description
+                    and platform + ".repo" not in self.translation.summary_exclusions and self.message.text_metadata.show_summary
                     and self.parser_output.output_for_controller(platform)[0])
 
         if self._enable_bilibili:
@@ -1506,7 +1478,7 @@ class ConfigManager:
 
     @classmethod
     def upgrade_selections(cls, config: dict) -> bool:
-        """一次性转换旧的逐平台开关，保留显式空选和已有的新字段。"""
+        """更新已保存的配置选项，保留用户选择与已有的新字段。"""
         changed = False
         parsers = cls._as_dict(config.get("parsers"))
         if any(key in parsers for key in PARSER_OUTPUT_KEYS):
@@ -1517,6 +1489,12 @@ class ConfigManager:
             for key in (*PARSER_OUTPUT_KEYS, "show_platforms"):
                 parsers.pop(key, None)
             changed = True
+        videos = parsers.get("video_without_text")
+        if isinstance(videos, list):
+            supported = [p for p in videos if isinstance(p, str) and p in VIDEO_OUTPUT_PLATFORMS]
+            if supported != videos:
+                parsers["video_without_text"] = supported
+                changed = True
         message = cls._as_dict(config.get("message"))
         hot = cls._as_dict(message.get("hot_comments"))
         platforms = [k for k in HotCommentConfig.__dataclass_fields__ if k != "count"]
@@ -1525,9 +1503,25 @@ class ConfigManager:
             hot.pop("show_platforms", None)
             changed = True
         meta = cls._as_dict(message.get("text_metadata"))
-        if any("show_" + k in meta for k in TEXT_FIELDS):
-            meta.setdefault("fields", [k for k in TEXT_FIELDS if cls._parse_bool(meta.pop("show_" + k, True), True, k)])
+        for field_name, ids, names in (
+            ("render_style", STYLE_IDS, STYLE_NAMES),
+            ("render_font_family", FONT_IDS, FONT_NAMES),
+        ):
+            value = meta.get(field_name)
+            if isinstance(value, str):
+                key = ids.get(value.strip().casefold())
+                if key is not None and value != names[key][0]:
+                    meta[field_name] = names[key][0]
+                    changed = True
+        old_fields = ("title", "author", "timestamp", "original_link", "description")
+        if any("show_" + k in meta for k in old_fields):
+            meta.setdefault("fields", [k for k in old_fields if cls._parse_bool(meta.pop("show_" + k, True), True, k)])
             meta.pop("show_fields", None)
+            changed = True
+        fields = meta.get("fields")
+        if isinstance(fields, list) and "description" in fields:
+            meta["fields"] = [field for field in fields if field != "description"]
+            meta["fields"].extend(key for key in ("body", "summary") if key not in meta["fields"])
             changed = True
         if "quote_user_message" in meta:
             message.setdefault("quote_user_message", meta.pop("quote_user_message"))
@@ -1546,6 +1540,14 @@ class ConfigManager:
             proxy.pop("show_details", None)
             changed = True
         translation = cls._as_dict(config.get("translation"))
+        exclusions = translation.get("summary_exclusions")
+        if isinstance(exclusions, list):
+            single_types = {f"{platform}.{next(iter(kinds))}": platform
+                            for platform, kinds in LINK_TYPES.items() if len(kinds) == 1}
+            compact = list(dict.fromkeys(single_types.get(key, key) for key in exclusions if isinstance(key, str)))
+            if compact != exclusions:
+                translation["summary_exclusions"] = compact
+                changed = True
         if "repository_summary" in translation:
             enabled = cls._parse_bool(translation.pop("repository_summary"), False, "repository_summary")
             translation.setdefault("summary_categories", ["repository"] if enabled else [])
@@ -1636,24 +1638,6 @@ class ConfigManager:
         if scope in TRANSLATION_CONTENT_SCOPES:
             return scope
         return "正文和标题"
-
-    @staticmethod
-    def _parse_text_render_style(value: Any) -> str:
-        text = str(value or "").strip()
-        lowered = text.casefold()
-        return TEXT_RENDER_STYLE_ALIASES.get(
-            text,
-            TEXT_RENDER_STYLE_ALIASES.get(lowered, "fresh"),
-        )
-
-    @staticmethod
-    def _parse_text_render_font_family(value: Any) -> str:
-        text = str(value or "").strip()
-        lowered = text.casefold()
-        return TEXT_RENDER_FONT_ALIASES.get(
-            text,
-            TEXT_RENDER_FONT_ALIASES.get(lowered, "noto_sans"),
-        )
 
     @staticmethod
     def _parse_positive_int(value, default: int) -> int:

@@ -121,7 +121,7 @@ class RepositorySummarizer:
         for item in items:
             snapshot = item.pop("repository_snapshot", None)
             if (snapshot and item.get("_enable_text_metadata", True)
-                    and text_metadata_field_enabled(item, "description")):
+                    and text_metadata_field_enabled(item, "summary")):
                 pending.append(self._summarize(item, snapshot, event_context))
         for result in await asyncio.gather(*pending, return_exceptions=True):
             if isinstance(result, asyncio.CancelledError):

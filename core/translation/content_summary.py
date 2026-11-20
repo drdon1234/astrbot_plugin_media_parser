@@ -144,20 +144,27 @@ class ContentSummarizer:
         self.translator = translator
         self.slots = asyncio.Semaphore(2)
 
+    def selected_type(self, item: dict) -> tuple[str, str, str] | None:
+        """返回可生成摘要的内容类型，供输出预检与实际模型调用共用。"""
+        config = self.translator.config
+        platform, subtype, kind = classify_content(item)
+        if (item.get("error") or kind == "repository" or kind not in config.summary_categories
+                or platform in config.summary_exclusions or f"{platform}.{subtype}" in config.summary_exclusions
+                or not item.get("_enable_text_metadata", True) or not text_metadata_field_enabled(item, "summary")):
+            return None
+        return platform, subtype, kind
+
     async def apply(self, items: list, event_context: dict) -> None:
         """向配置的提供商提交已启用链接的有限资料，单条失败保留原消息。"""
-        config = self.translator.config
         jobs = []
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_PublicResolver()),
                                          cookie_jar=aiohttp.DummyCookieJar(),
                                          timeout=aiohttp.ClientTimeout(total=10)) as session:
             for item in items:
-                platform, subtype, kind = classify_content(item)
-                if (item.get("error") or kind == "repository" or kind not in config.summary_categories
-                        or platform in config.summary_exclusions or f"{platform}.{subtype}" in config.summary_exclusions
-                        or not item.get("_enable_text_metadata", True) or not text_metadata_field_enabled(item, "description")):
+                selection = self.selected_type(item)
+                if selection is None:
                     continue
-                jobs.append(self._summarize(session, item, platform, subtype, kind, event_context))
+                jobs.append(self._summarize(session, item, *selection, event_context))
             for result in await asyncio.gather(*jobs, return_exceptions=True):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
@@ -177,9 +184,10 @@ class ContentSummarizer:
             elif kind in {"article", "item"}:
                 indexes = list(dict.fromkeys(b["index"] for b in item.get("content_blocks", []) if b.get("type") == "image"))
             pictures = {}
-            for index in indexes[:IMAGE_LIMIT]:
-                if image := await _picture(session, item, index):
-                    pictures[f"图{index - start + 1}"] = image
+            if self.translator.config.summary_read_images:
+                for index in indexes[:IMAGE_LIMIT]:
+                    if image := await _picture(session, item, index):
+                        pictures[f"图{index - start + 1}"] = image
             if not pictures and not any(k != "标题" for k in sources):
                 return
             for attempt in range(2):

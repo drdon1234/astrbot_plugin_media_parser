@@ -33,6 +33,7 @@ from .core.storage.original_images import OriginalImages
 from .core.constants import Config
 from .core.message_adapter.rich_card import build_card_content
 from .core.message_adapter.sender import MessageDeliveryError, MessageSender
+from .core.message_adapter.shared_images import SharedImageDelivery
 from .core.message_adapter.node_builder import (
     build_all_nodes,
     build_translation_nodes_for_all,
@@ -66,7 +67,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.14.0",
+    "1.15.0",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -103,7 +104,8 @@ class VideoParserPlugin(Star):
             readme_paginate=cfg.message.text_metadata.render_paginate,
         )
 
-        self.message_sender = MessageSender()
+        shared_dir = cfg.download.shared_image_dir
+        self.message_sender = MessageSender(shared_images=SharedImageDelivery(shared_dir) if shared_dir else None)
         self._cleanup_tasks: set[asyncio.Task] = set()
         self._reaction_tasks: set[asyncio.Task] = set()
         self._expired_cleanup_task: Optional[asyncio.Task] = None
@@ -227,7 +229,7 @@ class VideoParserPlugin(Star):
                 subdirs_cleaned, files_cleaned, failed_subdirs = (
                     cleanup_expired_marked_in(
                         cache_dir,
-                        ttl_seconds=self.config_manager.relay.file_token_ttl,
+                        ttl_seconds=Config.FILE_SEND_GRACE_SECONDS,
                     )
                 )
                 if subdirs_cleaned:
@@ -246,7 +248,8 @@ class VideoParserPlugin(Star):
             logger.warning(f"清理过期媒体缓存失败: {e}")
 
     def _expired_cleanup_interval(self) -> int:
-        ttl = self.config_manager.relay.file_token_ttl
+        relay = self.config_manager.relay
+        ttl = relay.file_token_ttl if relay.enabled else Config.FILE_SEND_GRACE_SECONDS
         try:
             ttl = int(ttl)
         except (TypeError, ValueError):
@@ -774,7 +777,13 @@ class VideoParserPlugin(Star):
             or bool(metadata.get("access_message"))
             or bool(metadata.get("hot_comments"))
         )
-        return bool((rich_enabled and has_media) or (text_enabled and has_text))
+        if (rich_enabled and has_media) or (text_enabled and has_text):
+            return True
+        if not text_enabled:
+            return False
+        if metadata.get("repository_snapshot") and self.config_manager.message.text_metadata.show_summary:
+            return True
+        return self.content_summarizer.selected_type(metadata) is not None
 
     @staticmethod
     def _collect_metadata_files(metadata_list) -> list[str]:
@@ -933,7 +942,10 @@ class VideoParserPlugin(Star):
         settings = cfg.message.text_metadata
         if (not zip_requested and getattr(settings, "render_to_image", False)
                 and getattr(settings, "original_keyword", "") and cfg.download.cache_dir):
-            sender = MessageSender(OriginalImages(cfg.download.cache_dir, self._original_scope(event)))
+            sender = MessageSender(
+                OriginalImages(cfg.download.cache_dir, self._original_scope(event)),
+                shared_images=self.message_sender.shared_images,
+            )
 
         try:
             opening_lock = asyncio.Lock()
@@ -1175,10 +1187,10 @@ class VideoParserPlugin(Star):
                 if archive_path:
                     if archive_sent:
                         # AstrBot 的 File 组件可能在 send 返回后才通过 Token
-                        # 拉取本地文件，因此保留一个 TTL 后再清理。
+                        # 拉取本地文件，因此在发送后保留文件。
                         self._schedule_delayed_cleanup(
                             [archive_path],
-                            max(300, cfg.relay.file_token_ttl),
+                            Config.FILE_SEND_GRACE_SECONDS,
                         )
                     else:
                         await self._run_blocking_to_completion(
@@ -1207,9 +1219,9 @@ class VideoParserPlugin(Star):
                     )
                     if not zip_requested and (relay_registered or has_audio_files):
                         # 同一缓存目录共用过期标记，音频文件与封面须采用同一个有效期。
-                        delay = (
-                            max(300, cfg.relay.file_token_ttl)
-                            if has_audio_files else cfg.relay.file_token_ttl
+                        delay = max(
+                            Config.FILE_SEND_GRACE_SECONDS if has_audio_files else 0,
+                            cfg.relay.file_token_ttl if relay_registered else 0,
                         )
                         self._schedule_delayed_cleanup(all_files, delay)
                     else:
@@ -1230,10 +1242,10 @@ class VideoParserPlugin(Star):
         target = f"群:{group}" if group else event.unified_msg_origin
         return f"{event.get_platform_id()}:{event.get_self_id()}:{target}"
 
-    async def _send_quoted_originals(self, event: AstrMessageEvent, reply: Reply, cfg) -> None:
+    async def _send_quoted_originals(self, event: AstrMessageEvent, reply: Reply, cfg) -> bool:
         """仅查找当前会话中被引用结果的原图，逐条处理实际发送失败。"""
         if not cfg.download.cache_dir:
-            return
+            return False
         store = OriginalImages(cfg.download.cache_dir, self._original_scope(event))
         quoted_text = ""
         if str(reply.sender_id or "") in ("", "0", str(event.get_self_id())):
@@ -1244,16 +1256,20 @@ class VideoParserPlugin(Star):
             self._active_media_flows += 1
         try:
             files = await asyncio.to_thread(
-                store.find, str(reply.id or ""), quoted_text, max(300, cfg.relay.file_token_ttl),
+                store.find, str(reply.id or ""), quoted_text,
+                max(Config.FILE_SEND_GRACE_SECONDS, cfg.relay.file_token_ttl if cfg.relay.enabled else 0),
             )
             if not files:
+                if not cfg.message.text_metadata.render_to_image:
+                    return False
                 await event.send(event.plain_result("这条引用没有可取回的原图，或原图缓存已过期。"))
-                return
+                return True
             references, _ = await self._rendered_image_references(files, cfg)
             images = [MessageSender._image_from_reference(ref) for ref in references]
             await self.message_sender.send_individual_results(
                 event, [images], image_send_mode=cfg.message.media_display.image_send_mode,
             )
+            return True
         finally:
             self._active_media_flows -= 1
 
@@ -1350,8 +1366,7 @@ class VideoParserPlugin(Star):
         original_kw = cfg.message.text_metadata.original_keyword
         if original_kw and original_message_text.strip() == original_kw:
             reply = next((node for node in event.get_messages() if isinstance(node, Reply)), None)
-            if reply is not None:
-                await self._send_quoted_originals(event, reply, cfg)
+            if reply is not None and await self._send_quoted_originals(event, reply, cfg):
                 return
 
         if not cfg.parser_output.has_any_output():
@@ -1501,6 +1516,7 @@ class VideoParserPlugin(Star):
                             "timestamp": True,
                             "original_link": True,
                             "description": True,
+                            "summary": cfg.message.text_metadata.show_summary,
                         }
 
                 has_valid_metadata = any(

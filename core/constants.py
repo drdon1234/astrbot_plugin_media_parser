@@ -6,6 +6,7 @@ class Config:
     """配置常量类，包含下载、解析等功能的配置参数"""
     
     DEFAULT_TIMEOUT = 30
+    FILE_SEND_GRACE_SECONDS = 300
     VIDEO_SIZE_CHECK_TIMEOUT = 10
     IMAGE_DOWNLOAD_TIMEOUT = 10
     VIDEO_DOWNLOAD_TIMEOUT = 300

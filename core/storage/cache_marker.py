@@ -10,6 +10,7 @@ from ..logger import logger
 MARKER_FILE_NAME = ".astrbot_media_parser"
 EXPIRY_FILE_NAME = ".astrbot_media_parser.expire"
 LEGACY_EXPIRY_MIN_GRACE_SECONDS = 3600
+SHARED_SEND_PREFIX = "onebot_send_"
 
 
 def stamp_subdir(directory: str) -> None:
@@ -191,6 +192,14 @@ def cleanup_marked_in(root_dir: str) -> Tuple[int, int, int]:
         subdir = os.path.join(root_dir, entry)
         if not os.path.isdir(subdir) or not has_marker(subdir):
             continue
+
+        # 协议端可能仍在上传。管理员清理同样遵守共享发送目录的保护期。
+        if entry.startswith(SHARED_SEND_PREFIX):
+            expiry = _read_expiry_at(subdir)
+            if expiry is None:
+                expiry = _legacy_expiry_at(subdir, LEGACY_EXPIRY_MIN_GRACE_SECONDS)
+            if expiry is None or expiry > time.time():
+                continue
 
         file_count = sum(len(files) for _, _, files in os.walk(subdir))
         try:

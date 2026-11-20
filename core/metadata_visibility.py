@@ -8,6 +8,7 @@ TEXT_METADATA_FIELD_DEFAULTS = {
     "timestamp": True,
     "original_link": True,
     "description": True,
+    "summary": True,
 }
 
 

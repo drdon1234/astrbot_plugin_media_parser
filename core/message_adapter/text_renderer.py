@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any, List
 
 from .font_manager import FONT_DIR, ensure_default_fonts, ensure_emoji_font
+from .render_options import (
+    DEFAULT_RENDER_FONT_FAMILY, DEFAULT_RENDER_STYLE, normalize_font_family, normalize_style,
+)
 
 
 DEFAULT_RENDER_WIDTH = 960
 DEFAULT_RENDER_FONT_SIZE = 24
-DEFAULT_RENDER_STYLE = "fresh"
-DEFAULT_RENDER_FONT_FAMILY = "noto_sans"
 MIN_RENDER_FONT_SIZE = 16
 MAX_RENDER_FONT_SIZE = 42
 DEFAULT_LINE_SPACING = 1.55
@@ -147,8 +148,8 @@ async def render_text_metadata_images(
         str(title or "媒体解析结果"),
         _normalize_width(width),
         _normalize_font_size(font_size),
-        _normalize_style(style),
-        _normalize_font_family(font_family),
+        normalize_style(style),
+        normalize_font_family(font_family),
         PAGINATED_MAX_HEIGHT if paginate else 0,
         _normalize_spacing(line_spacing, DEFAULT_LINE_SPACING, 1.0),
         _normalize_spacing(paragraph_spacing, DEFAULT_PARAGRAPH_SPACING, 0.0),
@@ -600,11 +601,16 @@ def _draw_page(
                                    fill=item.color)
                 left = right
         elif line.kind == "language_legend":
+            card_luminance = _relative_luminance(palette["card_fill"])
             for index, item in enumerate(line.shares):
                 x = body_x + index * line.column_width
                 radius = max(3, fonts["meta"].size // 5)
                 top = body_y + fonts["meta"].size // 3
-                draw.ellipse((x, top, x + 2 * radius, top + 2 * radius), fill=item.color)
+                dot_luminance = _relative_luminance(item.color)
+                outline = None
+                if dot_luminance <= card_luminance and (card_luminance + 0.05) / (dot_luminance + 0.05) < 3:
+                    outline = palette["muted_text"]
+                draw.ellipse((x, top, x + 2 * radius, top + 2 * radius), fill=item.color, outline=outline)
                 _draw_text(draw, x + 2 * radius + 8, body_y, item.label, fonts["meta"], palette["body_text"])
         elif line.kind == "tree":
             draw.rectangle((body_x, body_y, width - body_x, body_y + line.height - 1), fill=palette["background"])
@@ -793,6 +799,16 @@ def _emoji_font_is_available() -> bool:
     except RuntimeError:
         return False
     return True
+
+
+def _relative_luminance(color: str) -> float:
+    """计算十六进制 sRGB 颜色的相对亮度，用于判断图例圆点的对比度。"""
+    channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    red, green, blue = [
+        value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+        for value in channels
+    ]
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
 def _language_lines(draw: Any, value: str, fonts: dict[str, object], width: int) -> List[_TextLine]:
@@ -1021,69 +1037,6 @@ def _normalize_font_size(value: object) -> int:
     return max(MIN_RENDER_FONT_SIZE, min(MAX_RENDER_FONT_SIZE, parsed))
 
 
-def _normalize_style(value: object) -> str:
-    text = str(value or "").strip()
-    lowered = text.casefold()
-    aliases = {
-        "清新便签": "fresh",
-        "清新": "fresh",
-        "便签": "fresh",
-        "粉色便签": "fresh",
-        "fresh": "fresh",
-        "bilinote": "fresh",
-        "科技感": "tech",
-        "科技": "tech",
-        "tech": "tech",
-        "technology": "tech",
-        "专业严肃": "serious",
-        "严肃": "serious",
-        "专业": "serious",
-        "serious": "serious",
-        "professional": "serious",
-        "温和卡片": "card",
-        "卡片": "card",
-        "card": "card",
-        "soft_card": "card",
-    }
-    return aliases.get(text, aliases.get(lowered, DEFAULT_RENDER_STYLE))
-
-
-def _normalize_font_family(value: object) -> str:
-    text = str(value or "").strip()
-    lowered = text.casefold()
-    aliases = {
-        "默认黑体": "noto_sans",
-        "黑体": "noto_sans",
-        "思源黑体": "noto_sans",
-        "noto_sans": "noto_sans",
-        "noto sans": "noto_sans",
-        "default": "noto_sans",
-        "专业宋体": "noto_serif",
-        "宋体": "noto_serif",
-        "思源宋体": "noto_serif",
-        "noto_serif": "noto_serif",
-        "noto serif": "noto_serif",
-        "serif": "noto_serif",
-        "清新文楷": "lxgw_wenkai",
-        "文楷": "lxgw_wenkai",
-        "霞鹜文楷": "lxgw_wenkai",
-        "lxgw_wenkai": "lxgw_wenkai",
-        "lxgw wenkai": "lxgw_wenkai",
-        "wenkai": "lxgw_wenkai",
-        "标题手札": "zcool_xiaowei",
-        "站酷小薇": "zcool_xiaowei",
-        "zcool_xiaowei": "zcool_xiaowei",
-        "zcool xiaowei": "zcool_xiaowei",
-        "xiaowei": "zcool_xiaowei",
-        "科技窄体": "zcool_qingke",
-        "站酷庆科黄油体": "zcool_qingke",
-        "zcool_qingke": "zcool_qingke",
-        "zcool qingke": "zcool_qingke",
-        "qingke": "zcool_qingke",
-    }
-    return aliases.get(text, aliases.get(lowered, DEFAULT_RENDER_FONT_FAMILY))
-
-
 def _style_palette(style: str) -> dict[str, str]:
     """返回渲染风格对应的颜色方案。"""
     palettes = {
@@ -1093,7 +1046,7 @@ def _style_palette(style: str) -> dict[str, str]:
             "card_outline": "#EAE0E2",
             "card_shadow": "#EAE3E5",
             "title": "#322D35",
-            "accent": "#A65770",
+            "accent": "#984D66",
             "muted_text": "#7B707A",
             "body_text": "#403A43",
             "rule": "#EDE3E7",
@@ -1127,12 +1080,12 @@ def _style_palette(style: str) -> dict[str, str]:
             "card_shadow": "#E0E5DB",
             "title": "#2C3831",
             "accent": "#53745F",
-            "muted_text": "#727C71",
+            "muted_text": "#616E62",
             "body_text": "#3F4A42",
             "rule": "#E4E8DF",
         },
     }
-    return palettes.get(_normalize_style(style), palettes[DEFAULT_RENDER_STYLE])
+    return palettes.get(normalize_style(style), palettes[DEFAULT_RENDER_STYLE])
 
 
 def _load_font(
@@ -1145,7 +1098,7 @@ def _load_font(
     configured_path = str(
         os.environ.get("ASTRBOT_MEDIA_PARSER_FONT", "") or ""
     ).strip()
-    family = _normalize_font_family(font_family)
+    family = normalize_font_family(font_family)
     family_paths = {
         "noto_sans": (
             str(FONT_DIR / "NotoSansCJKsc-Bold.otf")

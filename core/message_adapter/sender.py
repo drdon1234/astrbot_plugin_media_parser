@@ -1,6 +1,7 @@
 """消息发送封装，统一不同会话场景下的发送行为。"""
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -13,6 +14,11 @@ from ..constants import Config
 from ..message_text import MAX_MESSAGE_TEXT_LENGTH, split_message_text
 from ..storage.original_images import OriginalImages
 from .node_builder import is_pure_image_gallery
+from .shared_images import SharedImageDelivery
+
+
+# NapCat 的 OneBot WebSocket 客户端和服务端接收上限为 50 MiB，预留 JSON 封装空间。
+_ONEBOT_IMAGE_BATCH_BYTES = 48 * 1024 * 1024
 
 
 class MessageDeliveryError(RuntimeError):
@@ -22,7 +28,9 @@ class MessageDeliveryError(RuntimeError):
 class MessageSender:
     """消息发送器，封装统一的私聊/群聊发送接口。"""
 
-    def __init__(self, originals: Optional[OriginalImages] = None) -> None:
+    def __init__(self, originals: Optional[OriginalImages] = None,
+                 shared_images: Optional[SharedImageDelivery] = None) -> None:
+        self.shared_images = shared_images
         self.originals = originals
         self.page_tokens: dict[str, str] = {}
 
@@ -160,6 +168,68 @@ class MessageSender:
         meta = link_metadata[link_idx]
         return meta if isinstance(meta, dict) else {}
 
+    @staticmethod
+    async def _onebot_image(image: Image) -> tuple[Image, int]:
+        """按实际图片字节计算 Base64 长度，直链只读取一次。"""
+        source = getattr(image, "url", None) or image.file
+        if source.startswith("base64://"):
+            return image, len(source) - len("base64://")
+        if source.startswith(("http://", "https://", "data:")):
+            encoded = await image.convert_to_base64()
+            return Image.fromBase64(encoded), len(encoded)
+        path = Path(await image.convert_to_file_path()) if source.startswith("file:") else Path(source)
+        size = (await asyncio.to_thread(path.stat)).st_size
+        return image, 4 * ((size + 2) // 3)
+
+    async def _delivery_batches(
+        self, event: AstrMessageEvent, content: list
+    ) -> AsyncIterator[tuple[list, list[str]]]:
+        """在实际 OneBot 请求边界分批，保留每个转发节点的作者和图文顺序。"""
+        forward = bool(content) and isinstance(content[0], Nodes)
+        parts = (part for node in content[0].nodes for part in node.content) if forward else content
+        if (getattr(event, "get_platform_name", lambda: "")() != "aiocqhttp"
+                or not any(isinstance(part, Image) for part in parts)):
+            yield content, self._tokens_in(content) if self.page_tokens else []
+            return
+        groups = ((node, node.content) for node in content[0].nodes) if forward else [(None, content)]
+        batch, tokens = [], []
+        used = 0
+        for node, segments in groups:
+            current_node = None
+            for segment in segments:
+                token = None
+                if isinstance(segment, Image):
+                    token = self.page_tokens.get(segment.file)
+                    prepared, = await asyncio.gather(self._onebot_image(segment), return_exceptions=True)
+                    if isinstance(prepared, asyncio.CancelledError):
+                        raise prepared
+                    if isinstance(prepared, Exception):
+                        logger.warning(f"发送前读取图片失败：{type(prepared).__name__}")
+                        segment, size, token = Plain("一张图片读取失败，已跳过。"), 0, None
+                    else:
+                        segment, size = prepared
+                        if size + 256 > _ONEBOT_IMAGE_BATCH_BYTES:
+                            segment, size, token = Plain("单张图片编码后超过消息大小上限，已跳过。"), 0, None
+                else:
+                    # JSON 转义最多占六个字节，长文本也计入转发包。
+                    size = 6 * len(segment.text) if isinstance(segment, Plain) else 0
+                size += 256
+                if batch and used + size > _ONEBOT_IMAGE_BATCH_BYTES:
+                    yield ([Nodes(batch)] if forward else batch), tokens
+                    batch, tokens, used, current_node = [], [], 0, None
+                if forward:
+                    if current_node is None:
+                        current_node = Node(name=node.name, uin=node.uin, content=[])
+                        batch.append(current_node)
+                    current_node.content.append(segment)
+                else:
+                    batch.append(segment)
+                used += size
+                if token and token not in tokens:
+                    tokens.append(token)
+        if batch:
+            yield ([Nodes(batch)] if forward else batch), tokens
+
     async def _try_send_content(
         self,
         event: AstrMessageEvent,
@@ -167,21 +237,47 @@ class MessageSender:
         *,
         quote_message_id: str = "",
     ) -> Optional[Exception]:
-        """收集单次发送的适配器异常，任务取消始终向上传播。"""
-        if quote_message_id:
-            content = [Reply(id=quote_message_id), *content]
-
-        async def send() -> None:
-            tokens = self._tokens_in(content) if self.page_tokens else []
+        """按批发送，引用只附在首批，已送达的批次不重试。"""
+        async def send(packet: list, tokens: list[str]) -> None:
             if tokens:
-                await self._send_indexed(event, content, tokens)
+                await self._send_indexed(event, packet, tokens)
             else:
-                await event.send(event.chain_result(content))
+                await event.send(event.chain_result(packet))
 
-        result, = await asyncio.gather(send(), return_exceptions=True)
-        if isinstance(result, asyncio.CancelledError):
-            raise result
-        return result if isinstance(result, Exception) else None
+        if self.shared_images is not None and event.get_platform_name() == "aiocqhttp":
+            receipt, = await asyncio.gather(
+                self.shared_images.send(event, content, quote_message_id), return_exceptions=True,
+            )
+            if isinstance(receipt, asyncio.CancelledError):
+                raise receipt
+            if isinstance(receipt, Exception):
+                return receipt
+            if receipt is not None:
+                tokens = self._tokens_in(content) if self.page_tokens else []
+                if tokens:
+                    await self._bind_originals(receipt, tokens)
+                return None
+
+        errors = []
+        succeeded = 0
+        async for packet, tokens in self._delivery_batches(event, content):
+            if quote_message_id:
+                packet = [Reply(id=quote_message_id), *packet]
+                quote_message_id = ""
+            result, = await asyncio.gather(send(packet, tokens), return_exceptions=True)
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                errors.append(result)
+            else:
+                succeeded += 1
+        if errors and not succeeded:
+            return errors[0]
+        if errors:
+            await self._finish_best_effort_delivery(
+                event, label="图片分批", expected=succeeded + len(errors), succeeded=succeeded, errors=errors,
+            )
+        return None
 
     async def _finish_best_effort_delivery(
         self,

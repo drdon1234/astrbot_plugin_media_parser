@@ -317,13 +317,13 @@ def build_text_node(
     ):
         text_parts.append(f"原始链接：{url}")
 
-    if (enable_text_metadata and text_metadata_field_enabled(metadata, "description")
+    if (enable_text_metadata and text_metadata_field_enabled(metadata, "summary")
             and metadata.get("repository_summary")):
         if text_parts:
             text_parts.append(TEXT_SECTION_SEPARATOR)
         text_parts.append(format_repository_summary(metadata["repository_summary"], compact=share_body))
 
-    if enable_text_metadata and text_metadata_field_enabled(metadata, "description") and metadata.get("content_summary"):
+    if enable_text_metadata and text_metadata_field_enabled(metadata, "summary") and metadata.get("content_summary"):
         if text_parts:
             text_parts.append(TEXT_SECTION_SEPARATOR)
         text_parts.append(metadata["content_summary"])
