@@ -20,12 +20,14 @@ DEFAULT_RENDER_FONT_FAMILY = "noto_sans"
 MIN_RENDER_FONT_SIZE = 16
 MAX_RENDER_FONT_SIZE = 42
 DEFAULT_LINE_SPACING = 1.55
-DEFAULT_PARAGRAPH_SPACING = 1.0
+DEFAULT_PARAGRAPH_SPACING = 0.5
 PAGINATED_MAX_HEIGHT = 1800
 MAX_RENDER_HEIGHT = 16384
 MAX_RENDER_PAGE_PIXELS = 16000000
 MAX_RENDER_TOTAL_PIXELS = 32000000
 MAX_RENDER_PAGES = 20
+PICTURE_GAP = 8
+CONTENT_PICTURE_KINDS = ("photo", "gallery")
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
 NO_LINE_START_CHARS = "，。！？；：、,.!?;:)]}）】》〉」』”’％%…"
 NO_LINE_END_CHARS = "([{（【《〈「『“‘"
@@ -37,6 +39,24 @@ METADATA_LABELS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class PictureBlock:
+    """正文配图、完整图集或视频封面，仅接受已下载的本地文件。"""
+
+    paths: tuple[str, ...]
+    kind: str = "photo"
+
+
+@dataclass(frozen=True)
+class ShareHeader:
+    """分享卡的作者、原始时间与平台署名，空字段自然收起。"""
+
+    platform: str
+    author: str = ""
+    timestamp: str = ""
+    avatar: str = ""
+
+
 @dataclass
 class _TextLine:
     """保存测量后的文字行，使绘制与分页共用同一份尺寸。"""
@@ -46,6 +66,9 @@ class _TextLine:
     height: int
     label: str = ""
     keep_with_next: bool = False
+    pictures: tuple[str, ...] = ()
+    picture_widths: tuple[int, ...] = ()
+    picture_crops: tuple[tuple[int, int, int, int] | None, ...] = ()
 
 
 async def render_text_metadata_images(
@@ -62,6 +85,9 @@ async def render_text_metadata_images(
     paginate: bool = False,
     font_proxy_url: str = "",
     timeout_seconds: int = 60,
+    blocks: tuple[str | PictureBlock, ...] = (),
+    share: ShareHeader | None = None,
+    embedded: list[str] | None = None,
 ) -> List[str]:
     """将文本元数据渲染为本地 PNG 文件。
 
@@ -77,6 +103,9 @@ async def render_text_metadata_images(
         paragraph_spacing: 段落空行高度相对行高的倍数，限制在 0–3.0。
         paginate: 是否将超过最大高度的长图按行拆分为多页。
         font_proxy_url: 补全默认字体时使用的代理地址，为空时直接连接。
+        blocks: 按原文顺序排列的文本与本地图片。
+        share: 分享卡头部，省略时使用文字卡。
+        embedded: 渲染成功后供调用方登记原图的文件列表。
         timeout_seconds: 渲染超时时间（秒）。
 
     Returns:
@@ -87,11 +116,14 @@ async def render_text_metadata_images(
         ValueError: 文本为空或排版超过渲染资源预算。
         asyncio.TimeoutError: 渲染超时。
     """
-    if not str(text or "").strip():
+    if not str(text or "").strip() and not blocks and not share:
         raise ValueError("没有可渲染的文本元数据")
 
     await ensure_render_fonts(font_family, font_proxy_url)
-    if _has_emoji(str(text) + str(title)) and not await asyncio.to_thread(_emoji_font_is_available):
+    visible_text = str(text) + str(title) + "".join(part for part in blocks if isinstance(part, str))
+    if share:
+        visible_text += share.author + share.platform
+    if _has_emoji(visible_text) and not await asyncio.to_thread(_emoji_font_is_available):
         await ensure_emoji_font(font_proxy_url)
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +140,7 @@ async def render_text_metadata_images(
         PAGINATED_MAX_HEIGHT if paginate else 0,
         _normalize_spacing(line_spacing, DEFAULT_LINE_SPACING, 1.0),
         _normalize_spacing(paragraph_spacing, DEFAULT_PARAGRAPH_SPACING, 0.0),
+        blocks, share, embedded,
     ))
     completed = False
     try:
@@ -213,6 +246,127 @@ def _paginate_lines(lines: List[_TextLine], capacity: int) -> List[List[_TextLin
     return pages or [lines]
 
 
+def _open_picture(path: str):
+    """打开已下载图片，并将异常尺寸归入可恢复的渲染失败。"""
+    from PIL import Image
+
+    try:
+        source = Image.open(path)
+    except Image.DecompressionBombError as exc:
+        raise ValueError("原图超过解码像素上限") from exc
+    if source.width * source.height > MAX_RENDER_TOTAL_PIXELS:
+        source.close()
+        raise ValueError("原图超过解码像素上限")
+    return source
+
+
+def _gallery_crop(image) -> tuple[int, int, int, int] | None:
+    """收窄图集原图连续的纯白外边，保留文字、透明区域和少量留白。"""
+    from PIL import ImageOps
+
+    if image.mode not in ("RGB", "RGBA") or "transparency" in image.info:
+        image = image.convert("RGBA")
+    w, h = image.size
+    white = (255,) * len(image.getbands())
+    if any(image.getpixel(point) != white for point in ((0, 0), (w-1, 0), (0, h-1), (w-1, h-1))):
+        return None
+    if image.mode == "RGBA":
+        if image.getchannel("A").getextrema()[0] < 255:
+            return None
+        image = image.convert("RGB")
+    content = ImageOps.invert(image).getbbox()
+    if not content:
+        return None
+    left, top, right, bottom = content
+    pad = round(min(w, h) * 0.03)
+    box = (max(0, min(w // 20, left - pad)), max(0, min(h // 5, top - pad)),
+           min(w, max(w - w // 20, right + pad)), min(h, max(h - h // 5, bottom + pad)))
+    return box if box != (0, 0, w, h) else None
+
+
+def _picture_geometry(path: str, gallery: bool = False) -> tuple[float, tuple[int, int, int, int] | None]:
+    """按显示方向测量图片，记录图集预览的裁切范围供绘制复用。"""
+    from PIL import ImageOps
+
+    with _open_picture(path) as source:
+        width, height = source.size
+        orientation = source.getexif().get(274, 1)
+        if orientation in (5, 6, 7, 8):
+            width, height = height, width
+        crop = None
+        if gallery:
+            crop = _gallery_crop(source if orientation == 1 else ImageOps.exif_transpose(source))
+            if crop:
+                left, top, right, bottom = crop
+                width, height = right - left, bottom - top
+    return width / height, crop
+
+
+def _picture_lines(block: PictureBlock, width: int, max_height: int) -> list[_TextLine]:
+    """测量配图或图集，分页和绘制复用每行的实际尺寸。"""
+    if not block.paths:
+        raise ValueError("图片块缺少本地文件")
+    if block.kind != "gallery":
+        height = width * 9 // 16 if block.kind == "cover" else round(width / _picture_geometry(block.paths[0])[0])
+        height = max(1, min(height, max_height))
+        return [_TextLine("", block.kind, height + PICTURE_GAP, pictures=block.paths)]
+
+    lines = []
+    start = 0
+    while start < len(block.paths):
+        # 最后四张分成两对，避免产生单独放大的尾图。
+        count = 2 if len(block.paths) - start == 4 else 3
+        paths = block.paths[start : start + count]
+        ratios, crops = zip(*(_picture_geometry(path, gallery=True) for path in paths))
+        available = width - PICTURE_GAP * (len(paths) - 1)
+        # 限制极端长宽比的占位；图片自身始终按原比例完整显示。
+        weights = [min(3.0, max(0.5, ratio)) for ratio in ratios]
+        if len(block.paths) == 4:
+            widths = [available // 2, available - available // 2]
+            height = max(w / ratio for w, ratio in zip(widths, weights))
+        else:
+            height = available / sum(weights)
+            widths = [round(height * weight) for weight in weights]
+            widths[-1] += available - sum(widths)
+        height = max(1, min(round(height), max_height))
+        lines.append(_TextLine("", "gallery", height + PICTURE_GAP,
+                               pictures=paths, picture_widths=tuple(widths), picture_crops=crops))
+        start += len(paths)
+    return lines
+
+
+def _paste_pictures(canvas, paths, box, kind: str, widths: tuple[int, ...] = (), crops: tuple = ()) -> None:
+    """解码当前行的图片并按用途裁切或等比缩放。"""
+    from PIL import Image, ImageDraw, ImageOps
+
+    x, y, width, height = box
+    for index, (path, cell) in enumerate(zip(paths, widths or (width,), strict=True)):
+        with _open_picture(path) as source:
+            photo = ImageOps.exif_transpose(source).convert("RGBA")
+            if crops and crops[index]:
+                photo = photo.crop(crops[index])
+            if kind in ("cover", "avatar"):
+                thumb = ImageOps.fit(photo, (cell, height), method=Image.Resampling.LANCZOS)
+            else:
+                scale = min(cell / photo.width, height / photo.height)
+                size = (max(1, round(photo.width * scale)), max(1, round(photo.height * scale)))
+                thumb = photo.resize(size, Image.Resampling.LANCZOS)
+            left = x + (cell - thumb.width) // 2
+            top = y + (height - thumb.height) // 2
+            if kind == "avatar":
+                mask = Image.new("L", thumb.size)
+                ImageDraw.Draw(mask).ellipse((0, 0, cell - 1, height - 1), fill=255)
+                canvas.paste(thumb, (left, top), mask)
+            else:
+                canvas.paste(thumb, (left, top), thumb)
+        x += cell + PICTURE_GAP
+    if kind == "cover":
+        overlay = ImageDraw.Draw(canvas, "RGBA")
+        cx, cy = box[0] + width // 2, y + height // 2
+        overlay.ellipse((cx-28, cy-28, cx+28, cy+28), fill=(0, 0, 0, 135))
+        overlay.polygon(((cx-7, cy-13), (cx-7, cy+13), (cx+14, cy)), fill="white")
+
+
 def _render_text_metadata_image_sync(
     text: str,
     output: Path,
@@ -224,6 +378,9 @@ def _render_text_metadata_image_sync(
     max_height: int = 0,
     line_spacing: float = DEFAULT_LINE_SPACING,
     paragraph_spacing: float = DEFAULT_PARAGRAPH_SPACING,
+    blocks: tuple[str | PictureBlock, ...] = (),
+    share: ShareHeader | None = None,
+    embedded: list[str] | None = None,
 ) -> List[str]:
     """同步绘制文本元数据图片，max_height 大于 0 时按高度分页。"""
     try:
@@ -241,7 +398,7 @@ def _render_text_metadata_image_sync(
         "meta": _load_font(ImageFont, meta_size, font_family=font_family),
         "label": _load_font(ImageFont, meta_size, True, font_family),
     }
-    if _has_emoji(text + title):
+    if _has_emoji(text + title + "".join(b for b in blocks if isinstance(b, str)) + (share.author if share else "")):
         fonts = {
             key: _FallbackFont(font, _load_emoji_font(ImageFont, font.size))
             for key, font in fonts.items()
@@ -252,17 +409,48 @@ def _render_text_metadata_image_sync(
         padding = max(28, width // 20)
         body_x = margin + padding
         content_width = width - body_x * 2
-        lines = _layout_text(
-            probe_draw, text, fonts, content_width, line_spacing, paragraph_spacing,
-        )
         page_font = fonts["meta"]
-        header = _wrap_text(
-            probe_draw, title.strip() or "媒体解析结果", page_font, content_width - 24,
-        )
+        header_text = share.platform if share else title.strip() or "媒体解析结果"
+        header_width = content_width // 3 if share else content_width - 24
+        header = _wrap_text(probe_draw, header_text, page_font, header_width)
         header_height = _line_height(probe_draw, page_font, 1.5)
-    body_top = margin + padding + len(header) * header_height + 24
-    footer_height = header_height + 28
-    capacity = max_height - body_top - padding - footer_height - margin
+        profile = []
+        profile_height = 0
+        if share:
+            name_width = content_width - header_width - 16 - (76 if share.author else 0)
+            for value, role in ((share.author, "section"), (share.timestamp, "meta")):
+                if value:
+                    font = fonts[role]
+                    row_height = _line_height(probe_draw, font, 1.45)
+                    for part in _wrap_text(probe_draw, value, font, name_width):
+                        profile.append((part, role, row_height))
+                        profile_height += row_height
+            if share.author:
+                profile_height = max(60, profile_height)
+        body_top = margin + padding + max(profile_height, len(header) * header_height) + 24
+        footer_height = header_height + 28
+        capacity = max_height - body_top - padding - footer_height - margin
+        if max_height and capacity <= PICTURE_GAP:
+            raise ValueError("卡片头部超过分页高度")
+        lines = []
+        for block in blocks or ((text,) if text else ()):
+            if isinstance(block, PictureBlock):
+                if block.kind in CONTENT_PICTURE_KINDS and lines and lines[-1].text:
+                    # 文字行自身已有行距，再补足图前留白；独立空行可在分页边缘自然移除。
+                    lines.append(_TextLine("", "blank", round(font_size * 2 / 3), keep_with_next=True))
+                lines.extend(_picture_lines(block, content_width, capacity - PICTURE_GAP if max_height else 2400))
+            elif block.strip():
+                if lines and lines[-1].kind in CONTENT_PICTURE_KINDS:
+                    lines.append(_TextLine("", "blank", font_size, keep_with_next=True))
+                lines.extend(_layout_text(
+                    probe_draw, block, fonts, content_width, line_spacing, paragraph_spacing,
+                ))
+    if blocks and not max_height:
+        # 图文长图超过单页硬限制时分页，避免因一张超长图退回逐段发送原图。
+        limit = min(MAX_RENDER_HEIGHT, MAX_RENDER_PAGE_PIXELS // width)
+        if body_top + sum(line.height for line in lines) + padding + margin > limit:
+            max_height = limit
+            capacity = limit - body_top - padding - footer_height - margin
     pages = _paginate_lines(lines, capacity) if max_height > 0 else [lines]
     if len(pages) == 1:
         footer_height = 0
@@ -292,6 +480,7 @@ def _render_text_metadata_image_sync(
                     draw, page_lines, header=header, fonts=fonts, width=width,
                     margin=margin, padding=padding, body_top=body_top,
                     card_bottom=card_bottom, header_height=header_height, palette=palette,
+                    canvas=image, share=share, profile=profile, embedded=embedded,
                 )
                 if len(pages) > 1:
                     page_label = f"{page_index:02d} / {len(pages):02d}"
@@ -321,6 +510,10 @@ def _draw_page(
     card_bottom: int,
     header_height: int,
     palette: dict[str, str],
+    canvas: Any = None,
+    profile: tuple | list = (),
+    share: ShareHeader | None = None,
+    embedded: list[str] | None = None,
 ) -> None:
     """绘制有清楚阅读层级的单页卡片。"""
     draw.rounded_rectangle(
@@ -337,18 +530,50 @@ def _draw_page(
     )
     body_x = margin + padding
     header_y = margin + padding
-    draw.rounded_rectangle(
-        (body_x, header_y + 2, body_x + 4, header_y + 20),
-        radius=2, fill=palette["accent"],
-    )
+    author_color = palette["accent"]
+    if share:
+        dark = palette["background"] == "#0D1420"
+        if share.platform == "bilibili":
+            author_color = "#73D2F6" if dark else "#087DA5"
+        elif share.platform == "抖音":
+            author_color = "#FF8CA5" if dark else "#B82A55"
+        if share.author:
+            draw.ellipse((body_x, header_y, body_x + 60, header_y + 60), fill=author_color)
+            initial = _text_clusters(share.author)[0]
+            initial_x = body_x + (60 - _text_width(draw, initial, fonts["section"])) / 2
+            _draw_text(draw, initial_x, header_y + 14, initial, fonts["section"], palette["card_fill"])
+            if share.avatar:
+                try:
+                    _paste_pictures(canvas, (share.avatar,), (body_x, header_y, 60, 60), "avatar")
+                    if embedded is not None:
+                        embedded.append(share.avatar)
+                except (OSError, ValueError):
+                    pass
+        top = header_y
+        for value, role, row_height in profile:
+            _draw_text(draw, body_x + (76 if share.author else 0), top, value, fonts[role],
+                       author_color if role == "section" else palette["muted_text"])
+            top += row_height
+    else:
+        draw.rounded_rectangle(
+            (body_x, header_y + 2, body_x + 4, header_y + 20),
+            radius=2, fill=palette["accent"],
+        )
     for index, line in enumerate(header):
         _draw_text(
-            draw, body_x + 18, header_y + index * header_height,
+            draw, (width - body_x - _text_width(draw, line, fonts["meta"]) if share else body_x + 18),
+            header_y + index * header_height,
             line, fonts["meta"], palette["muted_text"],
         )
     body_y = body_top
     for line in body_lines:
-        if line.kind == "separator":
+        if line.pictures:
+            _paste_pictures(canvas, line.pictures,
+                            (body_x, body_y, width - 2 * body_x, line.height - PICTURE_GAP),
+                            line.kind, line.picture_widths, line.picture_crops)
+            if embedded is not None:
+                embedded.extend(line.pictures)
+        elif line.kind == "separator":
             rule_y = body_y + line.height // 2
             draw.line(
                 (body_x, rule_y, width - body_x, rule_y),

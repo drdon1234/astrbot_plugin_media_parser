@@ -139,6 +139,7 @@ async def download_image_to_cache(
     proxy: str = None,
     max_bytes: Optional[int] = None,
     tls_ciphers: str = "",
+    keep_original: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """下载图片到缓存目录
 
@@ -205,6 +206,7 @@ async def download_image_to_cache(
 
     owned_paths = {file_path}
     delivered_path = None
+    original_path = None
     try:
         try:
             image_format = await run_blocking(
@@ -259,6 +261,8 @@ async def download_image_to_cache(
 
             owned_paths.add(png_path)
             if await _convert_image_to_png(file_path, png_path, max_bytes=max_bytes):
+                if keep_original:
+                    original_path = file_path
                 file_path = png_path
                 try:
                     size_mb = await run_blocking(os.path.getsize, file_path)
@@ -281,10 +285,11 @@ async def download_image_to_cache(
             "size_mb": size_mb,
             "status_code": status_code,
             "error": None,
+            "original_path": original_path,
             "converted_to_png": file_path.lower().endswith(".png"),
         }
     finally:
         # 只有交付给调用方的路径才能保留，取消与失败均在此回收全部输出。
         for owned_path in owned_paths:
-            if owned_path != delivered_path:
+            if owned_path != delivered_path and not (delivered_path and owned_path == original_path):
                 cleanup_file(owned_path)

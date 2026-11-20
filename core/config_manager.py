@@ -381,11 +381,14 @@ class TextMetadataConfig:
     show_description: bool = True
     quote_user_message: bool = False
     render_to_image: bool = False
+    render_layout: str = "文字卡"
+    share_cover: bool = True
+    original_keyword: str = "原图"
     render_style: str = "fresh"
     render_font_family: str = "noto_sans"
     render_font_size: int = 24
     render_line_spacing: float = 1.55
-    render_paragraph_spacing: float = 1.0
+    render_paragraph_spacing: float = 0.5
     render_paginate: bool = False
     render_separate_sections: bool = False
 
@@ -871,6 +874,13 @@ class ConfigManager:
                     False,
                     "message.text_metadata.render_to_image",
                 ),
+                render_layout=(
+                    "分享卡" if text_metadata.get("render_layout") == "分享卡" else "文字卡"
+                ),
+                share_cover=self._parse_bool(
+                    text_metadata.get("share_cover", True), True, "message.text_metadata.share_cover"
+                ),
+                original_keyword=str(text_metadata.get("original_keyword", "原图") or "").strip(),
                 render_style=self._parse_text_render_style(
                     text_metadata.get("render_style", "清新便签")
                 ),
@@ -900,8 +910,8 @@ class ConfigManager:
                 render_paragraph_spacing=min(
                     3.0,
                     self._parse_non_negative_float(
-                        text_metadata.get("render_paragraph_spacing", 1.0),
-                        1.0,
+                        text_metadata.get("render_paragraph_spacing", 0.5),
+                        0.5,
                     ),
                 ),
                 render_paginate=self._parse_bool(
@@ -1459,6 +1469,12 @@ class ConfigManager:
                 "引用链接归档命令与清缓存命令冲突，已禁用归档命令；请配置两个不同命令"
             )
             self.message.archive.command = ""
+
+        if self.message.text_metadata.original_keyword and self.message.text_metadata.original_keyword in (
+            self.message.archive.command, self.admin.clean_cache_keyword, self.bilibili.admin_cookie_update_command,
+        ):
+            logger.warning("引用取原图关键词与已有命令冲突，本次禁用取原图；请设置不同关键词")
+            self.message.text_metadata.original_keyword = ""
 
     # ── 工厂方法 ────────────────────────────────────────
 

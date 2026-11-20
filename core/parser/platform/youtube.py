@@ -706,6 +706,7 @@ class YoutubeParser(BaseVideoParser):
                     user_agent=DESKTOP_USER_AGENT,
                 ),
                 "video_headers": video_headers,
+                "use_image_proxy": bool(self.proxy_url),
                 "use_video_proxy": bool(self.proxy_url),
                 "proxy_url": self.proxy_url,
             }

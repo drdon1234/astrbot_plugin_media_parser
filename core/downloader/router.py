@@ -77,6 +77,7 @@ async def download_media(
     max_bytes: Optional[int] = None,
     image_tls_ciphers: str = "",
     decryption_key: Optional[str] = None,
+    keep_original_image: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """下载媒体文件
 
@@ -186,6 +187,7 @@ async def download_media(
             proxy=proxy,
             max_bytes=max_bytes,
             tls_ciphers=image_tls_ciphers,
+            keep_original=keep_original_image,
         )
         if result:
             return result

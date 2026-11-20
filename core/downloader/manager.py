@@ -206,6 +206,7 @@ class DownloadManager:
                 if block.get("type") == "image" else block
                 for block in content_blocks
             ]
+        metadata["converted_cover_count"] = len(converted_images)
         converted_images.extend(image_urls)
         metadata.pop("video_cover_urls", None)
         metadata.pop("video_force_download", None)
@@ -337,6 +338,24 @@ class DownloadManager:
 
     # ── 下载执行 ────────────────────────────────────────
 
+    async def download_card_picture(
+        self, session: aiohttp.ClientSession, candidates: List[str], metadata: MediaMetadata,
+        proxy_addr: str,
+    ) -> Tuple[str, str]:
+        """使用平台图片请求头、代理和现有下载限制获取卡片素材。"""
+        urls = [url for url in candidates if url.startswith(("https://", "http://"))]
+        if not urls or not self.cache_dir_available:
+            return "", ""
+        items = await self._download_local_items(session, [{
+            "kind": "image", "media_id": uuid.uuid4().hex, "url_list": urls, "keep_original": True,
+            "headers": {k: v for k, v in (metadata.get("image_headers") or {}).items()
+                        if k.lower() not in ("cookie", "authorization", "proxy-authorization")},
+            "image_tls_ciphers": metadata.get("image_tls_ciphers", ""),
+            "proxy": self._proxy_for(metadata, "image", proxy_addr),
+        }], self.cache_dir)
+        result = items[0] if items else {}
+        return result.get("file_path") or "", result.get("original_path") or ""
+
     async def _download_local_items(
         self,
         session: aiohttp.ClientSession,
@@ -442,6 +461,7 @@ class DownloadManager:
                                 proxy=proxy,
                                 max_bytes=(video_max_bytes if kind != "image" else None),
                                 image_tls_ciphers=item.get("image_tls_ciphers", ""),
+                                keep_original_image=bool(item.get("keep_original")),
                                 decryption_key=(
                                     item.get("decryption_keys") or {}
                                 ).get(candidate),
@@ -456,6 +476,7 @@ class DownloadManager:
                                 "success": True,
                                 "error": result.get("error"),
                                 "converted_to_png": result.get("converted_to_png"),
+                                "original_path": result.get("original_path"),
                             }
                         if result and result.get("error"):
                             last_error = str(result.get("error"))
@@ -526,6 +547,8 @@ class DownloadManager:
                     result = task.result()
                     if isinstance(result, dict) and result.get("file_path"):
                         cleanup_file(result["file_path"])
+                        if result.get("original_path"):
+                            cleanup_file(result["original_path"])
             raise
         finally:
             for task in tasks:
@@ -616,6 +639,7 @@ class DownloadManager:
         on_sendable_media: Optional[Callable[[], Awaitable[None]]] = None,
         *,
         video_cover_only: Optional[bool] = None,
+        keep_original_images: bool = False,
     ) -> MediaMetadata:
         """处理元数据，回填媒体模式、本地文件、大小和跳过原因。"""
         if self._shutting_down or not metadata:
@@ -827,6 +851,7 @@ class DownloadManager:
             local_items.append(
                 {
                     "kind": "image",
+                    "keep_original": keep_original_images,
                     "position": video_count + idx,
                     "index": idx,
                     "url_list": url_list,
@@ -942,6 +967,8 @@ class DownloadManager:
                 if result.get("error"):
                     image_warnings[idx] = str(result.get("error"))
             file_paths[position] = file_path
+            if result.get("original_path"):
+                metadata.setdefault("original_image_paths", {})[file_path] = result["original_path"]
 
         metadata["file_paths"] = file_paths
         metadata["video_sizes"] = video_sizes

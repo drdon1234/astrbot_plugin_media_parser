@@ -11,6 +11,7 @@ from ..logger import logger
 
 from ..constants import Config
 from ..message_text import MAX_MESSAGE_TEXT_LENGTH, split_message_text
+from ..storage.original_images import OriginalImages
 from .node_builder import is_pure_image_gallery
 
 
@@ -20,6 +21,84 @@ class MessageDeliveryError(RuntimeError):
 
 class MessageSender:
     """消息发送器，封装统一的私聊/群聊发送接口。"""
+
+    def __init__(self, originals: Optional[OriginalImages] = None) -> None:
+        self.originals = originals
+        self.page_tokens: dict[str, str] = {}
+
+    def _tokens_in(self, content: List[Any]) -> list[str]:
+        tokens = []
+        for node in content:
+            if isinstance(node, Nodes):
+                for forward in node.nodes:
+                    tokens.extend(self._tokens_in(forward.content))
+            elif isinstance(node, Image):
+                token = self.page_tokens.get(node.file)
+                if token:
+                    tokens.append(token)
+        return list(dict.fromkeys(tokens))
+
+    async def _bind_originals(self, message_id: str, tokens: list[str]) -> None:
+        """登记实际发送回执，索引写入失败时保留已成功送达的状态。"""
+        try:
+            await asyncio.to_thread(self.originals.bind, message_id, tokens)
+        except OSError as exc:
+            logger.warning(f"解析结果已送达，登记原图引用失败：{exc}")
+
+    async def _send_indexed(self, event: AstrMessageEvent, content: list, tokens: list[str]) -> None:
+        """取得真实发送回执；仅提供引用正文的适配器使用同消息内的结果编号。"""
+        platform = event.get_platform_name()
+        if platform == "aiocqhttp":
+            group = event.get_group_id()
+            params = {"group_id": int(group)} if group else {"user_id": int(event.get_sender_id())}
+            params["self_id"] = event.get_self_id()
+            target = "group" if group else "private"
+            if isinstance(content[0], Nodes):
+                params.update(await content[0].to_dict())
+                action = f"send_{target}_forward_msg"
+            else:
+                # 使用框架的节点序列化，沿用本地文件、Token 图片和引用的编码。
+                serialized = await Node(content=content).to_dict()
+                params["message"] = serialized["data"]["content"]
+                action = f"send_{target}_msg"
+            receipt = await event.bot.call_action(action, **params)
+            message_id = (receipt or {}).get("message_id")
+        elif platform == "telegram":
+            if isinstance(content[0], Nodes):
+                # Telegram 没有 OneBot 合并转发组件，依次发送其内真实消息。
+                for forward in content[0].nodes:
+                    child_tokens = self._tokens_in(forward.content)
+                    if child_tokens:
+                        await self._send_indexed(event, forward.content, child_tokens)
+                    else:
+                        await event.send(event.chain_result(forward.content))
+                return
+            chat, _, thread = str(event.get_group_id() or event.get_sender_id()).partition("#")
+            options = {"message_thread_id": int(thread)} if thread else {}
+            for node in content:
+                if isinstance(node, Reply):
+                    options["reply_to_message_id"] = int(node.id)
+                elif isinstance(node, Image):
+                    token = self.page_tokens.get(node.file)
+                    if not token:
+                        await event.send(event.chain_result([node]))
+                        continue
+                    path = await node.convert_to_file_path()
+                    with open(path, "rb") as stream:
+                        receipt = await event.client.send_photo(chat_id=chat, photo=stream, **options)
+                    await self._bind_originals(str(receipt.message_id), [token])
+            return
+        else:
+            marker = Plain(" ".join(f"〔原图·{token}〕" for token in tokens))
+            if isinstance(content[0], Nodes):
+                content[0].nodes[0].content.append(marker)
+            else:
+                content = [*content, marker]
+            receipt = await event.send(event.chain_result(content))
+            message_id = (receipt.get("message_id") if isinstance(receipt, dict)
+                          else getattr(receipt, "message_id", None))
+        if message_id:
+            await self._bind_originals(str(message_id), tokens)
 
     @staticmethod
     def _message_contents(
@@ -81,8 +160,8 @@ class MessageSender:
         meta = link_metadata[link_idx]
         return meta if isinstance(meta, dict) else {}
 
-    @staticmethod
     async def _try_send_content(
+        self,
         event: AstrMessageEvent,
         content: List[Any],
         *,
@@ -93,15 +172,19 @@ class MessageSender:
             content = [Reply(id=quote_message_id), *content]
 
         async def send() -> None:
-            await event.send(event.chain_result(content))
+            tokens = self._tokens_in(content) if self.page_tokens else []
+            if tokens:
+                await self._send_indexed(event, content, tokens)
+            else:
+                await event.send(event.chain_result(content))
 
         result, = await asyncio.gather(send(), return_exceptions=True)
         if isinstance(result, asyncio.CancelledError):
             raise result
         return result if isinstance(result, Exception) else None
 
-    @staticmethod
     async def _finish_best_effort_delivery(
+        self,
         event: AstrMessageEvent,
         *,
         label: str,
@@ -115,7 +198,7 @@ class MessageSender:
             raise MessageDeliveryError(
                 f"{label}全部发送失败（{len(errors)}项）"
             ) from errors[0]
-        result = await MessageSender._try_send_content(
+        result = await self._try_send_content(
             event, [Plain(f"{label}有 {len(errors)} 项发送失败，其余内容已发送。")]
         )
         if result is not None:
@@ -292,7 +375,7 @@ class MessageSender:
             int(large_video_threshold_mb) if large_video_threshold_mb > 0 else 50
         )
         notice_text = f"⚠️ 链接中包含超过{threshold_mb}MB的视频时将单独发送所有媒体"
-        result = await MessageSender._try_send_content(event, [Plain(notice_text)])
+        result = await self._try_send_content(event, [Plain(notice_text)])
         if result is not None:
             logger.warning(f"发送大媒体提示失败: {result}")
         expected = 0
@@ -308,7 +391,7 @@ class MessageSender:
                 else:
                     succeeded += 1
             if link_idx < len(link_nodes_list) - 1:
-                result = await MessageSender._try_send_content(event, [Plain(separator)])
+                result = await self._try_send_content(event, [Plain(separator)])
                 if result is not None:
                     logger.warning(f"发送分隔符失败: {result}")
         return expected, succeeded, errors
@@ -395,7 +478,7 @@ class MessageSender:
                 else:
                     succeeded += 1
             if link_idx in non_empty_indexes[:-1]:
-                result = await MessageSender._try_send_content(event, [Plain(separator)])
+                result = await self._try_send_content(event, [Plain(separator)])
                 if result is not None:
                     logger.warning(f"发送分隔符失败: {result}")
         await self._finish_best_effort_delivery(
@@ -467,7 +550,7 @@ class MessageSender:
                 else:
                     succeeded += 1
             if item_idx < len(non_empty) - 1:
-                result = await MessageSender._try_send_content(event, [Plain(separator)])
+                result = await self._try_send_content(event, [Plain(separator)])
                 if result is not None:
                     logger.warning(f"发送翻译分隔符失败: {result}")
         await self._finish_best_effort_delivery(

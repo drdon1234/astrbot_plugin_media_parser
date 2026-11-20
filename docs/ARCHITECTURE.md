@@ -205,7 +205,7 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
 
-`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成 PNG，再移除已成功渲染的 Plain 节点并发送图片。正文穿插的链接（`preserve_order`）把连续的 Plain 节点在原位置分段渲染并替换为图片，任一段失败时整条链接保留原文本；`message.text_metadata.render_separate_sections` 开启时，每条链接的基础文本与热评按节点构建时记录的 `LinkBuildMeta.section_starts` 分区，连同各条翻译分别在原位置渲染，不再生成合并图片。其余情况下，非穿插链接与翻译仍合并渲染，由发送阶段前置发送。可选样式为 `清新便签`、`科技感`、`专业严肃`、`温和卡片`（内部分别归一为 `fresh`/`tech`/`serious`/`card`），字体大小限制为 16–42；`render_line_spacing` 为行高相对文字高度的倍数（1.0–3.0，默认 1.55），`render_paragraph_spacing` 为段落空行相对行高的倍数（0–3.0，默认 1.0）。`message.text_metadata.render_paginate` 开启时，渲染器按正文行拆分高度超过 1800 像素的图片，页首不保留空行和分隔线，多页时在底部标注页码并以 `_pNN` 后缀命名；关闭时保持单张输出。图片采用简洁阅读卡片，区分文章标题、辅助信息、正文、热评与翻译；测量和绘制共用字号与字重，英文单词和中文标点按实际宽度换行，标题及评论信息尽量与后续正文同页。
+`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成 PNG，再移除已成功渲染的 Plain 节点并发送图片。分享卡和具有正文配图的链接逐条绘制，直接复用下载结果，将图片作为正文块参与测量、分页和绘制。成功后替换对应节点；其余媒体仍单独发送。开启分区渲染时热评、翻译单独出图。普通文字卡继续合并非穿插文本。图片版式与四种配色独立。引用取原图按会话和解析结果登记，所有分页共用一组按绘制顺序登记的源文件，一小时后由媒体缓存清理器回收。字体大小限制为 16–42；`render_line_spacing` 为行高相对文字高度的倍数（1.0–3.0，默认 1.55），`render_paragraph_spacing` 为段落空行相对行高的倍数（0–3.0，默认 0.5）。`message.text_metadata.render_paginate` 开启时，渲染器按正文行拆分高度超过 1800 像素的图片，页首不保留空行和分隔线，多页时在底部标注页码并以 `_pNN` 后缀命名；关闭时保持单张输出。图片采用简洁阅读卡片，区分文章标题、辅助信息、正文、热评与翻译；测量和绘制共用字号与字重，英文单词和中文标点按实际宽度换行，标题及评论信息尽量与后续正文同页。
 
 创建成品画布前限制单页高度为 16384 像素、单页为 1600 万像素、单次渲染为 20 页及 3200 万像素总量；分页时每页仍不得超过 1800 像素。超出任一预算时抛出可回退异常，保留完整原文本，不分配大画布。渲染超时或取消时观察不可强制停止的线程真实结束，再清理本次输出；重复取消不能跳过清理。B站登录二维码生成也先等待线程结束再删除临时文件。
 
@@ -519,7 +519,7 @@ ZIP 命令?
          build_all_nodes() + 等待翻译
            ↓
          message.text_metadata.render_to_image=true?
-           ├─ 是 -> 穿插链接或分区渲染时原位分段渲染；其余合并文本节点 -> Pillow 生成 PNG（可分页）-> 成功后移除 Plain 节点
+           ├─ 是 -> 分享卡或正文配图逐链接绘制；开启分区时单独绘制热评与翻译；其余合并文本节点 -> Pillow 生成 PNG（可分页）-> 成功后移除 Plain 节点
            └─ 否/失败 -> 保留原文本节点
            ↓
          summarize_node_counts()
@@ -615,7 +615,7 @@ build_all_nodes()
   ↓
 等待 translation_task，调用 build_translation_nodes_for_all()
   ↓
-可选 text_renderer.py 将基础文本、热评与翻译合并为 PNG，正文穿插链接在原位置分段渲染
+可选 text_renderer.py 将基础文本、热评与翻译合并为 PNG，正文配图在原位置嵌入长图
   ↓
 summarize_node_counts()
   ↓

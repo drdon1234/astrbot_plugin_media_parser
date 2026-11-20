@@ -74,7 +74,7 @@ class DouyinParser(BaseVideoParser):
         return url.rstrip(URL_TRAILING_PUNCTUATION)
 
     @staticmethod
-    def _format_timestamp(timestamp_value: Any) -> str:
+    def _format_timestamp(timestamp_value: Any, pattern: str = "%Y-%m-%d") -> str:
         """把秒级或毫秒级时间戳格式化为日期字符串。"""
         if timestamp_value in (None, ""):
             return ""
@@ -82,7 +82,7 @@ class DouyinParser(BaseVideoParser):
             timestamp = int(timestamp_value)
             if timestamp > 10 ** 12:
                 timestamp //= 1000
-            return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+            return datetime.fromtimestamp(timestamp).strftime(pattern)
         except (TypeError, ValueError, OSError, OverflowError):
             return ""
 
@@ -613,6 +613,7 @@ class DouyinParser(BaseVideoParser):
         self, item_info: Dict[str, Any]
     ) -> Dict[str, Any]:
         author_info = item_info.get("author", {})
+        avatar_urls = self._extract_douyin_image_url_list(author_info.get("avatar_thumb") or {})
         nickname = author_info.get("nickname", "")
         unique_id = author_info.get("unique_id", "")
         (
@@ -636,6 +637,9 @@ class DouyinParser(BaseVideoParser):
         return {
             "item_id": str(item_info.get("aweme_id") or item_info.get("id") or ""),
             "title": item_info.get("desc", ""),
+            "author_name": nickname,
+            "author_avatar_url": avatar_urls[0] if avatar_urls else "",
+            "published_at": self._format_timestamp(item_info.get("create_time"), "%Y-%m-%d %H:%M:%S"),
             "author": self._build_douyin_author(nickname, unique_id),
             "timestamp": self._format_timestamp(item_info.get("create_time")),
             "video_url_lists": video_url_lists,
@@ -1021,6 +1025,10 @@ class DouyinParser(BaseVideoParser):
             headers = self._build_result_headers(user_agent)
             comments = await self._fetch_hot_comments(session, result.get("item_id", ""))
             comment_fields = {"hot_comments": comments} if comments else {}
+            card_fields = {
+                key: result[key] for key in ("author_name", "author_avatar_url", "published_at")
+                if result.get(key)
+            }
 
             if is_gallery and not video_url_lists:
                 logger.debug(
@@ -1041,6 +1049,7 @@ class DouyinParser(BaseVideoParser):
                     "image_headers": headers["image_headers"],
                     "video_headers": headers["video_headers"],
                     "audio_headers": headers["audio_headers"],
+                    **card_fields,
                     **comment_fields,
                 }
 
@@ -1062,6 +1071,7 @@ class DouyinParser(BaseVideoParser):
                 "image_headers": headers["image_headers"],
                 "video_headers": headers["video_headers"],
                 "audio_headers": headers["audio_headers"],
+                **card_fields,
                 **comment_fields,
             }
             logger.debug(

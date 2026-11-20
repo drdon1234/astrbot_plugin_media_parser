@@ -1645,6 +1645,9 @@ class BilibiliParser(BaseVideoParser):
             "desc": desc,
             "author": author,
             "timestamp": timestamp,
+            "author_name": name,
+            "author_avatar_url": self._normalize_bilibili_url(owner.get("face") or ""),
+            "published_at": dt.strftime("%Y-%m-%d %H:%M:%S") if pubdate else "",
             "aid": aid_value,
             "pic": data.get("pic") or "",
             "content_access_type_hint": (
@@ -1701,11 +1704,14 @@ class BilibiliParser(BaseVideoParser):
         desc = result.get("evaluate") or result.get("summary") or ""
         name, mid = "", None
         up_info = result.get("up_info") or result.get("upInfo") or {}
+        avatar = ""
         if isinstance(up_info, dict):
+            avatar = self._normalize_bilibili_url(up_info.get("avatar") or up_info.get("face"))
             name = up_info.get("name") or ""
             mid = up_info.get("mid") or up_info.get("uid")
         if not name:
             pub = result.get("publisher") or {}
+            avatar = self._normalize_bilibili_url(pub.get("face"))
             name = pub.get("name") or ""
             mid = pub.get("mid") or mid
         if name and mid:
@@ -1718,11 +1724,13 @@ class BilibiliParser(BaseVideoParser):
             author = result.get("season_title") or result.get("title") or ""
 
         timestamp = ""
+        published_at = ""
         if ep_obj:
             pub_time = ep_obj.get("pub_time")
             if pub_time:
                 dt = datetime.fromtimestamp(int(pub_time))
                 timestamp = dt.strftime("%Y-%m-%d")
+                published_at = dt.strftime("%Y-%m-%d %H:%M:%S")
 
         aid_value = None
         if isinstance(ep_obj, dict):
@@ -1743,6 +1751,9 @@ class BilibiliParser(BaseVideoParser):
             "desc": desc,
             "author": author,
             "timestamp": timestamp,
+            "author_name": name,
+            "author_avatar_url": avatar,
+            "published_at": published_at,
             "aid": aid_value,
             "pic": cover,
         }
@@ -2969,6 +2980,9 @@ class BilibiliParser(BaseVideoParser):
                 )
         else:
             raise RuntimeError(f"无法识别视频类型: {url}")
+        card_fields = {
+            key: info[key] for key in ("author_name", "author_avatar_url", "published_at") if info.get(key)
+        }
         if not direct_url:
             referer = page_url
             origin = "https://www.bilibili.com"
@@ -2979,6 +2993,7 @@ class BilibiliParser(BaseVideoParser):
                 "url": original_url if _is_b23_url(original_url) else page_url,
                 "title": info.get("title", ""),
                 "author": info.get("author", ""),
+                **card_fields,
                 "desc": info.get("desc", ""),
                 "timestamp": info.get("timestamp", ""),
                 "video_urls": [],
@@ -3015,6 +3030,7 @@ class BilibiliParser(BaseVideoParser):
             "url": display_url,
             "title": info.get("title", ""),
             "author": info.get("author", ""),
+            **card_fields,
             "desc": info.get("desc", ""),
             "timestamp": info.get("timestamp", ""),
             "video_urls": self._add_range_prefix_to_video_urls([[direct_url]]),

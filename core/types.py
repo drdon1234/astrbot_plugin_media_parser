@@ -12,6 +12,9 @@ class MediaMetadata(TypedDict, total=False):
 
     url: str
     title: str
+    author_name: str
+    author_avatar_url: str
+    published_at: str
     author: str
     desc: str
     # 正文块：{"type": "text", "text": 文字} 或 {"type": "image", "index": image_urls 下标}，
@@ -70,6 +73,8 @@ class MediaMetadata(TypedDict, total=False):
     # ── 下载阶段（DownloadManager 回填）─────────────────
 
     file_paths: List[Optional[str]]
+    original_image_paths: Dict[str, str]
+    converted_cover_count: int
     video_sizes: List[Optional[float]]
     video_size_limit_flags: List[bool]
     video_status_codes: List[Optional[int]]
@@ -114,6 +119,9 @@ class LinkBuildMeta(TypedDict):
     metadata_text_node: Optional[Any]
     preserve_order: bool
     section_starts: List[Any]
+    image_nodes: Dict[int, Any]
+    inline_images: List[Any]
+    base_nodes: List[Any]
 
 
 class BuildAllNodesResult(NamedTuple):

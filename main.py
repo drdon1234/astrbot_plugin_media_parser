@@ -29,7 +29,9 @@ from .core.storage import (
     register_file_with_token_service,
     register_files_with_token_service,
 )
+from .core.storage.original_images import OriginalImages
 from .core.constants import Config
+from .core.message_adapter.rich_card import build_card_content
 from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.node_builder import (
     build_all_nodes,
@@ -481,7 +483,7 @@ class VideoParserPlugin(Star):
             return []
         return build_translation_nodes_for_all(translation_metadata_list)
 
-    async def _render_text_to_images(self, text: str, cfg) -> list[str]:
+    async def _render_text_to_images(self, text: str, cfg, **layout) -> list[str]:
         """按当前渲染配置将文本绘制为图片，返回按页排列的本地路径。"""
         cache_root = str(cfg.download.cache_dir or "").strip()
         if cache_root:
@@ -512,10 +514,11 @@ class VideoParserPlugin(Star):
             paragraph_spacing=getattr(
                 cfg.message.text_metadata,
                 "render_paragraph_spacing",
-                1.0,
+                0.5,
             ),
             paginate=getattr(cfg.message.text_metadata, "render_paginate", False),
             font_proxy_url=proxy.font_proxy_url() if proxy else "",
+            **layout,
         )
 
     @staticmethod
@@ -619,15 +622,58 @@ class VideoParserPlugin(Star):
         link_nodes[:] = rebuilt
         return registered
 
+    async def _render_link_card(
+        self, link, metadata, translations, session, build_result, cfg, sender,
+    ) -> bool:
+        """整条结果成功绘制后再替换其节点，并让每一页关联相同的原图集合。"""
+        settings = cfg.message.text_metadata
+        originals = dict(metadata.get("original_image_paths") or {})
+
+        async def fetch_picture(candidates):
+            path, original = await self.download_manager.download_card_picture(
+                session, candidates, metadata, cfg.proxy.address,
+            )
+            if path:
+                build_result.temp_files.append(path)
+            if original:
+                originals[path] = original
+                build_result.temp_files.append(original)
+            return path
+
+        content = await build_card_content(
+            metadata, link, settings, cfg.download.max_video_size_mb, translations, fetch_picture,
+        )
+        embedded = []
+        paths = await self._render_text_to_images(
+            "", cfg, blocks=tuple(content.blocks), share=content.header, embedded=embedded,
+        )
+        build_result.temp_files.extend(paths)
+        refs, registered = await self._rendered_image_references(paths, cfg)
+        pages = [MessageSender._image_from_reference(ref) for ref in refs]
+        if embedded and sender.originals:
+            source_files = [originals.get(path, path) for path in embedded]
+            token = await self._run_blocking_to_completion(sender.originals.save, source_files)
+            for page in pages:
+                sender.page_tokens[page.file] = token
+
+        remaining = [node for node in link["link_nodes"] if id(node) not in content.consumed]
+        link["link_nodes"][:] = [*pages, *remaining]
+        link["metadata_text_node"] = pages[0]
+        link["preserve_order"] = True
+        if not settings.render_separate_sections:
+            translations.clear()
+        return registered
+
     async def _render_text_metadata_output(
         self,
         build_result,
         translation_nodes,
         cfg,
+        metadata_list=(), session=None, sender=None,
     ) -> tuple[list[str], bool]:
         """将文本节点渲染为图片，失败时保留原文本节点。
 
-        正文穿插的链接在原位置分段渲染；开启分区渲染时，基础文本、热评与翻译
+        分享卡和图文长图逐链接绘制；开启分区渲染时，基础文本、热评与翻译
         各自在原位置渲染。其余链接与翻译合并渲染，由发送阶段前置发送。
 
         Returns:
@@ -639,6 +685,21 @@ class VideoParserPlugin(Star):
         separate = getattr(cfg.message.text_metadata, "render_separate_sections", False)
         relay_registered = False
         for link_meta in build_result.link_metadata:
+            idx = link_meta.get("metadata_index", 0)
+            metadata = metadata_list[idx] if metadata_list else {}
+            share = getattr(cfg.message.text_metadata, "render_layout", "文字卡") == "分享卡"
+            if (metadata and not metadata.get("error") and metadata.get("_enable_text_metadata", True)
+                    and (share or link_meta.get("inline_images"))):
+                translations = translation_nodes[idx] if idx < len(translation_nodes or []) else []
+                try:
+                    registered = await self._render_link_card(
+                        link_meta, metadata, translations, session, build_result, cfg, sender,
+                    )
+                    relay_registered = relay_registered or registered
+                    if not separate:
+                        continue
+                except (ImportError, OSError, RuntimeError, ValueError, asyncio.TimeoutError) as exc:
+                    self.logger.warning(f"图文渲染失败，保留配图并使用文字版式：{exc}")
             if not separate and not link_meta.get("preserve_order"):
                 continue
             if await self._render_nodes_in_place(
@@ -708,7 +769,8 @@ class VideoParserPlugin(Star):
         files: list[str] = []
         seen = set()
         for metadata in metadata_list:
-            for path in metadata.get("file_paths") or []:
+            paths = [*(metadata.get("file_paths") or []), *(metadata.get("original_image_paths") or {}).values()]
+            for path in paths:
                 path_text = str(path or "").strip()
                 if path_text and path_text not in seen:
                     seen.add(path_text)
@@ -855,6 +917,11 @@ class VideoParserPlugin(Star):
         processed_metadata_list = metadata_list
         relay_registered = False
         text_metadata_images: list[str] = []
+        sender = self.message_sender
+        settings = cfg.message.text_metadata
+        if (not zip_requested and getattr(settings, "render_to_image", False)
+                and getattr(settings, "original_keyword", "") and cfg.download.cache_dir):
+            sender = MessageSender(OriginalImages(cfg.download.cache_dir, self._original_scope(event)))
 
         try:
             opening_lock = asyncio.Lock()
@@ -896,6 +963,11 @@ class VideoParserPlugin(Star):
                                 send_opening_once if zip_requested else None
                             ),
                             video_cover_only=(False if zip_requested else None),
+                            keep_original_images=bool(
+                                sender.originals and metadata.get("_enable_text_metadata", True) and (
+                                    settings.render_layout == "分享卡" or metadata.get("content_blocks")
+                                )
+                            ),
                         )
                     except asyncio.CancelledError:
                         raise
@@ -967,7 +1039,7 @@ class VideoParserPlugin(Star):
                 True,
                 True,
                 audio_send_mode=cfg.message.media_display.audio_send_mode,
-                interleave_images=cfg.message.media_display.interleave_images,
+                interleave_images=(cfg.message.media_display.interleave_images or settings.render_to_image),
             )
 
             translation_nodes = await self._build_translation_nodes_after_task(
@@ -1003,6 +1075,7 @@ class VideoParserPlugin(Star):
                 build_result,
                 translation_nodes,
                 cfg,
+                processed_metadata_list, session, sender,
             )
             relay_registered = relay_registered or rendered_registered
             aggregatable_nodes = [
@@ -1026,7 +1099,7 @@ class VideoParserPlugin(Star):
                 )
 
             if should_aggregate_nodes:
-                await self.message_sender.send_aggregated_results(
+                await sender.send_aggregated_results(
                     event,
                     build_result.link_metadata,
                     sender_name,
@@ -1037,7 +1110,7 @@ class VideoParserPlugin(Star):
                     forward_text_length=cfg.message.aggregation.forward_text_length,
                 )
             else:
-                await self.message_sender.send_individual_results(
+                await sender.send_individual_results(
                     event,
                     build_result.all_link_nodes,
                     build_result.link_metadata,
@@ -1135,6 +1208,40 @@ class VideoParserPlugin(Star):
                     self._active_media_flows - 1,
                 )
 
+    @staticmethod
+    def _original_scope(event: AstrMessageEvent) -> str:
+        """用实际群聊或私聊标识隔离原图，不受群内按成员分隔模型会话的影响。"""
+        group = event.get_group_id()
+        target = f"群:{group}" if group else event.unified_msg_origin
+        return f"{event.get_platform_id()}:{event.get_self_id()}:{target}"
+
+    async def _send_quoted_originals(self, event: AstrMessageEvent, reply: Reply, cfg) -> None:
+        """仅查找当前会话中被引用结果的原图，逐条处理实际发送失败。"""
+        if not cfg.download.cache_dir:
+            return
+        store = OriginalImages(cfg.download.cache_dir, self._original_scope(event))
+        quoted_text = ""
+        if str(reply.sender_id or "") in ("", "0", str(event.get_self_id())):
+            quoted_text = "\n".join([reply.message_str or "", *(
+                node.text for node in reply.chain or [] if isinstance(node, Plain)
+            )])
+        async with self._cache_cleanup_lock:
+            self._active_media_flows += 1
+        try:
+            files = await asyncio.to_thread(
+                store.find, str(reply.id or ""), quoted_text, max(300, cfg.relay.file_token_ttl),
+            )
+            if not files:
+                await event.send(event.plain_result("这条引用没有可取回的原图，或原图缓存已过期。"))
+                return
+            references, _ = await self._rendered_image_references(files, cfg)
+            images = [MessageSender._image_from_reference(ref) for ref in references]
+            await self.message_sender.send_individual_results(
+                event, [images], image_send_mode=cfg.message.media_display.image_send_mode,
+            )
+        finally:
+            self._active_media_flows -= 1
+
     async def _handle_clean_cache(self, event: AstrMessageEvent):
         cache_dir = self.download_manager.cache_dir
         if not cache_dir:
@@ -1224,6 +1331,13 @@ class VideoParserPlugin(Star):
             event, self.bilibili_auth_runtime
         ):
             return
+
+        original_kw = cfg.message.text_metadata.original_keyword
+        if original_kw and original_message_text.strip() == original_kw:
+            reply = next((node for node in event.get_messages() if isinstance(node, Reply)), None)
+            if reply is not None:
+                await self._send_quoted_originals(event, reply, cfg)
+                return
 
         if not cfg.parser_output.has_any_output():
             if cfg.admin.debug_mode:

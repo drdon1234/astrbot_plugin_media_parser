@@ -242,6 +242,7 @@ def build_text_node(
     max_video_size_mb: float = 0.0,
     enable_text_metadata: bool = True,
     include_description: bool = True,
+    share_body: bool = False,
 ) -> Optional[Plain]:
     """构建文本节点
 
@@ -266,15 +267,20 @@ def build_text_node(
         and text_metadata_field_enabled(metadata, "title")
         and metadata.get("title")
     ):
-        text_parts.append(f"标题：{metadata['title']}")
+        if share_body and metadata.get("platform") == "douyin" and not metadata.get("desc"):
+            text_parts.append(metadata["title"])
+        else:
+            text_parts.append(f"标题：{metadata['title']}")
     if (
         enable_text_metadata
+        and not share_body
         and text_metadata_field_enabled(metadata, "author")
         and metadata.get("author")
     ):
         text_parts.append(f"作者：{metadata['author']}")
     if (
         enable_text_metadata
+        and not share_body
         and text_metadata_field_enabled(metadata, "timestamp")
         and metadata.get("timestamp")
     ):
@@ -646,7 +652,7 @@ def _build_node_parts_for_link(
     audio_send_mode: str = "语音",
     interleave_images: bool = False,
 ) -> tuple[
-    List[Union[Plain, Image, Video, Record, File]], Optional[Plain], bool, List[Plain]
+    List[Union[Plain, Image, Video, Record, File]], Optional[Plain], List[Image], List[Plain], Dict[int, Image], List[Plain]
 ]:
     nodes: List[Union[Plain, Image, Video, Record, File]] = []
     effective_text_metadata = _resolve_output_flag(
@@ -693,7 +699,8 @@ def _build_node_parts_for_link(
     nodes.extend(content_nodes)
     nodes.extend(hot_comments_nodes)
     # 已穿插到正文中的配图不再重复追加，其余媒体保持原有顺序。
-    placed_images = {id(node) for node in content_nodes if isinstance(node, Image)}
+    inline_images = [node for node in content_nodes if isinstance(node, Image)]
+    placed_images = {id(node) for node in inline_images}
     nodes.extend(node for node in media_nodes if id(node) not in placed_images)
 
     metadata_text_node = text_nodes[0] if text_nodes else None
@@ -701,7 +708,7 @@ def _build_node_parts_for_link(
     section_starts = [
         section[0] for section in (text_nodes, hot_comments_nodes) if section
     ]
-    return nodes, metadata_text_node, bool(content_nodes), section_starts
+    return nodes, metadata_text_node, inline_images, section_starts, image_nodes, text_nodes
 
 
 def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video, Record, File]]) -> bool:
@@ -790,8 +797,10 @@ def build_all_nodes(
         (
             link_nodes,
             metadata_text_node,
-            preserve_order,
+            inline_images,
             section_starts,
+            image_nodes,
+            base_nodes,
         ) = _build_node_parts_for_link(
             metadata,
             use_local_files,
@@ -853,7 +862,10 @@ def build_all_nodes(
                     video_files=link_video_files,
                     temp_files=link_temp_files,
                     metadata_text_node=metadata_text_node,
-                    preserve_order=preserve_order,
+                    preserve_order=bool(inline_images),
+                    inline_images=inline_images,
+                    image_nodes=image_nodes,
+                    base_nodes=base_nodes,
                     section_starts=section_starts,
                 )
             )
