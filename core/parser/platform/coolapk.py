@@ -10,7 +10,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import aiohttp
@@ -170,9 +170,10 @@ def _source_id(feed: Dict[str, Any]) -> str:
 class _TextParser(HTMLParser):
     """清理正文富文本，保留换行、表情替代文字和可见链接。"""
 
-    def __init__(self) -> None:
+    def __init__(self, image_index: Optional[Callable[[str], Optional[int]]] = None) -> None:
         super().__init__(convert_charrefs=True)
-        self.parts: List[str] = []
+        self.image_index = image_index
+        self.parts: List[Union[str, int]] = []
         self.hidden: List[str] = []
         self.links: List[Tuple[str, int]] = []
 
@@ -185,7 +186,10 @@ class _TextParser(HTMLParser):
         if tag in {"br", "p", "div", "li", "blockquote"}:
             self.parts.append("\n")
         if tag == "img":
-            self.parts.append(dict(attrs).get("alt") or "[图片]")
+            values = dict(attrs)
+            url = _image_url(values.get("data-original") or values.get("data-src") or values.get("src"))
+            index = self.image_index(url) if self.image_index and url else None
+            self.parts.append(index if index is not None else values.get("alt") or "[图片]")
         if tag == "a":
             values = dict(attrs)
             # 话题与 @ 用户保留可见名称，其余链接保留目标地址。
@@ -203,7 +207,7 @@ class _TextParser(HTMLParser):
             self.parts.append("\n")
         if tag == "a" and self.links:
             href, start = self.links.pop()
-            if href and href != "".join(self.parts[start:]).strip():
+            if href and href != join_content_text(self.parts[start:]).strip():
                 self.parts.append(f"（{href}）")
 
     def handle_data(self, data: str) -> None:
@@ -212,12 +216,21 @@ class _TextParser(HTMLParser):
             self.parts.append(data)
 
 
-def _clean_text(value: str) -> str:
-    """移除 HTML 标签及多余空行，保留正文原有文字。"""
-    parser = _TextParser()
+def _text_parts(value: str, image_index: Optional[Callable[[str], Optional[int]]] = None) -> List[Union[str, int]]:
+    """解析可见富文本，按需在图片标签处记录正文配图下标。"""
+    parser = _TextParser(image_index)
     parser.feed(re.sub(r"<(https?://[^<>\s]+)>", r"\1", value))
     parser.close()
-    return "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
+    return parser.parts
+
+
+def _clean_lines(value: str) -> str:
+    return "\n".join(line.strip() for line in value.splitlines() if line.strip())
+
+
+def _clean_text(value: str) -> str:
+    """移除 HTML 标签及多余空行，保留正文原有文字。"""
+    return _clean_lines(join_content_text(_text_parts(value)))
 
 
 def _timestamp(value: Any) -> str:
@@ -466,8 +479,24 @@ class CoolapkParser(BaseVideoParser):
             forward_url = _link_url(str(feed["forwardid"]))
             if forward_url:
                 parts.append(f"\n转发来源：{forward_url}\n")
-        desc = _clean_text(join_content_text(parts))
-        return desc, images, build_content_blocks(parts, _clean_text)
+        # 旧式正文可能在 HTML 中引用 picArr 附件，表情仍保留替代文字。
+        image_indexes = {url.split("://", 1)[1]: i for i, group in enumerate(images) for url in group}
+
+        def inline_index(url: str) -> Optional[int]:
+            key = url.split("://", 1)[1]
+            if key not in image_indexes and urlsplit(url).path.startswith(("/feed/", "/picture/")):
+                image_indexes[key] = len(images)
+                images.append([url])
+            return image_indexes.get(key)
+
+        visible: List[Union[str, int]] = []
+        for part in parts:
+            if isinstance(part, str):
+                visible.extend(_text_parts(part, inline_index))
+            else:
+                visible.append(part)
+        desc = _clean_lines(join_content_text(visible))
+        return desc, images, build_content_blocks(visible, _clean_lines)
 
     @staticmethod
     def _overview(kind: str, data: Dict[str, Any], page_url: str) -> MediaMetadata:

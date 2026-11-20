@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.15.2-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.15.3-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -100,7 +100,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 
 在 `消息输出 → 富媒体展示` 中开启 `正文与配图按原文顺序穿插` 后，文章与帖子会按原文顺序交替发送正文段落和配图，而不是先发完整正文、再集中发送图片。需要同时显示简介/正文并发送富媒体；配图全部下载失败或无法识别配图位置时保持原有发送方式。
 
-目前支持 AcFun 文章、今日头条、小黑盒帖子、雪球、酷安图文与转发、微信公众号、知乎、百度贴吧、NGA、虎扑、豆瓣、V2EX、稀土掘金、CSDN、博客园与 Steam 社区指南 / 创意工坊。
+目前支持 AcFun 文章、今日头条、小黑盒帖子及游戏简介、雪球、酷安图文与转发、微信公众号、知乎、百度贴吧、NGA、虎扑、豆瓣、V2EX、稀土掘金、CSDN、博客园、Steam 商店简介与社区指南 / 创意工坊，以及 X 长文。
 
 在 `消息输出 → 富媒体展示 → 图片发送方式` 中选择 `保持原方式`（默认）、`多图一条` 或 `逐张发送`。多图一条将相邻图片放在同一条消息或同一个转发节点中，逐张发送则每张图片独立成条。分组不跨正文、视频或链接。该设置同样适用于正文与翻译的分页图片，开启引用用户消息时，首组正文图片保留引用。
 

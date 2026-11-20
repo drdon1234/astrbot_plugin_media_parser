@@ -11,6 +11,7 @@ import re
 import time
 import uuid
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Optional, Dict, Any, List, Tuple, Iterable, Union
 from urllib.parse import urlparse, parse_qs
 
@@ -462,6 +463,36 @@ class XiaoheiheDevice:
         if data.get("code") != 1100:
             raise RuntimeError(f"小黑盒设备 token 获取失败: {data}")
         return "B" + str((data.get("detail") or {}).get("deviceId") or "")
+
+
+class _HtmlImagePositions(HTMLParser):
+    """记录正文图片标签在原 HTML 中的位置，保留两侧文字的原有排版。"""
+
+    def __init__(self, source: str) -> None:
+        super().__init__()
+        self.images: List[Tuple[int, int, str]] = []
+        self._line_starts = [0, *(m.end() for m in re.finditer("\n", source))]
+        self._video_depth = 0
+        self.feed(source)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        """记录可见图片标签的起止位置和来源地址。"""
+        if tag == "video":
+            self._video_depth += 1
+        if tag != "img" or self._video_depth:
+            return
+        attributes = dict(attrs)
+        url = attributes.get("data-original") or attributes.get("data-src") or attributes.get("src")
+        if url:
+            line, column = self.getpos()
+            start = self._line_starts[line - 1] + column
+            self.images.append((start, start + len(self.get_starttag_text()), url.strip()))
+
+    def handle_endtag(self, tag: str) -> None:
+        """视频内部的备用内容不属于正文配图。"""
+        if tag == "video" and self._video_depth:
+            self._video_depth -= 1
 
 
 class XiaoheiheParser(BaseVideoParser):
@@ -1047,11 +1078,7 @@ class XiaoheiheParser(BaseVideoParser):
                 re.IGNORECASE,
             ):
                 append_url(video_urls, value)
-            for value in re.findall(
-                r"<img\b[^>]*\bsrc\s*=\s*['\"]([^'\"]+)['\"]",
-                intro_html,
-                re.IGNORECASE,
-            ):
+            for _, _, value in _HtmlImagePositions(intro_html).images:
                 append_url(image_urls, value)
 
         return (
@@ -1151,12 +1178,58 @@ class XiaoheiheParser(BaseVideoParser):
 
         try:
             text_items = json.loads(text) if text else []
-        except Exception:
+        except json.JSONDecodeError:
             text_items = []
 
         if isinstance(text_items, list) and text_items:
-            desc_parts: List[str] = []
+            # CDN 的分片域名和缩放参数可变，同一帖子资源由上传路径标识。
+            def image_key(url: str) -> str:
+                parsed = self._parse_http_url(url)
+                if (parsed and re.fullmatch(r"imgheybox\d*\.max-c\.com", parsed.hostname or "")
+                        and parsed.path.startswith("/bbs/")):
+                    return parsed.path
+                return url
+
+            attachments: Dict[str, List[str]] = {}
             for item in text_items:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or item.get("video_url") or "")
+                kind = item.get("type")
+                if url and (kind == "img" or (kind == "gif" and ".gif" in url.lower())):
+                    variants = attachments.setdefault(image_key(url), [])
+                    if url not in variants:
+                        variants.append(url)
+
+            inline_images = {}
+            inline_keys = set()
+            for i, item in enumerate(text_items):
+                if not isinstance(item, dict) or item.get("type") != "html":
+                    continue
+                source = str(item.get("text") or "")
+                if "<img" not in source.lower():
+                    continue
+                positions = []
+                for start, end, url in _HtmlImagePositions(source).images:
+                    if url.startswith("//"):
+                        url = "https:" + url
+                    key = image_key(url)
+                    if key != url or key in attachments:
+                        positions.append((start, end, key, url))
+                        inline_keys.add(key)
+                if positions:
+                    inline_images[i] = positions
+
+            indexes: Dict[str, int] = {}
+
+            def append_image(key: str, url: str) -> None:
+                if key not in indexes:
+                    indexes[key] = len(image_urls)
+                    image_urls.append(list(dict.fromkeys([url, *attachments.get(key, [])])))
+                content_parts.append(indexes[key])
+
+            desc_parts: List[str] = []
+            for i, item in enumerate(text_items):
                 if not isinstance(item, dict):
                     continue
                 item_type = item.get("type")
@@ -1164,25 +1237,26 @@ class XiaoheiheParser(BaseVideoParser):
                     value = str(item.get("text") or "")
                     part = self._strip_tags(value) if item_type == "html" else value
                     desc_parts.append(part)
-                    if part:
+                    if i in inline_images:
+                        offset = 0
+                        for start, end, key, url in inline_images[i]:
+                            content_parts.append(self._strip_tags(value[offset:start]))
+                            append_image(key, url)
+                            offset = end
+                        content_parts.extend((self._strip_tags(value[offset:]), "\n"))
+                    elif part:
                         content_parts.extend((part, "\n"))
-                elif item_type == "img":
-                    img_url = str(item.get("url") or "")
-                    if img_url:
-                        content_parts.append(len(image_urls))
-                        image_urls.append([img_url])
-                elif item_type in {"video", "gif"}:
+                elif item_type in {"img", "video", "gif"}:
                     media_url = str(item.get("url") or item.get("video_url") or "")
                     if not media_url:
                         continue
-                    if ".m3u8" in media_url.lower() and not media_url.startswith(
-                        "m3u8:"
-                    ):
-                        media_url = f"m3u8:{media_url}"
-                    if item_type == "gif" and ".gif" in media_url.lower():
-                        content_parts.append(len(image_urls))
-                        image_urls.append([media_url])
+                    if item_type == "img" or (item_type == "gif" and ".gif" in media_url.lower()):
+                        key = image_key(media_url)
+                        if key not in inline_keys:
+                            append_image(key, media_url)
                     else:
+                        if ".m3u8" in media_url.lower() and not media_url.startswith("m3u8:"):
+                            media_url = f"m3u8:{media_url}"
                         video_urls.append([media_url])
             desc = "\n".join(part for part in desc_parts if part).strip()
 
@@ -1579,6 +1653,7 @@ class XiaoheiheParser(BaseVideoParser):
             desc_lines.append("=============")
             if intro:
                 desc_lines.append(intro)
+            intro_end = len(desc_lines)
             desc_lines.append("=============")
             desc_lines.append("")
 
@@ -1652,6 +1727,18 @@ class XiaoheiheParser(BaseVideoParser):
                 "proxy_url": self.proxy_url if self.use_video_proxy else None,
             }
             steam_id = str(game.get("steam_appid") or "")
+            if isinstance(intro_raw, str) and "<img" in intro_raw.lower():
+                indexes = {url: i for i, url in enumerate(images)}
+                parts: List[Union[str, int]] = ["=============\n"]
+                offset = 0
+                for start, end, url in _HtmlImagePositions(intro_raw).images:
+                    image = self._normalize_media_url(url)
+                    if image in indexes:
+                        parts.extend((self._format_intro_text(intro_raw[offset:start]), indexes[image]))
+                        offset = end
+                if offset:
+                    parts.extend((self._format_intro_text(intro_raw[offset:]), "\n" + "\n".join(desc_lines[intro_end:])))
+                    result_dict["content_blocks"] = build_content_blocks(parts, str.strip)
             if game_type == "pc" and re.fullmatch(r"[1-9][0-9]{0,9}", steam_id):
                 result_dict["steam_developer_appid"] = steam_id
             if video_urls:

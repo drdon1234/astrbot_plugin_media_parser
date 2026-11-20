@@ -5,7 +5,7 @@ import html as html_lib
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union
 from urllib.parse import ParseResult, parse_qs, urlparse
 
 import aiohttp
@@ -342,20 +342,23 @@ class SteamParser(BaseVideoParser):
                 if poster:
                     image_urls.append(poster)
 
-        for tag in re.findall(r"<img\b[^>]*>", html_text or "", re.IGNORECASE):
+        image_urls.extend(image for _, image in self._store_image_tags(html_text))
+        return video_groups, self._unique_keep_order(image_urls)
+
+    def _store_image_tags(self, html_text: str) -> Iterator[Tuple[re.Match, str]]:
+        """提取商店简介中的图片及其正文位置。"""
+        for tag in re.finditer(r"<img\b[^>]*>", html_text or "", re.IGNORECASE):
             match = re.search(
                 r"\bdata-big-src\s*=\s*(['\"]?)([^\s'\">]+)\1",
-                tag,
+                tag[0],
                 re.IGNORECASE,
             ) or re.search(
-                r"\bsrc\s*=\s*(['\"])(.*?)\1", tag, re.IGNORECASE
+                r"\bsrc\s*=\s*(['\"])(.*?)\1", tag[0], re.IGNORECASE
             )
             if match:
                 image = self._normalize_url(match.group(2))
                 if image:
-                    image_urls.append(image)
-
-        return video_groups, self._unique_keep_order(image_urls)
+                    yield tag, image
 
     def _extract_media(
         self, game: Dict[str, Any]
@@ -465,8 +468,8 @@ class SteamParser(BaseVideoParser):
         value = final or initial
         return [f"价格：{value}"] if value else []
 
-    def _build_description(self, game: Dict[str, Any]) -> Tuple[str, str]:
-        """构建游戏摘要文本与发行日期。"""
+    def _build_description(self, game: Dict[str, Any], images: List[List[str]]) -> Tuple[str, str, List[Dict[str, Any]]]:
+        """构建游戏摘要、发行日期和正文配图位置。"""
         raw_intro = (
             game.get("about_the_game")
             or game.get("detailed_description")
@@ -499,7 +502,21 @@ class SteamParser(BaseVideoParser):
         if languages:
             languages = re.sub(r"<[^>]+>", "", languages).strip()
             lines.append(f"支持语言：{languages}")
-        return "\n".join(lines).rstrip(), release_date
+        blocks = []
+        if isinstance(raw_intro, str):
+            parts: List[Union[str, int]] = ["=============\n"]
+            indexes = {group[0]: index for index, group in enumerate(images) if group}
+            offset = 0
+            for tag, image in self._store_image_tags(raw_intro):
+                if image not in indexes:
+                    indexes[image] = len(images)
+                    images.append([image])
+                parts.extend((self._strip_html(raw_intro[offset:tag.start()]), indexes[image]))
+                offset = tag.end()
+            if offset:
+                parts.extend((self._strip_html(raw_intro[offset:]), "\n" + "\n".join(lines[4:])))
+                blocks = build_content_blocks(parts, str.strip)
+        return "\n".join(lines).rstrip(), release_date, blocks
 
     async def _parse_via_xiaoheihe(
         self, session: aiohttp.ClientSession, url: str, appid: str
@@ -1039,8 +1056,8 @@ class SteamParser(BaseVideoParser):
             name = str(game.get("name") or "").strip()
             if not name:
                 raise RuntimeError("Steam API 未返回游戏名称")
-            description, release_date = self._build_description(game)
             video_urls, video_cover_urls, image_urls = self._extract_media(game)
+            description, release_date, blocks = self._build_description(game, image_urls)
             canonical_url = f"https://store.steampowered.com/app/{appid}/"
             result: MediaMetadata = {
                 "url": url,
@@ -1066,6 +1083,8 @@ class SteamParser(BaseVideoParser):
                     else None
                 ),
             }
+            if blocks:
+                result["content_blocks"] = blocks
             if video_urls:
                 result["video_force_download"] = True
             if self.hot_comment_count:

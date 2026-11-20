@@ -14,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers, profile_image_url
+from ..utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -177,8 +177,9 @@ class TwitterParser(BaseVideoParser):
             if actual_id != str(expected_tweet_id):
                 raise FxTwitterTweetUnavailableError("FxTwitter响应不是请求的目标推文")
         article = tweet.get("article")
-        article_text = self._fxtwitter_article_text(article)
-        tweet_text = article_text or self._twitter_text(tweet)
+        article_parts, article_images = self._fxtwitter_article_content(article)
+        article_text = join_content_text(article_parts).strip()
+        tweet_text = article_text if article_parts else self._twitter_text(tweet)
         author_info = tweet.get("author", {})
         author = self._fxtwitter_author(author_info)
         avatar = profile_image_url(author_info, "avatar_url", hosts=("twimg.com",))
@@ -192,9 +193,9 @@ class TwitterParser(BaseVideoParser):
         )
 
         media_urls = {
-            "images": [],
+            "images": article_images,
             "videos": [],
-            "summary_subtype": "article" if article_text else "post",
+            "summary_subtype": "article" if article_parts else "post",
             "title": article_title
             or (f"{author} 的推文" if author else "Twitter 推文"),
             "text": desc,
@@ -206,9 +207,23 @@ class TwitterParser(BaseVideoParser):
         }
 
         media = tweet.get("media") or {}
+        if article_parts:
+            quote_text = self._build_tweet_desc("", quote)
+            if quote_text:
+                article_parts.append("\n\n" + quote_text)
+            blocks = build_content_blocks(article_parts, str.strip)
+            if blocks:
+                media_urls["content_blocks"] = blocks
+        def photo_key(url: str) -> str:
+            match = re.fullmatch(r"https://pbs\.twimg\.com/media/([\w-]+)(?:\.\w+)?(?:\?.*)?", url)
+            return match[1] if match else url
+
+        seen_photos = {photo_key(url) for url in article_images}
         for photo in media.get("photos") or []:
-            if isinstance(photo, dict) and photo.get("url"):
-                media_urls["images"].append(photo.get("url"))
+            url = photo.get("url") if isinstance(photo, dict) else None
+            if isinstance(url, str) and url and photo_key(url) not in seen_photos:
+                media_urls["images"].append(url)
+                seen_photos.add(photo_key(url))
         for video in media.get("videos") or []:
             if isinstance(video, dict) and video.get("url"):
                 media_urls["videos"].append(
@@ -221,22 +236,52 @@ class TwitterParser(BaseVideoParser):
         return media_urls
 
     @staticmethod
-    def _fxtwitter_article_text(article: Any) -> str:
-        """按原顺序提取 FxTwitter Article 正文块。"""
-        if not isinstance(article, dict):
-            return ""
-        content = article.get("content")
+    def _fxtwitter_article_content(article: Any) -> tuple[list[str | int], list[str]]:
+        """按正文引用的实体编号定位文章配图，保留段落与图片说明。"""
+        content = article.get("content") if isinstance(article, dict) else None
         blocks = content.get("blocks") if isinstance(content, dict) else None
         if not isinstance(blocks, list):
-            return ""
-        paragraphs = []
+            return [], []
+        entities = {
+            str(entry["key"]): entry["value"] for entry in content.get("entityMap") or []
+            if isinstance(entry, dict) and "key" in entry and isinstance(entry.get("value"), dict)
+        }
+        photos = {}
+        for media in article.get("media_entities") or []:
+            if not isinstance(media, dict) or not media.get("media_id"):
+                continue
+            info = media.get("media_info")
+            if isinstance(info, dict) and info.get("__typename") == "ApiImage":
+                url = info.get("original_img_url")
+                if isinstance(url, str) and url.startswith("https://pbs.twimg.com/media/"):
+                    photos[str(media["media_id"])] = url
+        parts: list[str | int] = []
+        images: list[str] = []
+        indexes: dict[str, int] = {}
         for block in blocks:
             if not isinstance(block, dict):
                 continue
             text = str(block.get("text") or "").strip()
             if text:
-                paragraphs.append(text)
-        return "\n\n".join(paragraphs)
+                parts.append(text + "\n\n")
+            if block.get("type") != "atomic":
+                continue
+            for ref in block.get("entityRanges") or []:
+                entity = entities.get(str(ref.get("key")), {}) if isinstance(ref, dict) else {}
+                data = entity.get("data")
+                if entity.get("type") != "MEDIA" or not isinstance(data, dict):
+                    continue
+                for item in data.get("mediaItems") or []:
+                    url = photos.get(str(item.get("mediaId"))) if isinstance(item, dict) else None
+                    if url:
+                        if url not in indexes:
+                            indexes[url] = len(images)
+                            images.append(url)
+                        parts.append(indexes[url])
+                caption = data.get("caption")
+                if isinstance(caption, str) and caption.strip():
+                    parts.append(caption.strip() + "\n\n")
+        return parts, images
 
     @staticmethod
     def _twitter_text(tweet: Dict[str, Any]) -> str:
@@ -836,6 +881,8 @@ class TwitterParser(BaseVideoParser):
                 if (self.use_image_proxy or self.use_video_proxy)
                 else None,
             }
+            if media_info.get("content_blocks"):
+                metadata_base["content_blocks"] = media_info["content_blocks"]
             if self.hot_comment_count:
                 comments = await self._fetch_hot_comments(session, tweet_id, url)
                 if comments:

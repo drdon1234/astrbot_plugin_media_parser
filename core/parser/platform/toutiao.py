@@ -7,7 +7,7 @@ import html
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 import aiohttp
@@ -63,10 +63,8 @@ class ToutiaoParser(BaseVideoParser):
         r"<script[^>]*>\s*(%7B.*?%7D)\s*</script>",
         re.IGNORECASE | re.DOTALL,
     )
-    IMG_SRC_RE = re.compile(
-        r"<img[^>]+src=[\"']([^\"']+)[\"'][^>]*>",
-        re.IGNORECASE,
-    )
+    IMG_TAG_RE = re.compile(r"""<img\b(?:[^>"']|"[^"]*"|'[^']*')*>""", re.IGNORECASE)
+    IMG_ATTR_RE = re.compile(r"""(?:^|\s)([\w:-]+)\s*=\s*(["'])(.*?)\2""", re.DOTALL)
 
     def __init__(
         self,
@@ -410,31 +408,51 @@ class ToutiaoParser(BaseVideoParser):
         lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
         return "\n".join(line for line in lines if line)
 
+    @staticmethod
+    def _article_image_key(url: str) -> str:
+        """识别头条上传路径或同一图片地址的签名刷新，保留其他资源参数。"""
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            return url
+        if re.fullmatch(r"p\d+(?:-sign)?\.toutiaoimg\.com", parsed.netloc, re.I):
+            asset = re.fullmatch(r"/(tos-[\w-]+/[\w-]+)(?:~[^/]*)?", parsed.path)
+            if asset:
+                return asset[1]
+        if parsed.query and re.search(r"\.(?:jpe?g|png|gif|webp|avif|image)$", parsed.path, re.I):
+            query = "&".join(v for v in parsed.query.split("&")
+                             if v.partition("=")[0].lower() not in {"sign", "x-signature", "x-expires"})
+            return parsed._replace(query=query).geturl()
+        return url
+
+    def _article_image_tags(self, content: str) -> Iterator[Tuple[re.Match, str]]:
+        """提取正文配图的位置和有效地址，优先选择延迟加载的真实图片。"""
+        for match in self.IMG_TAG_RE.finditer(content or ""):
+            attrs = {name.lower(): html.unescape(value.strip())
+                     for name, _, value in self.IMG_ATTR_RE.findall(match[0])}
+            for key in ("data-original", "data-src", "src"):
+                url = attrs.get(key, "")
+                if url.startswith("//"):
+                    url = "https:" + url
+                if url.startswith(("https://", "http://")):
+                    yield match, url
+                    break
+
     def _build_article_content_blocks(self, content_html: str) -> List[Dict[str, Any]]:
         """按正文图片位置生成正文块，图片下标与正文图片候选组的顺序一致。"""
         content_html = content_html or ""
         parts: List[Union[str, int]] = []
         image_indexes: Dict[str, int] = {}
         position = 0
-        for match in self.IMG_SRC_RE.finditer(content_html):
+        for match, url in self._article_image_tags(content_html):
             parts.append(content_html[position:match.start()])
             position = match.end()
-            url = html.unescape(match.group(1).strip())
-            if url:
-                parts.append(image_indexes.setdefault(url, len(image_indexes)))
+            parts.append(image_indexes.setdefault(self._article_image_key(url), len(image_indexes)))
         parts.append(content_html[position:])
         return build_content_blocks(parts, self._clean_html_text)
 
     def _extract_image_urls_from_content(self, content_html: str) -> List[List[str]]:
-        image_urls: List[List[str]] = []
-        seen = set()
-        for match in self.IMG_SRC_RE.finditer(content_html or ""):
-            url = html.unescape(match.group(1).strip())
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            image_urls.append([url])
-        return image_urls
+        return self._merge_image_candidate_lists([], [[url] for _, url in self._article_image_tags(content_html)])
 
     @staticmethod
     def _extract_image_urls_from_image_list_items(
@@ -499,15 +517,26 @@ class ToutiaoParser(BaseVideoParser):
         self,
         current_lists: List[List[str]],
         new_lists: List[List[str]],
+        *, allow_new: bool = True,
     ) -> List[List[str]]:
         merged = [list(url_list) for url_list in current_lists]
-        for index, new_url_list in enumerate(new_lists):
-            if index >= len(merged):
-                merged.append([])
-            for url in new_url_list:
-                if not url or url in merged[index]:
+        indexes = {self._article_image_key(url): i for i, group in enumerate(merged) for url in group}
+        for new_url_list in new_lists:
+            keys = [self._article_image_key(url) for url in new_url_list]
+            matches = {indexes[key] for key in keys if key in indexes}
+            if len(matches) > 1:
+                continue
+            if matches:
+                index = matches.pop()
+            else:
+                if not allow_new or not keys:
                     continue
-                merged[index].append(url)
+                index = len(merged)
+                merged.append([])
+            for key, url in zip(keys, new_url_list):
+                indexes[key] = index
+                if url and url not in merged[index]:
+                    merged[index].append(url)
         return merged
 
     async def _collect_article_image_candidates(
@@ -532,6 +561,7 @@ class ToutiaoParser(BaseVideoParser):
                 merged_lists = self._merge_image_candidate_lists(
                     merged_lists,
                     refreshed_lists,
+                    allow_new=False,
                 )
             except asyncio.CancelledError:
                 raise

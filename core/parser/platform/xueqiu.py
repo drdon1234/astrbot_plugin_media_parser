@@ -43,10 +43,9 @@ XUEQIU_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 STATUS_PATH_RE = re.compile(r"^/(\d{3,20})/(\d{3,20})/?$")
-IMG_TAG_RE = re.compile(r"<img[^>]*>", re.IGNORECASE)
+IMG_TAG_RE = re.compile(r"""<img\b(?:[^>"']|"[^"]*"|'[^']*')*>""", re.IGNORECASE)
 IMG_ATTR_RE = re.compile(
-    r"(src|title|alt)\s*=\s*[\"']([^\"']*)[\"']",
-    re.IGNORECASE,
+    r"""\s([\w:-]+)\s*=\s*(["'])(.*?)\2""", re.DOTALL,
 )
 HTTP_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 VIDEO_URL_KEY_HINTS = ("video", "play", "media", "stream", "url", "m3u8")
@@ -379,13 +378,13 @@ class XueqiuParser(BaseVideoParser):
             return False
         return host in XUEQIU_EMOJI_HOSTS
 
-    @staticmethod
-    def _parse_img_attrs(img_tag: str) -> Dict[str, str]:
-        """提取 img 标签的 src / title / alt 属性。"""
-        return {
-            key.lower(): value
-            for key, value in IMG_ATTR_RE.findall(img_tag or "")
-        }
+    @classmethod
+    def _parse_img_attrs(cls, img_tag: str) -> Dict[str, str]:
+        """解析图片属性并选择真实来源，避免占位地址覆盖延迟加载地址。"""
+        attrs = {key.lower(): html.unescape(value) for key, _, value in IMG_ATTR_RE.findall(img_tag or "")}
+        attrs["src"] = next((url for field in ("data-original", "data-src", "src")
+                             if (url := cls._normalize_http_url(attrs.get(field, "")))), "")
+        return attrs
 
     @classmethod
     def _replace_img_tags(cls, content_html: str) -> str:
@@ -511,7 +510,7 @@ class XueqiuParser(BaseVideoParser):
                 if value
             ]
             retweeted_parts = cls._body_content_parts(retweeted, image_indexes)
-            if quote_lines or cls._clean_html_text(cls._extract_body_html(retweeted)):
+            if quote_lines or any(isinstance(part, int) for part in retweeted_parts) or cls._clean_html_text(cls._extract_body_html(retweeted)):
                 parts.append("<br>转发原帖：<br>" + "<br>".join(quote_lines) + "<br>")
                 parts.extend(retweeted_parts)
         return build_content_blocks(parts, cls._clean_html_text)
