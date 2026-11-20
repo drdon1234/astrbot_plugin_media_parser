@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import aiohttp
 
@@ -13,7 +13,10 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import (
+    build_request_headers, format_directory_tree, format_percentage, select_snapshot_files,
+    verified_blob_excerpt,
+)
 from .base import BaseVideoParser
 
 
@@ -28,7 +31,6 @@ RESERVED_ROUTES = frozenset({
     "api", "dashboard", "enterprises", "explore", "help", "login", "oauth",
     "organizations", "profile", "search", "signup", "snippets", "users", "assets",
 })
-MAX_DESCRIPTION_LENGTH = 400
 MAX_COMMENT_PAGES = 3
 MAX_COMMENTS_PER_PAGE = 20
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -86,13 +88,14 @@ def _timestamp(value: Any) -> str:
 class GiteeParser(BaseVideoParser):
     """通过 Gitee 官方接口解析公开仓库和议题，不下载仓库文件。"""
 
-    def __init__(self, hot_comment_count: int = 0) -> None:
+    def __init__(self, hot_comment_count: int = 0, repository_summary: bool = False) -> None:
         """初始化解析器。
 
         Args:
             hot_comment_count: 议题评论总数上限，零表示不请求评论。
         """
         super().__init__("gitee")
+        self.repository_summary = repository_summary
         try:
             self.hot_comment_count = max(0, int(hot_comment_count))
         except (TypeError, ValueError, OverflowError):
@@ -134,6 +137,7 @@ class GiteeParser(BaseVideoParser):
         self, session: aiohttp.ClientSession, path: str, params: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """只请求本解析器构造的官方接口，不跟随到登录页或其他资源。"""
+        response_limit = 100_000 if "/git/blobs/" in path else MAX_RESPONSE_BYTES
         try:
             async with session.get(
                 BASE_URL + "/api/v5/repos/" + path, params=params,
@@ -151,7 +155,7 @@ class GiteeParser(BaseVideoParser):
                 chunks, total = [], 0
                 async for chunk in response.content.iter_chunked(65536):
                     total += len(chunk)
-                    if total > MAX_RESPONSE_BYTES:
+                    if total > response_limit:
                         raise RuntimeError("Gitee 接口响应超过大小限制")
                     chunks.append(chunk)
                 return json.loads(b"".join(chunks))
@@ -252,24 +256,110 @@ class GiteeParser(BaseVideoParser):
             logger.warning(f"Gitee 议题评论获取失败，保留正文及已取得评论：{exc}")
         return comments
 
+    async def _overview_json(
+        self, session: aiohttp.ClientSession, path: str,
+    ) -> Any:
+        """补充概况失败时保留已取得的仓库信息。"""
+        try:
+            return await self._request_json(session, path)
+        except RuntimeError as exc:
+            logger.warning(f"Gitee 仓库补充信息获取失败：{exc}")
+            return None
+
+    async def _directory_snapshot(
+        self, session: aiohttp.ClientSession, project: Dict[str, Any], evidence: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """列出默认分支根目录，并展开一个实际存在的源码目录。"""
+        branch = _text(project.get("default_branch"))
+        if not branch or branch in (".", ".."):
+            return ""
+        path = project["full_name"]
+        commit = ""
+        if evidence is not None:
+            head = await self._overview_json(session, path + '/branches/' + quote(branch, safe=""))
+            revision = head.get("commit") if isinstance(head, dict) and head.get("name") == branch else None
+            candidate = revision.get("sha") if isinstance(revision, dict) else None
+            if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{40}", candidate):
+                commit = candidate
+        tree_url = path + "/git/trees/"
+        root = await self._overview_json(session, tree_url + quote(commit or branch, safe=""))
+        rows = root.get("tree") if isinstance(root, dict) else None
+        if not isinstance(rows, list):
+            return ""
+        entries = [(row.get("path"), row.get("type")) for row in rows if isinstance(row, dict)]
+        candidates = [(row.get("path"), row.get("type"), row.get("mode"), row.get("sha"))
+                      for row in rows if commit and isinstance(row, dict)]
+        root_note = "目录条目已被平台截断" if root.get("truncated") else ""
+        expanded_name, child_note = "", ""
+        child_entries = []
+        folders = {row.get("path"): row for row in rows if isinstance(row, dict)
+                   and row.get("type") == "tree" and isinstance(row.get("path"), str)}
+        for name in ("src", path.rsplit("/", 1)[-1].lower(), "core", "packages", "app", "lib", "cmd", "apps"):
+            if name not in folders:
+                continue
+            sha = folders[name].get("sha")
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", sha):
+                continue
+            subtree = await self._overview_json(session, tree_url + sha)
+            children = subtree.get("tree") if isinstance(subtree, dict) else None
+            if isinstance(children, list):
+                expanded_name = name
+                if commit:
+                    candidates.extend((name + "/" + item["path"], item.get("type"), item.get("mode"), item.get("sha"))
+                                      for item in children if isinstance(item, dict) and isinstance(item.get("path"), str))
+                child_entries = [
+                    (item.get("path"), item.get("type")) for item in children if isinstance(item, dict)
+                ]
+                if subtree.get("truncated"):
+                    child_note = "目录条目已被平台截断"
+            break
+        tree = format_directory_tree(entries, expanded_name, child_entries, root_note, child_note)
+        if commit and evidence is not None:
+            files = []
+            for filename, blob in select_snapshot_files(candidates):
+                data = await self._overview_json(session, path + "/git/blobs/" + blob)
+                excerpt = verified_blob_excerpt(data, blob, filename)
+                if excerpt:
+                    files.append({"path": filename, "text": excerpt})
+            if files:
+                evidence.update(commit=commit, tree=tree[:1600], files=files)
+        return f"### 目录快照 · {branch} 根目录\n{tree}" if tree else ""
+
     @staticmethod
-    def _description(repository: Dict[str, Any]) -> str:
+    def _description(repository: Dict[str, Any], languages: Any) -> str:
         """构建简短仓库概况，缺失状态或统计不伪造成已知值。"""
-        description = " ".join(_text(repository.get("description")).split())
-        if len(description) > MAX_DESCRIPTION_LENGTH:
-            description = description[:MAX_DESCRIPTION_LENGTH].rstrip() + "…"
+        description = _text(repository.get("description"))
         counts = [f"{repository[key]:,}" if type(repository.get(key)) is int and repository[key] >= 0 else "未知"
                   for key in ("stargazers_count", "forks_count")]
         states = ["公开"]
         for key, label in (("fork", "分叉仓库"), ("archived", "已归档")):
             if repository.get(key) is True:
                 states.append(label)
-        lines = [description or "暂无仓库简介", f"主要语言：{_text(repository.get('language')) or '未标注'}",
-                 f"Star：{counts[0]} · Fork：{counts[1]}", f"许可证：{_text(repository.get('license')) or '未标注'}",
-                 "状态：" + " · ".join(states)]
+        lines = [description or "暂无仓库简介", "", f"Star：{counts[0]} · Fork：{counts[1]}",
+                 f"许可证：{_text(repository.get('license')) or '未标注'}  ·  状态：" + " · ".join(states)]
+        language_line = f"主要语言：{_text(repository.get('language')) or '未标注'}"
+        rows = languages.get("languages") if isinstance(languages, dict) else None
+        if isinstance(rows, list):
+            rows = [row for row in rows if isinstance(row, dict) and _text(row.get("language"))]
+            # 平台的 percent 只保留一位小数，小语言可能被舍入为零。
+            if all(type(row.get("bytes")) is int and row["bytes"] >= 0 for row in rows):
+                total = sum(row["bytes"] for row in rows)
+            else:
+                total = 0
+            if total:
+                shares = [(row["language"], (row["bytes"] / total) * 100) for row in rows]
+            else:
+                shares = [(row["language"], row["percent"]) for row in rows
+                          if type(row.get("percent")) in (int, float) and 0 <= row["percent"] <= 100]
+            if shares:
+                shares.sort(key=lambda item: -item[1])
+                language_line = "语言占比：" + " · ".join(
+                    f"{name} {format_percentage(value)}" for name, value in shares
+                )
         updated = _timestamp(repository.get("updated_at"))
         if updated:
             lines.append("更新时间：" + updated)
+        lines.extend(["", language_line])
         return "\n".join(lines)
 
     async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[MediaMetadata]:
@@ -296,9 +386,17 @@ class GiteeParser(BaseVideoParser):
                 "video_urls": [], "image_urls": [],
             }
             if not issue_id:
-                metadata["desc"] = self._description(repository)
+                evidence = {} if self.repository_summary else None
+                languages, snapshot = await asyncio.gather(
+                    self._overview_json(session, repository["full_name"] + "/languages"),
+                    self._directory_snapshot(session, repository, evidence),
+                )
+                description = self._description(repository, languages)
+                metadata["desc"] = description + ("\n\n" + snapshot if snapshot else "")
                 metadata["readme_url"] = repository_url
                 metadata["readme_selector"] = README_SELECTOR
+                if evidence:
+                    metadata["repository_snapshot"] = evidence
                 return metadata
             issue = await self._request_json(session, repository["full_name"] + "/issues/" + issue_id)
             self._validate_issue(issue, repository, issue_id)

@@ -499,6 +499,7 @@ class CoolapkParser(BaseVideoParser):
             image_values = [data.get("cover_pic") if kind == "collection" else data.get("logo")]
         images = list(dict.fromkeys(image for value in image_values if (image := _image_url(value))))
         return {
+            "summary_subtype": {"apk": "app", "u": "user", "t": "topic", "product_name": "product"}.get(kind, kind),
             "url": page_url, "platform": "coolapk", "title": _clean_text(title) if isinstance(title, str) else "",
             "author": str(data.get("username") or data.get("developername") or data.get("author") or ""),
             "desc": _clean_text("\n".join(lines)), "image_urls": [[image] for image in images], "video_urls": [],
@@ -579,6 +580,10 @@ class CoolapkParser(BaseVideoParser):
             if not title and not desc and not images:
                 raise RuntimeError("酷安动态未返回可用正文或图片")
             metadata: MediaMetadata = {
+                "summary_subtype": ("reply" if kind == "reply" else {
+                    "picture": "gallery", "question": "question", "answer": "question",
+                    "vote": "vote", "voteComment": "vote", "feedArticle": "article", "article": "article",
+                }.get(feed.get("feedType"), "article" if feed.get("message_raw_output") else "post")),
                 "url": page_url, "platform": self.name,
                 "title": title, "author": str(feed.get("username") or ""),
                 "desc": desc, "timestamp": _timestamp(feed.get("dateline")),

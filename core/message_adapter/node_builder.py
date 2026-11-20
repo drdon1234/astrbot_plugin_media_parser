@@ -12,6 +12,7 @@ from ..downloader.utils import strip_media_prefixes
 from ..message_text import split_message_text
 from ..metadata_state import largest_size_limited_video_mb, refresh_media_state
 from ..metadata_visibility import text_metadata_field_enabled
+from ..translation.repository_summary import format_repository_summary
 from ..types import BuildAllNodesResult, LinkBuildMeta, MediaMetadata
 
 
@@ -316,10 +317,21 @@ def build_text_node(
     ):
         text_parts.append(f"原始链接：{url}")
 
+    if (enable_text_metadata and text_metadata_field_enabled(metadata, "description")
+            and metadata.get("repository_summary")):
+        if text_parts:
+            text_parts.append(TEXT_SECTION_SEPARATOR)
+        text_parts.append(format_repository_summary(metadata["repository_summary"], compact=share_body))
+
+    if enable_text_metadata and text_metadata_field_enabled(metadata, "description") and metadata.get("content_summary"):
+        if text_parts:
+            text_parts.append(TEXT_SECTION_SEPARATOR)
+        text_parts.append(metadata["content_summary"])
+
     if desc_text:
         if text_parts:
             text_parts.append(TEXT_SECTION_SEPARATOR)
-        text_parts.append("简介/正文：")
+        text_parts.append("仓库简介：" if metadata.get("readme_url") else "简介/正文：")
         if include_description:
             text_parts.append(desc_text)
 

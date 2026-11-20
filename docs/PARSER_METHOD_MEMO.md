@@ -46,7 +46,7 @@
 
 评论在配置和消息中统称“热评”，实际来源可以是热门、精选、默认顺序、时间顺序评论或游戏评价，具体排序以各平台说明为准。以下规则适用于所有已接入评论的平台，平台章节不再重复：
 
-- 条数由 `message.hot_comments.count` 统一控制，默认 `0`；各平台开关位于 `message.hot_comments.<平台>`，默认开启。
+- 条数由 `message.hot_comments.count` 统一控制，默认 `0`；通过 `message.hot_comments.excluded` 排除指定平台，默认不排除。
 - 只有条数大于 `0`、平台开关开启且输出模式包含文本时才请求评论；`仅富媒体` 模式不请求评论。
 - 评论请求的页数、条数与响应体积均有上限，按评论 ID 去重；评论中的图片、表情等非文本内容以文字标记或链接表示，不加入正文媒体。
 - 酷安、虎扑、豆瓣、V2EX、稀土掘金、Gitee、GitLab 与 Pixiv 在点赞数未知时省略该字段，消息中显示 `-`，其余平台按接口返回值展示。缩写赞数与相对时间保留平台原文。
@@ -573,7 +573,7 @@ game_introduction?steam_appid=...
 
 ### 代理
 
-`proxy.xiaoheihe_video` 仅控制直接解析小黑盒时的视频下载，帖子与游戏详情接口不使用代理。Steam 委托小黑盒解析时，详情请求由 `proxy.steam.parse` 控制。
+`proxy.uses` 中的 `xiaoheihe_video` 仅控制直接解析小黑盒时的视频下载，帖子与游戏详情接口不使用代理。Steam 委托小黑盒解析时，详情请求由 `proxy.uses` 中的 `steam.parse` 控制。
 
 ### 评论
 
@@ -918,7 +918,9 @@ NGA 通过 `image_tls_ciphers` 指定 `ECDHE+AESGCM:ECDHE+CHACHA20`，以应对�
 
 ### 仓库概况
 
-通过官方匿名接口 `GET https://gitee.com/api/v5/repos/{owner}/{repo}` 读取公开仓库概况，展示简介、主要语言、Star / Fork 数、许可证与更新时间。仓库根结果附带 `readme_url` 和平台正文选择器，富媒体下载阶段通过 Chromium 截取 README 区域，不下载代码文件。仓库迁移后，接口可能在 HTTP 200 中直接返回新仓库身份，以一致的 `full_name`、`namespace` 与规范地址为准；组织仓库的 `owner.login` 可能是管理员个人账号，不用于表示所有者。
+通过官方匿名接口 `GET https://gitee.com/api/v5/repos/{owner}/{repo}` 读取公开仓库概况，展示简介、主要语言、Star / Fork 数、许可证与更新时间。仓库根结果附带 `readme_url` 和平台正文选择器，富媒体下载阶段通过 Chromium 截取 README 区域。仓库迁移后，接口可能在 HTTP 200 中直接返回新仓库身份，以一致的 `full_name`、`namespace` 与规范地址为准；组织仓库的 `owner.login` 可能是管理员个人账号，不用于表示所有者。
+
+仓库首页额外读取规范路径的 `/languages` 和 `/git/trees/{ref}`。完整字节数可用时按字节计算语言占比，否则采用平台百分比。展示默认分支根目录，并按树对象 ID 展开一个匹配的源码目录。
 
 ### Issue 与评论
 
@@ -988,7 +990,7 @@ watch / shorts / youtu.be / embed / nocookie embed / v / attribution_link
 
 每条视频只保留一个候选组：同时存在视频与音频自适应流时，以兼容性最高的一组组成 `dash:` 候选，并追加 muxed MP4 作为回退。缓存可用时下载器优先处理 DASH 并调用 ffmpeg 合并；缓存不可用时剔除 DASH 候选，改用 muxed MP4 直链发送。
 
-播放 URL 带有过期时间、签名与请求出口信息，不能长期缓存复用。解析与下载应使用相同的代理出口，`proxy.youtube` 同时控制页面、播放器接口、视频与封面下载请求。消息协议端无法携带请求头或代理时，建议配置缓存目录并发送本地文件。
+播放 URL 带有过期时间、签名与请求出口信息，不能长期缓存复用。解析与下载应使用相同的代理出口，`proxy.uses` 中的 `youtube` 同时控制页面、播放器接口、视频与封面下载请求。消息协议端无法携带请求头或代理时，建议配置缓存目录并发送本地文件。
 
 当前实现不处理 `signatureCipher`、播放器 JavaScript 中的 `s` / `n` 变换与 SABR 分段协议；遇到这些返回形态、登录要求、DRM 或机器人挑战时返回明确的解析失败信息。
 
@@ -1053,7 +1055,7 @@ steamcommunity.com/sharedfiles/filedetails/?id={id}&l=schinese
 
 ### 代理
 
-代理配置位于 `proxy.steam`：`parse` 控制 Steam 商店接口、社区详情页或小黑盒详情接口，`image` 控制截图、封面与社区图片下载，`video` 控制预告片下载。
+在 `proxy.uses` 中，`steam.parse` 控制 Steam 商店接口、社区详情页或小黑盒详情接口，`steam.image` 控制截图、封面与社区图片下载，`steam.video` 控制预告片下载。
 
 ### 评论
 
@@ -1160,7 +1162,11 @@ image_urls = [
 
 接入 `github.com/{owner}/{repo}` 公开仓库首页及 `/issues/{正整数编号}`。仓库根接受 `.git` 后缀、尾斜杠、查询参数与锚点；Pull Request、Release 与代码文件等其他子页不截断为仓库根。仓库与不同 Issue 分别去重，并保留首次出现位置。
 
-请求官方匿名接口 `GET https://api.github.com/repos/{owner}/{repo}`，提取仓库名、所有者、简介 `description`、主要语言、Star / Fork 数、许可证、归档状态与更新时间，写入 `MediaMetadata` 文本字段并保留仓库链接。仓库根结果另提供规范地址 `readme_url` 与平台自己的 `readme_selector`，供富媒体阶段截取原网页 README 正文，不调用大模型生成摘要，不解析仓库文件或为仓库根附加议题评论。
+请求官方匿名接口 `GET https://api.github.com/repos/{owner}/{repo}`，提取仓库名、所有者、简介 `description`、主要语言、Star / Fork 数、许可证、归档状态与更新时间，写入 `MediaMetadata` 文本字段并保留仓库链接。仓库根结果另提供规范地址 `readme_url` 与平台自己的 `readme_selector`，供富媒体阶段截取原网页 README 正文。议题评论仅出现在对应 Issue 的结果中。
+
+仓库首页还请求 `/languages`，按各语言字节数计算百分比。通过 `/git/trees/{ref}` 读取默认分支根目录，按树对象 ID 展开一个匹配的源码目录。两步均仅读取目录项。
+
+GitHub、GitLab 和 Gitee 启用仓库总结时均先解析默认分支的提交 SHA，再按该提交读目录，按目录项的 Git 对象 ID 读取最多四个候选普通文件。文件涵盖说明文档、依赖清单、程序入口和构建配置，校验 Git 对象哈希后截取有限正文。长 README 为项目介绍、安装和快速开始章节分别保留摘录空间，单个文件的摘录上限为 3072 字节。四个维度中的每条要点都必须附来源编号与连续原文，分别核验后按固定提交生成来源链接。快照或模型不可用时保留仓库概况。
 
 ### Issue 与评论
 
@@ -1177,6 +1183,8 @@ image_urls = [
 ### 仓库概况
 
 仅接入 `gitlab.com`，项目路径支持多级子组。匿名请求 `GET /api/v4/projects/{URL 编码的完整路径}?license=true` 获取概况，再以项目数字 ID 获取语言统计；语言统计失败时保留其余信息。仓库根结果附带规范地址与 README 正文选择器，富媒体阶段用 Chromium 截图；Issue 不请求 README。响应缺少归档状态时不推断为未归档。项目迁移仅接受经过主机、接口与项目身份校验的有限次跳转（最多 2 次）。
+
+语言统计按接口百分比降序展示；目录快照从 `/repository/tree` 读取默认分支根目录，再按路径展开一个匹配的源码目录，每层最多读取首批 100 项。
 
 ### Issue 与讨论
 

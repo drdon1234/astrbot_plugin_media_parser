@@ -29,6 +29,7 @@ _PARSER_STRING_FIELDS = frozenset(
         "platform",
         "readme_selector",
         "readme_url",
+        "summary_subtype",
         "restriction_label",
         "restriction_type",
         "timestamp",
@@ -58,6 +59,7 @@ _PARSER_SPECIAL_FIELDS = frozenset(
         "image_headers",
         "image_urls",
         "proxy_url",
+        "repository_snapshot",
         "url",
         "video_cover_urls",
         "video_decryption_keys",
@@ -232,6 +234,11 @@ class ParserManager:
             if not selector.strip() or len(selector) > 1000:
                 raise ValueError("readme_selector 必须是有效的 README 正文选择器")
             metadata["readme_selector"] = selector.strip()
+        if "repository_snapshot" in metadata and (
+            platform not in {"gitee", "github", "gitlab"} or not metadata.get("readme_url")
+            or not isinstance(metadata["repository_snapshot"], dict)
+        ):
+            raise ValueError("仓库快照必须属于已校验的仓库首页")
         metadata["source_url"] = url
         metadata["platform"] = platform
         metadata["parser_name"] = parser.name

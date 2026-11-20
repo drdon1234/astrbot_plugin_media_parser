@@ -1,8 +1,11 @@
 """配置管理模块，负责默认值处理、类型转换与配置兜底。"""
 
+import json
 import math
 import os
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .logger import logger
@@ -44,6 +47,7 @@ from .parser.platform import (
     GitHubParser,
     GitLabParser,
 )
+from .summary_types import CATEGORY_LABELS
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
     LLM_PROVIDER_OPTIONS,
@@ -109,6 +113,19 @@ OUTPUT_MODE_FLAGS = {
     OUTPUT_MODE_RICH_ONLY: (False, True),
     OUTPUT_MODE_VIDEO_OR_POST: (True, True),
 }
+
+TEXT_FIELDS = ("title", "author", "timestamp", "original_link", "description")
+PROXY_DEFAULTS = {"font": False, "xiaoheihe_video": True, "tiktok": False, "youtube": True,
+                  "steam.parse": False, "steam.image": True, "steam.video": True,
+                  "twitter.parse": False, "twitter.image": True, "twitter.video": True,
+                  "pixiv": False, "github": False}
+
+
+def _selection(config: dict, key: str, default=()) -> set:
+    """缺失使用默认集合，显式空选或无效值不启用任何条目。"""
+    values = config.get(key, default)
+    return {item for item in values if isinstance(item, str)} if isinstance(values, (list, tuple, set)) else set()
+
 
 AGGREGATION_MODE_NONE = "不聚合"
 AGGREGATION_MODE_ALL = "全部聚合"
@@ -613,6 +630,13 @@ class TranslationConfig:
     max_completion_tokens: int = 4000
     request_timeout_seconds: int = 60
     max_text_chars_per_request: int = 4000
+    summary_categories: set = field(default_factory=set)
+    summary_exclusions: set = field(default_factory=set)
+
+    @property
+    def repository_summary(self) -> bool:
+        """当前配置是否启用了仓库总结。"""
+        return "repository" in self.summary_categories
 
 
 @dataclass
@@ -636,6 +660,7 @@ class ConfigManager:
                 "parsers": None,
                 "permissions": None,
             }
+        self.upgrade_selections(config)
         self._migrate_message_config(config)
         self._parse_config(config)
 
@@ -689,10 +714,21 @@ class ConfigManager:
             parsers_raw = config["parsers"]
         else:
             logger.warning("parsers 配置存在但不是对象，已安全关闭全部解析器")
-            parsers_raw = {key: OUTPUT_MODE_DISABLED for key in PARSER_OUTPUT_KEYS}
-        self.parser_output = ParserOutputConfig(
-            modes=self._parse_parser_outputs(parsers_raw)
-        )
+            parsers_raw = {"text_platforms": [], "media_platforms": []}
+        text = _selection(parsers_raw, "text_platforms", PARSER_OUTPUT_KEYS)
+        media = _selection(parsers_raw, "media_platforms", PARSER_OUTPUT_KEYS)
+        video_only = _selection(parsers_raw, "video_without_text")
+        modes = {}
+        for key in PARSER_OUTPUT_KEYS:
+            if key in text and key in media:
+                modes[key] = OUTPUT_MODE_VIDEO_OR_POST if key in video_only else OUTPUT_MODE_ALL
+            elif key in text:
+                modes[key] = OUTPUT_MODE_TEXT_ONLY
+            elif key in media:
+                modes[key] = OUTPUT_MODE_RICH_ONLY
+            else:
+                modes[key] = OUTPUT_MODE_DISABLED
+        self.parser_output = ParserOutputConfig(modes=modes)
         self._enable_bilibili = self._parser_enabled("bilibili")
         self._enable_douyin = self._parser_enabled("douyin")
         self._enable_kuaishou = self._parser_enabled("kuaishou")
@@ -742,6 +778,8 @@ class ConfigManager:
         if not any_text_output_enabled:
             hot_count = 0
 
+        visible_fields = _selection(text_metadata, "fields", TEXT_FIELDS)
+        excluded_comments = _selection(hot_comments, "excluded")
         self.message = MessageConfig(
             reaction=ReactionMessageConfig(
                 enabled=self._parse_bool(
@@ -839,35 +877,9 @@ class ConfigManager:
                 ),
             ),
             text_metadata=TextMetadataConfig(
-                show_title=self._parse_bool(
-                    text_metadata.get("show_title", True),
-                    True,
-                    "message.text_metadata.show_title",
-                ),
-                show_author=self._parse_bool(
-                    text_metadata.get("show_author", True),
-                    True,
-                    "message.text_metadata.show_author",
-                ),
-                show_timestamp=self._parse_bool(
-                    text_metadata.get("show_timestamp", True),
-                    True,
-                    "message.text_metadata.show_timestamp",
-                ),
-                show_original_link=self._parse_bool(
-                    text_metadata.get("show_original_link", True),
-                    True,
-                    "message.text_metadata.show_original_link",
-                ),
-                show_description=self._parse_bool(
-                    text_metadata.get("show_description", True),
-                    True,
-                    "message.text_metadata.show_description",
-                ),
+                **{"show_" + key: key in visible_fields for key in TEXT_FIELDS},
                 quote_user_message=self._parse_bool(
-                    text_metadata.get("quote_user_message", False),
-                    False,
-                    "message.text_metadata.quote_user_message",
+                    message_raw.get("quote_user_message", False), False, "message.quote_user_message"
                 ),
                 render_to_image=self._parse_bool(
                     text_metadata.get("render_to_image", False),
@@ -927,151 +939,7 @@ class ConfigManager:
             ),
             hot_comments=HotCommentConfig(
                 count=hot_count,
-                bilibili=self._parse_bool(
-                    hot_comments.get("bilibili", True),
-                    True,
-                    "message.hot_comments.bilibili",
-                ),
-                douyin=self._parse_bool(
-                    hot_comments.get("douyin", True),
-                    True,
-                    "message.hot_comments.douyin",
-                ),
-                acfun=self._parse_bool(
-                    hot_comments.get("acfun", True),
-                    True,
-                    "message.hot_comments.acfun",
-                ),
-                hongguo=self._parse_bool(
-                    hot_comments.get("hongguo", True),
-                    True,
-                    "message.hot_comments.hongguo",
-                ),
-                netease=self._parse_bool(
-                    hot_comments.get("netease", True),
-                    True,
-                    "message.hot_comments.netease",
-                ),
-                ximalaya=self._parse_bool(
-                    hot_comments.get("ximalaya", True),
-                    True,
-                    "message.hot_comments.ximalaya",
-                ),
-                weibo=self._parse_bool(
-                    hot_comments.get("weibo", True),
-                    True,
-                    "message.hot_comments.weibo",
-                ),
-                xiaohongshu=self._parse_bool(
-                    hot_comments.get("xiaohongshu", True),
-                    True,
-                    "message.hot_comments.xiaohongshu",
-                ),
-                xianyu=self._parse_bool(
-                    hot_comments.get("xianyu", True),
-                    True,
-                    "message.hot_comments.xianyu",
-                ),
-                toutiao=self._parse_bool(
-                    hot_comments.get("toutiao", True),
-                    True,
-                    "message.hot_comments.toutiao",
-                ),
-                xiaoheihe=self._parse_bool(
-                    hot_comments.get("xiaoheihe", True),
-                    True,
-                    "message.hot_comments.xiaoheihe",
-                ),
-                xueqiu=self._parse_bool(
-                    hot_comments.get("xueqiu", True),
-                    True,
-                    "message.hot_comments.xueqiu",
-                ),
-                coolapk=self._parse_bool(
-                    hot_comments.get("coolapk", True),
-                    True,
-                    "message.hot_comments.coolapk",
-                ),
-                zhihu=self._parse_bool(
-                    hot_comments.get("zhihu", True),
-                    True,
-                    "message.hot_comments.zhihu",
-                ),
-                tieba=self._parse_bool(
-                    hot_comments.get("tieba", True),
-                    True,
-                    "message.hot_comments.tieba",
-                ),
-                nga=self._parse_bool(
-                    hot_comments.get("nga", True),
-                    True,
-                    "message.hot_comments.nga",
-                ),
-                hupu=self._parse_bool(
-                    hot_comments.get("hupu", True),
-                    True,
-                    "message.hot_comments.hupu",
-                ),
-                douban=self._parse_bool(
-                    hot_comments.get("douban", True),
-                    True,
-                    "message.hot_comments.douban",
-                ),
-                v2ex=self._parse_bool(
-                    hot_comments.get("v2ex", True),
-                    True,
-                    "message.hot_comments.v2ex",
-                ),
-                juejin=self._parse_bool(
-                    hot_comments.get("juejin", True),
-                    True,
-                    "message.hot_comments.juejin",
-                ),
-                csdn=self._parse_bool(
-                    hot_comments.get("csdn", True),
-                    True,
-                    "message.hot_comments.csdn",
-                ),
-                gitee=self._parse_bool(
-                    hot_comments.get("gitee", True),
-                    True,
-                    "message.hot_comments.gitee",
-                ),
-                tiktok=self._parse_bool(
-                    hot_comments.get("tiktok", True),
-                    True,
-                    "message.hot_comments.tiktok",
-                ),
-                youtube=self._parse_bool(
-                    hot_comments.get("youtube", True),
-                    True,
-                    "message.hot_comments.youtube",
-                ),
-                steam=self._parse_bool(
-                    hot_comments.get("steam", True),
-                    True,
-                    "message.hot_comments.steam",
-                ),
-                twitter=self._parse_bool(
-                    hot_comments.get("twitter", True),
-                    True,
-                    "message.hot_comments.twitter",
-                ),
-                pixiv=self._parse_bool(
-                    hot_comments.get("pixiv", True),
-                    True,
-                    "message.hot_comments.pixiv",
-                ),
-                github=self._parse_bool(
-                    hot_comments.get("github", True),
-                    True,
-                    "message.hot_comments.github",
-                ),
-                gitlab=self._parse_bool(
-                    hot_comments.get("gitlab", True),
-                    True,
-                    "message.hot_comments.gitlab",
-                ),
+                **{key: key not in excluded_comments for key in HotCommentConfig.__dataclass_fields__ if key != "count"},
             ),
         )
         if not self.parser_output.has_any_output():
@@ -1208,6 +1076,8 @@ class ConfigManager:
             )
 
         self.translation = TranslationConfig(
+            summary_categories=_selection(translation_raw, "summary_categories") & CATEGORY_LABELS.keys(),
+            summary_exclusions=_selection(translation_raw, "summary_exclusions"),
             enabled=self._parse_bool(
                 translation_raw.get("enable", False),
                 False,
@@ -1377,70 +1247,21 @@ class ConfigManager:
 
         # --- proxy ---
         proxy_raw = self._as_dict(config.get("proxy"))
-        steam_proxy = self._as_dict(proxy_raw.get("steam"))
-        twitter_proxy = self._as_dict(proxy_raw.get("twitter"))
+        uses = _selection(proxy_raw, "uses", [key for key, enabled in PROXY_DEFAULTS.items() if enabled])
         self.proxy = ProxyConfig(
             address=str(proxy_raw.get("address", "") or "").strip(),
-            font_use_proxy=self._parse_bool(
-                proxy_raw.get("font", False),
-                False,
-                "proxy.font",
-            ),
-            xiaoheihe_use_video_proxy=self._parse_bool(
-                proxy_raw.get("xiaoheihe_video", True),
-                True,
-                "proxy.xiaoheihe_video",
-            ),
-            tiktok_use_proxy=self._parse_bool(
-                proxy_raw.get("tiktok", False),
-                False,
-                "proxy.tiktok",
-            ),
-            youtube_use_proxy=self._parse_bool(
-                proxy_raw.get("youtube", True),
-                True,
-                "proxy.youtube",
-            ),
-            steam_use_parse_proxy=self._parse_bool(
-                steam_proxy.get("parse", False),
-                False,
-                "proxy.steam.parse",
-            ),
-            steam_use_image_proxy=self._parse_bool(
-                steam_proxy.get("image", True),
-                True,
-                "proxy.steam.image",
-            ),
-            steam_use_video_proxy=self._parse_bool(
-                steam_proxy.get("video", True),
-                True,
-                "proxy.steam.video",
-            ),
-            twitter_use_parse_proxy=self._parse_bool(
-                twitter_proxy.get("parse", False),
-                False,
-                "proxy.twitter.parse",
-            ),
-            twitter_use_image_proxy=self._parse_bool(
-                twitter_proxy.get("image", True),
-                True,
-                "proxy.twitter.image",
-            ),
-            twitter_use_video_proxy=self._parse_bool(
-                twitter_proxy.get("video", True),
-                True,
-                "proxy.twitter.video",
-            ),
-            pixiv_use_proxy=self._parse_bool(
-                proxy_raw.get("pixiv", False),
-                False,
-                "proxy.pixiv",
-            ),
-            github_use_proxy=self._parse_bool(
-                proxy_raw.get("github", False),
-                False,
-                "proxy.github",
-            ),
+            font_use_proxy="font" in uses,
+            xiaoheihe_use_video_proxy="xiaoheihe_video" in uses,
+            tiktok_use_proxy="tiktok" in uses,
+            youtube_use_proxy="youtube" in uses,
+            steam_use_parse_proxy="steam.parse" in uses,
+            steam_use_image_proxy="steam.image" in uses,
+            steam_use_video_proxy="steam.video" in uses,
+            twitter_use_parse_proxy="twitter.parse" in uses,
+            twitter_use_image_proxy="twitter.image" in uses,
+            twitter_use_video_proxy="twitter.video" in uses,
+            pixiv_use_proxy="pixiv" in uses,
+            github_use_proxy="github" in uses,
         )
 
         # --- admin ---
@@ -1498,6 +1319,11 @@ class ConfigManager:
             if name != "count"
         }
         proxy_addr = self.proxy.address or None
+
+        def summarize(platform: str) -> bool:
+            return (self.translation.repository_summary and platform not in self.translation.summary_exclusions
+                    and platform + ".repo" not in self.translation.summary_exclusions and self.message.text_metadata.show_description
+                    and self.parser_output.output_for_controller(platform)[0])
 
         if self._enable_bilibili:
             self.bilibili_parser = BilibiliParser(
@@ -1614,7 +1440,7 @@ class ConfigManager:
             parsers.append(CnblogsParser())
         if self._enable_gitee:
             parsers.append(
-                GiteeParser(hot_comment_count=hot_comment_counts["gitee"])
+                GiteeParser(hot_comment_count=hot_comment_counts["gitee"], repository_summary=summarize("gitee"))
             )
         if self._enable_tiktok:
             parsers.append(
@@ -1667,15 +1493,99 @@ class ConfigManager:
                 GitHubParser(
                     proxy_url=proxy_addr if self.proxy.github_use_proxy else None,
                     hot_comment_count=hot_comment_counts["github"],
+                    repository_summary=summarize("github"),
                 )
             )
         if self._enable_gitlab:
             parsers.append(
-                GitLabParser(hot_comment_count=hot_comment_counts["gitlab"])
+                GitLabParser(hot_comment_count=hot_comment_counts["gitlab"], repository_summary=summarize("gitlab"))
             )
         return parsers
 
     # ── 静态辅助 ────────────────────────────────────────
+
+    @classmethod
+    def upgrade_selections(cls, config: dict) -> bool:
+        """一次性转换旧的逐平台开关，保留显式空选和已有的新字段。"""
+        changed = False
+        parsers = cls._as_dict(config.get("parsers"))
+        if any(key in parsers for key in PARSER_OUTPUT_KEYS):
+            modes = cls._parse_parser_outputs(parsers)
+            parsers.setdefault("text_platforms", [k for k, v in modes.items() if OUTPUT_MODE_FLAGS[v][0]])
+            parsers.setdefault("media_platforms", [k for k, v in modes.items() if OUTPUT_MODE_FLAGS[v][1]])
+            parsers.setdefault("video_without_text", [k for k, v in modes.items() if v == OUTPUT_MODE_VIDEO_OR_POST])
+            for key in (*PARSER_OUTPUT_KEYS, "show_platforms"):
+                parsers.pop(key, None)
+            changed = True
+        message = cls._as_dict(config.get("message"))
+        hot = cls._as_dict(message.get("hot_comments"))
+        platforms = [k for k in HotCommentConfig.__dataclass_fields__ if k != "count"]
+        if any(k in hot for k in platforms):
+            hot.setdefault("excluded", [k for k in platforms if not cls._parse_bool(hot.pop(k, True), True, k)])
+            hot.pop("show_platforms", None)
+            changed = True
+        meta = cls._as_dict(message.get("text_metadata"))
+        if any("show_" + k in meta for k in TEXT_FIELDS):
+            meta.setdefault("fields", [k for k in TEXT_FIELDS if cls._parse_bool(meta.pop("show_" + k, True), True, k)])
+            meta.pop("show_fields", None)
+            changed = True
+        if "quote_user_message" in meta:
+            message.setdefault("quote_user_message", meta.pop("quote_user_message"))
+            changed = True
+        proxy = cls._as_dict(config.get("proxy"))
+        if any(k.split(".")[0] in proxy for k in PROXY_DEFAULTS):
+            uses = []
+            for key, default in PROXY_DEFAULTS.items():
+                parent, dot, child = key.partition(".")
+                raw = cls._as_dict(proxy.get(parent)).get(child, default) if dot else proxy.get(key, default)
+                if cls._parse_bool(raw, default, key):
+                    uses.append(key)
+            proxy.setdefault("uses", uses)
+            for key in PROXY_DEFAULTS:
+                proxy.pop(key.split(".")[0], None)
+            proxy.pop("show_details", None)
+            changed = True
+        translation = cls._as_dict(config.get("translation"))
+        if "repository_summary" in translation:
+            enabled = cls._parse_bool(translation.pop("repository_summary"), False, "repository_summary")
+            translation.setdefault("summary_categories", ["repository"] if enabled else [])
+            changed = True
+        return changed
+
+    @classmethod
+    def upgrade_config_file(cls, path: Path) -> None:
+        """宿主核对 Schema 前转换本插件的配置；保留首份原件并原子替换。"""
+        if not path.is_file():
+            return
+        original = path.read_bytes()
+        config = json.loads(original.decode("utf-8-sig"))
+        if not isinstance(config, dict) or not cls.upgrade_selections(config):
+            return
+        backup = path.with_suffix(".before-selections.bak")
+        # 升级前保留原始字节；备份也包含私密凭据，使用与临时文件相同的访问权限。
+        try:
+            descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(original)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except OSError:
+                backup.unlink(missing_ok=True)
+                raise
+        stream = tempfile.NamedTemporaryFile(dir=path.parent, delete=False)
+        temporary = Path(stream.name)
+        try:
+            with stream:
+                stream.write(json.dumps(config, ensure_ascii=False, indent=4).encode("utf-8"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _parse_parser_outputs(values) -> Dict[str, str]:

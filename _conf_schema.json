@@ -116,504 +116,295 @@
     "parsers": {
         "description": "平台开关与输出模式",
         "type": "object",
-        "hint": "展开平台列表可逐项设置；收起不影响解析。关闭：不解析；仅文本：只发摘要；仅富媒体：只发图片、视频或音频；视频直发 / 帖子图文：有视频时仅发富媒体，无视频时发文本与富媒体。媒体失败提示仍保留，文本字段由“消息输出 → 文本元数据”控制。",
+        "hint": "分别选择发送文本和富媒体的平台。两项均未选择的平台关闭解析。",
         "items": {
-            "show_platforms": {
-                "description": "展开平台列表",
-                "type": "bool",
-                "default": false,
-                "hint": "仅控制配置项的展开显示，收起后仍按已保存的配置运行。"
-            },
-            "bilibili": {
-                "description": "B站",
-                "type": "string",
+            "text_platforms": {
+                "description": "发送文本的平台",
+                "type": "list",
                 "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
+                    "bilibili",
+                    "douyin",
+                    "kuaishou",
+                    "acfun",
+                    "hongguo",
+                    "netease",
+                    "ximalaya",
+                    "weibo",
+                    "xiaohongshu",
+                    "xianyu",
+                    "toutiao",
+                    "xiaoheihe",
+                    "xueqiu",
+                    "coolapk",
+                    "wechat",
+                    "zhihu",
+                    "tieba",
+                    "nga",
+                    "hupu",
+                    "douban",
+                    "v2ex",
+                    "juejin",
+                    "csdn",
+                    "cnblogs",
+                    "gitee",
+                    "tiktok",
+                    "youtube",
+                    "steam",
+                    "twitter",
+                    "pixiv",
+                    "github",
+                    "gitlab"
                 ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
+                "labels": [
+                    "B站",
+                    "抖音",
+                    "快手",
+                    "AcFun",
+                    "红果短剧",
+                    "网易云音乐",
+                    "喜马拉雅",
+                    "微博",
+                    "小红书",
+                    "闲鱼",
+                    "今日头条",
+                    "小黑盒",
+                    "雪球",
+                    "酷安",
+                    "微信",
+                    "知乎",
+                    "百度贴吧",
+                    "NGA",
+                    "虎扑",
+                    "豆瓣",
+                    "V2EX",
+                    "稀土掘金",
+                    "CSDN",
+                    "博客园",
+                    "Gitee",
+                    "TikTok",
+                    "YouTube",
+                    "Steam",
+                    "Twitter/X",
+                    "Pixiv",
+                    "GitHub",
+                    "GitLab"
+                ],
+                "default": [
+                    "bilibili",
+                    "douyin",
+                    "kuaishou",
+                    "acfun",
+                    "hongguo",
+                    "netease",
+                    "ximalaya",
+                    "weibo",
+                    "xiaohongshu",
+                    "xianyu",
+                    "toutiao",
+                    "xiaoheihe",
+                    "xueqiu",
+                    "coolapk",
+                    "wechat",
+                    "zhihu",
+                    "tieba",
+                    "nga",
+                    "hupu",
+                    "douban",
+                    "v2ex",
+                    "juejin",
+                    "csdn",
+                    "cnblogs",
+                    "gitee",
+                    "tiktok",
+                    "youtube",
+                    "steam",
+                    "twitter",
+                    "pixiv",
+                    "github",
+                    "gitlab"
+                ],
+                "hint": "选择该平台时发送标题、正文等文本信息。"
             },
-            "douyin": {
-                "description": "抖音",
-                "type": "string",
+            "media_platforms": {
+                "description": "发送富媒体的平台",
+                "type": "list",
                 "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
+                    "bilibili",
+                    "douyin",
+                    "kuaishou",
+                    "acfun",
+                    "hongguo",
+                    "netease",
+                    "ximalaya",
+                    "weibo",
+                    "xiaohongshu",
+                    "xianyu",
+                    "toutiao",
+                    "xiaoheihe",
+                    "xueqiu",
+                    "coolapk",
+                    "wechat",
+                    "zhihu",
+                    "tieba",
+                    "nga",
+                    "hupu",
+                    "douban",
+                    "v2ex",
+                    "juejin",
+                    "csdn",
+                    "cnblogs",
+                    "gitee",
+                    "tiktok",
+                    "youtube",
+                    "steam",
+                    "twitter",
+                    "pixiv",
+                    "github",
+                    "gitlab"
                 ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
+                "labels": [
+                    "B站",
+                    "抖音",
+                    "快手",
+                    "AcFun",
+                    "红果短剧",
+                    "网易云音乐",
+                    "喜马拉雅",
+                    "微博",
+                    "小红书",
+                    "闲鱼",
+                    "今日头条",
+                    "小黑盒",
+                    "雪球",
+                    "酷安",
+                    "微信",
+                    "知乎",
+                    "百度贴吧",
+                    "NGA",
+                    "虎扑",
+                    "豆瓣",
+                    "V2EX",
+                    "稀土掘金",
+                    "CSDN",
+                    "博客园",
+                    "Gitee",
+                    "TikTok",
+                    "YouTube",
+                    "Steam",
+                    "Twitter/X",
+                    "Pixiv",
+                    "GitHub",
+                    "GitLab"
+                ],
+                "default": [
+                    "bilibili",
+                    "douyin",
+                    "kuaishou",
+                    "acfun",
+                    "hongguo",
+                    "netease",
+                    "ximalaya",
+                    "weibo",
+                    "xiaohongshu",
+                    "xianyu",
+                    "toutiao",
+                    "xiaoheihe",
+                    "xueqiu",
+                    "coolapk",
+                    "wechat",
+                    "zhihu",
+                    "tieba",
+                    "nga",
+                    "hupu",
+                    "douban",
+                    "v2ex",
+                    "juejin",
+                    "csdn",
+                    "cnblogs",
+                    "gitee",
+                    "tiktok",
+                    "youtube",
+                    "steam",
+                    "twitter",
+                    "pixiv",
+                    "github",
+                    "gitlab"
+                ],
+                "hint": "选择该平台时发送图片、视频或音频。"
             },
-            "kuaishou": {
-                "description": "快手",
-                "type": "string",
+            "video_without_text": {
+                "description": "有视频时只发富媒体",
+                "type": "list",
                 "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
+                    "bilibili",
+                    "douyin",
+                    "kuaishou",
+                    "acfun",
+                    "hongguo",
+                    "netease",
+                    "ximalaya",
+                    "weibo",
+                    "xiaohongshu",
+                    "xianyu",
+                    "toutiao",
+                    "xiaoheihe",
+                    "xueqiu",
+                    "coolapk",
+                    "wechat",
+                    "zhihu",
+                    "tieba",
+                    "nga",
+                    "hupu",
+                    "douban",
+                    "v2ex",
+                    "juejin",
+                    "csdn",
+                    "cnblogs",
+                    "gitee",
+                    "tiktok",
+                    "youtube",
+                    "steam",
+                    "twitter",
+                    "pixiv",
+                    "github",
+                    "gitlab"
                 ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "acfun": {
-                "description": "AcFun",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
+                "labels": [
+                    "B站",
+                    "抖音",
+                    "快手",
+                    "AcFun",
+                    "红果短剧",
+                    "网易云音乐",
+                    "喜马拉雅",
+                    "微博",
+                    "小红书",
+                    "闲鱼",
+                    "今日头条",
+                    "小黑盒",
+                    "雪球",
+                    "酷安",
+                    "微信",
+                    "知乎",
+                    "百度贴吧",
+                    "NGA",
+                    "虎扑",
+                    "豆瓣",
+                    "V2EX",
+                    "稀土掘金",
+                    "CSDN",
+                    "博客园",
+                    "Gitee",
+                    "TikTok",
+                    "YouTube",
+                    "Steam",
+                    "Twitter/X",
+                    "Pixiv",
+                    "GitHub",
+                    "GitLab"
                 ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "hongguo": {
-                "description": "红果短剧",
-                "type": "string",
-                "hint": "每个分享链接解析指定一集；视频需要本地缓存和 ffmpeg。可选读取分集弹幕；完整视频取流失败时保留剧集资料及可取得的弹幕。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "netease": {
-                "description": "网易云音乐",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "hint": "支持单曲信息、当前可播放音频及热评；不获取会员权限外的完整歌曲。",
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "ximalaya": {
-                "description": "喜马拉雅",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "hint": "支持单集信息、公开可播放音频及首屏高赞评论；不支持专辑批量解析，不获取付费权限外的音频。",
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "weibo": {
-                "description": "微博",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "xiaohongshu": {
-                "description": "小红书",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "xianyu": {
-                "description": "闲鱼",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "toutiao": {
-                "description": "今日头条",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "xiaoheihe": {
-                "description": "小黑盒",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "xueqiu": {
-                "description": "雪球",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "coolapk": {
-                "description": "酷安",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "wechat": {
-                "description": "微信（公众号 / 视频号）",
-                "type": "string",
-                "hint": "公众号图文可匿名解析；视频号短链需要在微信设置中填写腾讯元宝 Cookie。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "zhihu": {
-                "description": "知乎",
-                "type": "string",
-                "hint": "支持知乎指定回答和专栏文章的匿名解析；文章使用自动访客会话与接口签名。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "tieba": {
-                "description": "百度贴吧",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "nga": {
-                "description": "NGA",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "hupu": {
-                "description": "虎扑",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "douban": {
-                "description": "豆瓣",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "v2ex": {
-                "description": "V2EX",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "juejin": {
-                "description": "稀土掘金",
-                "type": "string",
-                "hint": "支持公开文章正文、配图及评论；热评需另行设置条数。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "csdn": {
-                "description": "CSDN",
-                "type": "string",
-                "hint": "支持公开博客正文、配图及普通评论；付费文章仅输出公开预览并标注限制。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "cnblogs": {
-                "description": "博客园",
-                "type": "string",
-                "hint": "支持公开博客正文和配图；匿名评论接口要求登录，暂不输出评论。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "gitee": {
-                "description": "Gitee",
-                "type": "string",
-                "hint": "公开仓库可发送概况与 README 截图；截图需要安装 Chromium。Issue 提供正文与评论。仅文本时不截图，仅富媒体时只发送仓库 README。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "tiktok": {
-                "description": "TikTok",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "youtube": {
-                "description": "YouTube",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "steam": {
-                "description": "Steam",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "twitter": {
-                "description": "Twitter/X",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "pixiv": {
-                "description": "Pixiv",
-                "type": "string",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "github": {
-                "description": "GitHub",
-                "type": "string",
-                "hint": "公开仓库首页可发送概况与 README 截图，截图需要 Chromium；公开 Issue 发送正文及可选普通评论，不请求 README。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
-            },
-            "gitlab": {
-                "description": "GitLab",
-                "type": "string",
-                "hint": "gitlab.com 公开项目可发送概况与 README 截图；截图需要安装 Chromium。Issue 提供正文与讨论，不支持自建站点。仅文本时不截图。",
-                "options": [
-                    "关闭",
-                    "全部发送",
-                    "仅文本",
-                    "仅富媒体",
-                    "视频直发 / 帖子图文"
-                ],
-                "default": "全部发送",
-                "condition": {
-                    "show_platforms": true
-                }
+                "default": [],
+                "hint": "仅对同时启用文本和富媒体的平台生效；没有视频时仍发送图文。"
             }
         }
     },
@@ -625,64 +416,34 @@
             "text_metadata": {
                 "description": "文本元数据",
                 "type": "object",
-                "hint": "分别控制解析摘要中的来源字段；关闭字段也不会影响解析、下载或错误提示。",
+                "hint": "选择显示内容、文字或分享卡版式及配色。",
                 "items": {
-                    "show_fields": {
-                        "description": "展开文本字段设置",
-                        "type": "bool",
-                        "default": false,
-                        "hint": "仅控制配置项的展开显示，收起后仍按已保存的配置运行。"
-                    },
-                    "show_title": {
-                        "description": "显示标题",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_fields": true
-                        }
-                    },
-                    "show_author": {
-                        "description": "显示作者",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_fields": true
-                        }
-                    },
-                    "show_timestamp": {
-                        "description": "显示发布时间",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_fields": true
-                        }
-                    },
-                    "show_original_link": {
-                        "description": "显示原始链接",
-                        "type": "bool",
-                        "hint": "关闭后不在解析结果中重复展示原链接。",
-                        "default": true,
-                        "condition": {
-                            "show_fields": true
-                        }
-                    },
-                    "show_description": {
-                        "description": "显示简介/正文",
-                        "type": "bool",
-                        "hint": "适合正文较长、只希望保留简短摘要的群聊。",
-                        "default": true,
-                        "condition": {
-                            "show_fields": true
-                        }
-                    },
-                    "quote_user_message": {
-                        "description": "引用用户消息",
-                        "type": "bool",
-                        "hint": "仅普通逐条发送时生效；聚合和 ZIP 不引用。只让文本元数据节点引用对应用户消息，媒体节点不引用。",
-                        "default": false,
-                        "condition": {
-                            "show_fields": true
-                        }
+                    "fields": {
+                        "description": "消息显示内容",
+                        "type": "list",
+                        "options": [
+                            "title",
+                            "author",
+                            "timestamp",
+                            "original_link",
+                            "description"
+                        ],
+                        "labels": [
+                            "标题",
+                            "作者",
+                            "发布时间",
+                            "原始链接",
+                            "简介/正文"
+                        ],
+                        "default": [
+                            "title",
+                            "author",
+                            "timestamp",
+                            "original_link",
+                            "description"
+                        ],
+                        "hint": "全部取消时不显示这些字段。",
+                        "render_type": "checkbox"
                     },
                     "render_to_image": {
                         "description": "将文本元数据渲染为图片",
@@ -865,7 +626,7 @@
             "hot_comments": {
                 "description": "附加内容：热评",
                 "type": "object",
-                "hint": "条数设为 0 时不获取热评；大于 0 后按已保存的平台开关获取，展开列表可单独调整。仅对包含文本输出的平台生效；来源包括评论、游戏评价、Issue 讨论及标注的分集弹幕。",
+                "hint": "设置条数与平台例外。只读取解析器实际支持的评论或弹幕。",
                 "items": {
                     "count": {
                         "description": "热评条数",
@@ -873,246 +634,73 @@
                         "hint": "填 0 不获取热评；大于 0 后按平台开关选择来源。实际数量受平台公开范围、分页和风控限制，可能少于设置值。",
                         "default": 0
                     },
-                    "show_platforms": {
-                        "description": "展开平台列表",
-                        "type": "bool",
-                        "default": false,
-                        "hint": "仅控制配置项的展开显示，收起后仍按已保存的配置运行。"
-                    },
-                    "bilibili": {
-                        "description": "B站",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "douyin": {
-                        "description": "抖音",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "acfun": {
-                        "description": "AcFun",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "hongguo": {
-                        "description": "红果短剧：分集弹幕",
-                        "type": "bool",
-                        "hint": "读取指定分集的有限弹幕窗口，消息中标为分集弹幕；不代表普通评论区或全量弹幕。",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "netease": {
-                        "description": "网易云音乐",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "ximalaya": {
-                        "description": "喜马拉雅",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "weibo": {
-                        "description": "微博",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "xiaohongshu": {
-                        "description": "小红书",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "xianyu": {
-                        "description": "闲鱼",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "toutiao": {
-                        "description": "今日头条",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "xiaoheihe": {
-                        "description": "小黑盒",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "xueqiu": {
-                        "description": "雪球",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "coolapk": {
-                        "description": "酷安",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "zhihu": {
-                        "description": "知乎",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "tieba": {
-                        "description": "百度贴吧",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "nga": {
-                        "description": "NGA",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "hupu": {
-                        "description": "虎扑",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "douban": {
-                        "description": "豆瓣",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "v2ex": {
-                        "description": "V2EX",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "juejin": {
-                        "description": "稀土掘金",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "csdn": {
-                        "description": "CSDN",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "gitee": {
-                        "description": "Gitee",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "tiktok": {
-                        "description": "TikTok",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "youtube": {
-                        "description": "YouTube",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "steam": {
-                        "description": "Steam",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "twitter": {
-                        "description": "Twitter/X",
-                        "type": "bool",
-                        "hint": "读取当前匿名网页下发的首屏直接回复，条数受公开首屏范围限制。",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "pixiv": {
-                        "description": "Pixiv",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "github": {
-                        "description": "GitHub",
-                        "type": "bool",
-                        "hint": "仅对公开 Issue 读取有限普通评论，仓库概况不附加评论。",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
-                    },
-                    "gitlab": {
-                        "description": "GitLab",
-                        "type": "bool",
-                        "default": true,
-                        "condition": {
-                            "show_platforms": true
-                        }
+                    "excluded": {
+                        "description": "不显示热评的平台",
+                        "type": "list",
+                        "options": [
+                            "bilibili",
+                            "douyin",
+                            "acfun",
+                            "hongguo",
+                            "netease",
+                            "ximalaya",
+                            "weibo",
+                            "xiaohongshu",
+                            "xianyu",
+                            "toutiao",
+                            "xiaoheihe",
+                            "xueqiu",
+                            "coolapk",
+                            "zhihu",
+                            "tieba",
+                            "nga",
+                            "hupu",
+                            "douban",
+                            "v2ex",
+                            "juejin",
+                            "csdn",
+                            "gitee",
+                            "tiktok",
+                            "youtube",
+                            "steam",
+                            "twitter",
+                            "pixiv",
+                            "github",
+                            "gitlab"
+                        ],
+                        "labels": [
+                            "B站",
+                            "抖音",
+                            "AcFun",
+                            "红果短剧",
+                            "网易云音乐",
+                            "喜马拉雅",
+                            "微博",
+                            "小红书",
+                            "闲鱼",
+                            "今日头条",
+                            "小黑盒",
+                            "雪球",
+                            "酷安",
+                            "知乎",
+                            "百度贴吧",
+                            "NGA",
+                            "虎扑",
+                            "豆瓣",
+                            "V2EX",
+                            "稀土掘金",
+                            "CSDN",
+                            "Gitee",
+                            "TikTok",
+                            "YouTube",
+                            "Steam",
+                            "Twitter/X",
+                            "Pixiv",
+                            "GitHub",
+                            "GitLab"
+                        ],
+                        "default": [],
+                        "hint": "默认所有支持评论且开启文本的平台都可显示；条数为 0 时全部关闭。"
                     }
                 }
             },
@@ -1265,14 +853,233 @@
                         "default": 1024.0
                     }
                 }
+            },
+            "quote_user_message": {
+                "description": "引用用户消息",
+                "type": "bool",
+                "hint": "仅普通逐条发送时生效；聚合和 ZIP 不引用。只让文本元数据节点引用对应用户消息，媒体节点不引用。",
+                "default": false
             }
         }
     },
     "translation": {
-        "description": "文本翻译",
+        "description": "文本翻译与内容总结",
         "type": "object",
-        "hint": "默认关闭。启用后翻译正文/标题；翻译失败不会影响媒体解析。未启用时下面的翻译参数会被忽略。",
+        "hint": "翻译与内容总结可独立启用，共用所选模型。",
         "items": {
+            "summary_categories": {
+                "description": "总结内容类型",
+                "type": "list",
+                "options": [
+                    "article",
+                    "post",
+                    "gallery",
+                    "item",
+                    "repository",
+                    "issue"
+                ],
+                "labels": [
+                    "文章与回答",
+                    "帖子与动态",
+                    "图集与作品",
+                    "商品与条目",
+                    "代码仓库",
+                    "Issue 与工单"
+                ],
+                "default": [],
+                "hint": "空选关闭。启用后会向模型提供所选类型的公开正文及适用的正文配图。",
+                "render_type": "checkbox"
+            },
+            "summary_exclusions": {
+                "description": "排除范围",
+                "type": "list",
+                "options": [
+                    "bilibili",
+                    "bilibili.post",
+                    "douyin",
+                    "douyin.gallery",
+                    "kuaishou",
+                    "kuaishou.gallery",
+                    "acfun",
+                    "acfun.article",
+                    "hongguo",
+                    "hongguo.intro",
+                    "netease",
+                    "netease.info",
+                    "ximalaya",
+                    "ximalaya.intro",
+                    "weibo",
+                    "weibo.post",
+                    "xiaohongshu",
+                    "xiaohongshu.note",
+                    "xianyu",
+                    "xianyu.item",
+                    "toutiao",
+                    "toutiao.article",
+                    "toutiao.post",
+                    "xiaoheihe",
+                    "xiaoheihe.post",
+                    "xiaoheihe.game",
+                    "xueqiu",
+                    "xueqiu.post",
+                    "xueqiu.article",
+                    "coolapk",
+                    "coolapk.post",
+                    "coolapk.gallery",
+                    "coolapk.article",
+                    "coolapk.reply",
+                    "coolapk.question",
+                    "coolapk.vote",
+                    "coolapk.app",
+                    "coolapk.user",
+                    "coolapk.topic",
+                    "coolapk.product",
+                    "coolapk.collection",
+                    "coolapk.dyh",
+                    "wechat",
+                    "wechat.article",
+                    "wechat.gallery",
+                    "zhihu",
+                    "zhihu.answer",
+                    "zhihu.column",
+                    "tieba",
+                    "tieba.post",
+                    "nga",
+                    "nga.post",
+                    "hupu",
+                    "hupu.post",
+                    "douban",
+                    "douban.item",
+                    "douban.article",
+                    "douban.post",
+                    "douban.gallery",
+                    "douban.reading",
+                    "v2ex",
+                    "v2ex.post",
+                    "juejin",
+                    "juejin.article",
+                    "csdn",
+                    "csdn.article",
+                    "cnblogs",
+                    "cnblogs.article",
+                    "gitee",
+                    "gitee.repo",
+                    "gitee.issue",
+                    "tiktok",
+                    "tiktok.gallery",
+                    "youtube",
+                    "youtube.intro",
+                    "steam",
+                    "steam.game",
+                    "steam.guide",
+                    "steam.workshop",
+                    "twitter",
+                    "twitter.post",
+                    "twitter.article",
+                    "pixiv",
+                    "pixiv.gallery",
+                    "github",
+                    "github.repo",
+                    "github.issue",
+                    "gitlab",
+                    "gitlab.repo",
+                    "gitlab.issue"
+                ],
+                "labels": [
+                    "B站 · 全部",
+                    "B站 · 动态与 Opus",
+                    "抖音 · 全部",
+                    "抖音 · 图集",
+                    "快手 · 全部",
+                    "快手 · 图集",
+                    "AcFun · 全部",
+                    "AcFun · 文章与动态",
+                    "红果短剧 · 全部",
+                    "红果短剧 · 剧集简介",
+                    "网易云音乐 · 全部",
+                    "网易云音乐 · 单曲资料",
+                    "喜马拉雅 · 全部",
+                    "喜马拉雅 · 节目简介",
+                    "微博 · 全部",
+                    "微博 · 微博正文",
+                    "小红书 · 全部",
+                    "小红书 · 图文笔记",
+                    "闲鱼 · 全部",
+                    "闲鱼 · 商品详情",
+                    "今日头条 · 全部",
+                    "今日头条 · 文章",
+                    "今日头条 · 微头条",
+                    "小黑盒 · 全部",
+                    "小黑盒 · BBS 帖子",
+                    "小黑盒 · 游戏详情",
+                    "雪球 · 全部",
+                    "雪球 · 帖子与转发",
+                    "雪球 · 长文",
+                    "酷安 · 全部",
+                    "酷安 · 动态与转发",
+                    "酷安 · 酷图",
+                    "酷安 · 图文长文",
+                    "酷安 · 指定评论",
+                    "酷安 · 问答",
+                    "酷安 · 投票",
+                    "酷安 · 应用与游戏",
+                    "酷安 · 用户概况",
+                    "酷安 · 话题",
+                    "酷安 · 产品",
+                    "酷安 · 收藏单",
+                    "酷安 · 看看号",
+                    "微信 · 全部",
+                    "微信 · 公众号文章",
+                    "微信 · 公众号图集",
+                    "知乎 · 全部",
+                    "知乎 · 指定回答",
+                    "知乎 · 专栏文章",
+                    "百度贴吧 · 全部",
+                    "百度贴吧 · 帖子",
+                    "NGA · 全部",
+                    "NGA · 帖子",
+                    "虎扑 · 全部",
+                    "虎扑 · 帖子",
+                    "豆瓣 · 全部",
+                    "豆瓣 · 条目与活动",
+                    "豆瓣 · 长评与日记",
+                    "豆瓣 · 讨论与短评",
+                    "豆瓣 · 照片与相册",
+                    "豆瓣 · 阅读作品介绍",
+                    "V2EX · 全部",
+                    "V2EX · 主题",
+                    "稀土掘金 · 全部",
+                    "稀土掘金 · 文章",
+                    "CSDN · 全部",
+                    "CSDN · 博客文章",
+                    "博客园 · 全部",
+                    "博客园 · 博客文章",
+                    "Gitee · 全部",
+                    "Gitee · 仓库",
+                    "Gitee · Issue",
+                    "TikTok · 全部",
+                    "TikTok · 照片帖",
+                    "YouTube · 全部",
+                    "YouTube · 视频说明",
+                    "Steam · 全部",
+                    "Steam · 商店游戏",
+                    "Steam · 指南",
+                    "Steam · 创意工坊物品与合集",
+                    "Twitter/X · 全部",
+                    "Twitter/X · 推文",
+                    "Twitter/X · 长文 Article",
+                    "Pixiv · 全部",
+                    "Pixiv · 插画与漫画",
+                    "GitHub · 全部",
+                    "GitHub · 仓库",
+                    "GitHub · Issue",
+                    "GitLab · 全部",
+                    "GitLab · 仓库",
+                    "GitLab · Issue"
+                ],
+                "default": [],
+                "hint": "搜索平台或链接类型。命中任一排除项即跳过总结。"
+            },
             "enable": {
                 "description": "启用翻译",
                 "type": "bool",
@@ -1314,9 +1121,6 @@
             "llm": {
                 "description": "大模型接口",
                 "type": "object",
-                "condition": {
-                    "enable": true
-                },
                 "items": {
                     "provider_source": {
                         "description": "大模型提供商",
@@ -1325,7 +1129,7 @@
                             "AstrBot 内置提供商",
                             "插件自定义提供商"
                         ],
-                        "hint": "仅启用翻译后生效。选择 AstrBot 已配置的 LLM，或使用本插件独立配置的 OpenAI 兼容接口或 Ollama。",
+                        "hint": "供翻译与仓库总结使用。可选择 AstrBot 已配置的大模型，也可配置 OpenAI 兼容接口或 Ollama。",
                         "default": "AstrBot 内置提供商"
                     },
                     "astrbot_provider": {
@@ -1380,7 +1184,8 @@
                                 "description": "API Key",
                                 "type": "string",
                                 "hint": "仅本地使用，不会写入运行日志；仅选择“插件自定义提供商”时生效。",
-                                "default": ""
+                                "default": "",
+                                "secret": true
                             },
                             "model": {
                                 "description": "模型",
@@ -1397,14 +1202,8 @@
     "parse_rate_limit": {
         "description": "解析频率限制",
         "type": "object",
-        "hint": "最多解析次数填 0 表示不限制；启用限制时，时间窗必须大于 0。记录会持久化到插件运行时目录并自动裁剪。",
+        "hint": "同链接和同用户分别计数；次数或时间窗为 0 即关闭对应限制。",
         "items": {
-            "show_details": {
-                "description": "展开解析频率限制",
-                "type": "bool",
-                "default": false,
-                "hint": "仅控制配置项的展开显示，收起后仍按已保存的配置运行。"
-            },
             "same_link": {
                 "description": "同链接限制",
                 "type": "object",
@@ -1422,9 +1221,6 @@
                         "hint": "必须大于 0；填 0 会关闭此限制。只统计该秒数内的记录，也用于自动裁剪持久化记录。",
                         "default": 3600
                     }
-                },
-                "condition": {
-                    "show_details": true
                 }
             },
             "same_user": {
@@ -1444,9 +1240,6 @@
                         "hint": "必须大于 0；填 0 会关闭此限制。只统计该秒数内的记录，也用于自动裁剪持久化记录。",
                         "default": 3600
                     }
-                },
-                "condition": {
-                    "show_details": true
                 }
             }
         }
@@ -1459,7 +1252,7 @@
             "use_cookie": {
                 "description": "携带 Cookie 解析",
                 "type": "bool",
-                "hint": "缓存目录可用时，将 DASH 视频下载到缓存目录后发送。",
+                "hint": "使用账号 Cookie 解析 B站资源，画质受账号权限与片源限制；私密凭据仅供本地请求使用。",
                 "default": false
             },
             "cookie": {
@@ -1469,7 +1262,8 @@
                 "condition": {
                     "use_cookie": true
                 },
-                "default": ""
+                "default": "",
+                "secret": true
             },
             "max_quality": {
                 "description": "最高画质",
@@ -1543,7 +1337,8 @@
                 "description": "腾讯元宝 Cookie",
                 "type": "string",
                 "hint": "仅供视频号使用，公众号无需填写。登录 yuanbao.tencent.com 后，从浏览器开发者工具 Network 中复制该站点请求的完整 Cookie 头；用于视频号短链解析，失效后需手动更新。已带有效 token 和 eid 的预览长链可不填写。",
-                "default": ""
+                "default": "",
+                "secret": true
             }
         }
     },
@@ -1568,7 +1363,8 @@
                 "description": "Pixiv Cookie",
                 "type": "string",
                 "hint": "包含 PHPSESSID 的完整 Cookie 字符串；仅本地使用，不要公开分享。登录 pixiv.net 后从浏览器开发者工具复制。",
-                "default": ""
+                "default": "",
+                "secret": true
             }
         }
     },
@@ -1643,7 +1439,7 @@
     "proxy": {
         "description": "代理设置",
         "type": "object",
-        "hint": "先填写 HTTP / HTTPS 代理地址，再展开选择使用代理的平台或资源；地址为空时所有代理开关均不生效。收起不影响已保存的代理配置。",
+        "hint": "填写代理地址并选择需要代理的请求。",
         "items": {
             "address": {
                 "description": "代理地址",
@@ -1651,115 +1447,46 @@
                 "hint": "格式：http://host:port 或 https://host:port",
                 "default": ""
             },
-            "show_details": {
-                "description": "展开各平台代理设置",
-                "type": "bool",
-                "default": false,
-                "hint": "仅控制配置项的展开显示，收起后仍按已保存的配置运行。"
-            },
-            "font": {
-                "description": "字体资源下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”；用于补全文本图片渲染所需的默认字体。",
-                "default": false,
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "xiaoheihe_video": {
-                "description": "直接解析小黑盒的视频下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”；Steam 的小黑盒路径由“Steam 代理”中的开关控制。",
-                "default": true,
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "tiktok": {
-                "description": "TikTok 解析与下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”。",
-                "default": false,
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "youtube": {
-                "description": "YouTube 解析、视频与封面下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”；YouTube 在部分网络环境下必须使用代理。",
-                "default": true,
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "steam": {
-                "description": "Steam 代理",
-                "type": "object",
-                "hint": "需要先填写“代理地址”；解析开关控制 Steam 商店、社区页面或小黑盒详情接口请求，图片和视频开关分别控制媒体下载。",
-                "items": {
-                    "parse": {
-                        "description": "解析",
-                        "type": "bool",
-                        "default": false
-                    },
-                    "image": {
-                        "description": "图片下载",
-                        "type": "bool",
-                        "default": true
-                    },
-                    "video": {
-                        "description": "视频下载",
-                        "type": "bool",
-                        "default": true
-                    }
-                },
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "twitter": {
-                "description": "Twitter 代理",
-                "type": "object",
-                "hint": "需要先填写“代理地址”。",
-                "items": {
-                    "parse": {
-                        "description": "解析",
-                        "type": "bool",
-                        "default": false
-                    },
-                    "image": {
-                        "description": "图片下载",
-                        "type": "bool",
-                        "default": true
-                    },
-                    "video": {
-                        "description": "视频下载",
-                        "type": "bool",
-                        "default": true
-                    }
-                },
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "pixiv": {
-                "description": "Pixiv 解析与图片下载使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”。",
-                "default": false,
-                "condition": {
-                    "show_details": true
-                }
-            },
-            "github": {
-                "description": "GitHub 解析使用代理",
-                "type": "bool",
-                "hint": "需要先填写“代理地址”；用于获取公开仓库信息与截取 README。",
-                "default": false,
-                "condition": {
-                    "show_details": true
-                }
+            "uses": {
+                "description": "使用代理的用途",
+                "type": "list",
+                "options": [
+                    "font",
+                    "xiaoheihe_video",
+                    "tiktok",
+                    "youtube",
+                    "steam.parse",
+                    "steam.image",
+                    "steam.video",
+                    "twitter.parse",
+                    "twitter.image",
+                    "twitter.video",
+                    "pixiv",
+                    "github"
+                ],
+                "labels": [
+                    "字体资源下载使用代理",
+                    "直接解析小黑盒的视频下载使用代理",
+                    "TikTok 解析与下载使用代理",
+                    "YouTube 解析、视频与封面下载使用代理",
+                    "Steam · 解析",
+                    "Steam · 图片下载",
+                    "Steam · 视频下载",
+                    "Twitter/X · 解析",
+                    "Twitter/X · 图片下载",
+                    "Twitter/X · 视频下载",
+                    "Pixiv 解析与图片下载使用代理",
+                    "GitHub 解析使用代理"
+                ],
+                "default": [
+                    "xiaoheihe_video",
+                    "youtube",
+                    "steam.image",
+                    "steam.video",
+                    "twitter.image",
+                    "twitter.video"
+                ],
+                "hint": "仅对选中的请求使用代理地址。"
             }
         }
     },

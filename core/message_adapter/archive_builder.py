@@ -14,11 +14,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ..logger import logger
+
 from ..storage.cache_marker import (
     EXPIRY_FILE_NAME,
     MARKER_FILE_NAME,
     stamp_subdir,
 )
+from ..translation.repository_summary import format_repository_summary
 
 
 _INVALID_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -132,6 +134,10 @@ def format_archive_metadata(
     _append_field(lines, "作者", metadata.get("author"))
     _append_field(lines, "发布时间", metadata.get("timestamp"))
     _append_field(lines, "简介", metadata.get("desc"))
+    if metadata.get("content_summary"):
+        lines.append(metadata["content_summary"])
+    if metadata.get("repository_summary"):
+        lines.append(format_repository_summary(metadata["repository_summary"]))
     _append_field(lines, "原始链接", metadata.get("url") or metadata.get("source_url"))
     _append_field(lines, "访问状态", metadata.get("access_status"))
     _append_field(lines, "访问提示", metadata.get("access_message"))
@@ -202,6 +208,8 @@ def _build_archive_details(
         "author",
         "timestamp",
         "desc",
+        "repository_summary",
+        "content_summary",
         "url",
         "source_url",
         "access_status",

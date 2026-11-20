@@ -193,6 +193,7 @@ class TwitterParser(BaseVideoParser):
         media_urls = {
             "images": [],
             "videos": [],
+            "summary_subtype": "article" if article_text else "post",
             "title": article_title
             or (f"{author} 的推文" if author else "Twitter 推文"),
             "text": desc,
@@ -807,6 +808,7 @@ class TwitterParser(BaseVideoParser):
             video_headers = build_request_headers(is_video=True)
 
             metadata_base = {
+                "summary_subtype": media_info.get("summary_subtype", "post"),
                 "url": url,
                 "title": title or (f"{author} 的推文" if author else "Twitter 推文"),
                 "author": author,

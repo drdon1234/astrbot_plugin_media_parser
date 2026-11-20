@@ -47,16 +47,26 @@ from .core.message_adapter.archive_builder import (
     cleanup_expired_zip_workspaces,
     cleanup_zip_archive,
 )
+from .core.translation.content_summary import ContentSummarizer
 from .core.translation import MetadataTranslator
+from .core.translation.repository_summary import RepositorySummarizer
 from .core.config_manager import ConfigManager
 from .core.interaction.platform.bilibili import BilibiliAdminCookieAssistManager
+
+
+# 宿主先导入插件，再按新 Schema 清理旧字段。只处理宿主插件目录中的本插件配置。
+_plugin_directory = Path(__file__).absolute().parent
+if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
+    from astrbot.core.utils.astrbot_path import get_astrbot_config_path
+
+    ConfigManager.upgrade_config_file(Path(get_astrbot_config_path()) / f"{_plugin_directory.name}_config.json")
 
 
 @register(
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.13.3",
+    "1.14.0",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -74,6 +84,8 @@ class VideoParserPlugin(Star):
             cfg.translation,
             self.context,
         )
+        self.content_summarizer = ContentSummarizer(self.metadata_translator)
+        self.repository_summarizer = RepositorySummarizer(self.metadata_translator)
         self.bilibili_auth_runtime = (
             self.bilibili_parser.get_auth_runtime() if self.bilibili_parser else None
         )
@@ -984,6 +996,9 @@ class VideoParserPlugin(Star):
             elif cfg.admin.debug_mode:
                 self.logger.debug("富媒体输出已关闭，跳过下载阶段")
 
+            if cfg.translation.summary_categories - {"repository"}:
+                await self.content_summarizer.apply(processed_metadata_list, self._event_context(event))
+
             if zip_requested:
                 await send_opening_once()
                 await self._build_translation_nodes_after_task(
@@ -1504,6 +1519,8 @@ class VideoParserPlugin(Star):
                         )
                     return
 
+                if cfg.translation.repository_summary:
+                    await self.repository_summarizer.apply(metadata_list, self._event_context(event))
                 translation_task, translation_metadata_list = self._start_translation_task(
                     metadata_list, event
                 )

@@ -711,6 +711,7 @@ class XueqiuParser(BaseVideoParser):
             "desc": desc,
             "timestamp": self._format_timestamp(status.get("created_at")),
             "platform": "xueqiu",
+            "summary_subtype": "article" if status.get("title") and not retweeted else "post",
             "video_urls": video_urls,
             "image_urls": image_urls,
             "image_headers": build_request_headers(

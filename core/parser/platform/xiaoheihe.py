@@ -1639,6 +1639,7 @@ class XiaoheiheParser(BaseVideoParser):
                 "title": title or "",
                 "author": "",
                 "desc": desc,
+                "summary_subtype": "game",
                 "timestamp": release_date or "",
                 "video_urls": video_urls,
                 "image_urls": image_urls,

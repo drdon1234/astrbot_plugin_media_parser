@@ -34,7 +34,7 @@ NO_LINE_END_CHARS = "([{（【《〈「『“‘"
 METADATA_LABELS = frozenset(
     {
         "标题", "作者", "发布时间", "视频大小", "时长", "访问提示", "解析失败",
-        "原始链接", "点赞", "时间", "简介/正文",
+        "原始链接", "点赞", "时间", "简介/正文", "许可证", "Star", "更新时间", "最近活动",
     }
 )
 
@@ -58,6 +58,15 @@ class ShareHeader:
 
 
 @dataclass
+class _LanguageShare:
+    """保存语言图例的可见文字、色值与条段长度。"""
+
+    label: str
+    color: str
+    percent: float
+
+
+@dataclass
 class _TextLine:
     """保存测量后的文字行，使绘制与分页共用同一份尺寸。"""
 
@@ -69,6 +78,9 @@ class _TextLine:
     pictures: tuple[str, ...] = ()
     picture_widths: tuple[int, ...] = ()
     picture_crops: tuple[tuple[int, int, int, int] | None, ...] = ()
+    shares: tuple[_LanguageShare, ...] = ()
+    column_width: int = 0
+    tree_folder: bool = False
 
 
 async def render_text_metadata_images(
@@ -573,6 +585,41 @@ def _draw_page(
                             line.kind, line.picture_widths, line.picture_crops)
             if embedded is not None:
                 embedded.extend(line.pictures)
+        elif line.kind == "language_bar":
+            bar_width = width - body_x * 2
+            bar_height = max(7, fonts["meta"].size // 2)
+            draw.rounded_rectangle((body_x, body_y, body_x + bar_width - 1, body_y + bar_height),
+                                   radius=bar_height // 2, fill=palette["rule"])
+            total = max(100, sum(item.percent for item in line.shares))
+            left, accumulated = 0, 0.0
+            for item in line.shares:
+                accumulated += item.percent
+                right = min(bar_width, round(accumulated / total * bar_width))
+                if right > left:
+                    draw.rectangle((body_x + left, body_y, body_x + right - 1, body_y + bar_height),
+                                   fill=item.color)
+                left = right
+        elif line.kind == "language_legend":
+            for index, item in enumerate(line.shares):
+                x = body_x + index * line.column_width
+                radius = max(3, fonts["meta"].size // 5)
+                top = body_y + fonts["meta"].size // 3
+                draw.ellipse((x, top, x + 2 * radius, top + 2 * radius), fill=item.color)
+                _draw_text(draw, x + 2 * radius + 8, body_y, item.label, fonts["meta"], palette["body_text"])
+        elif line.kind == "tree":
+            draw.rectangle((body_x, body_y, width - body_x, body_y + line.height - 1), fill=palette["background"])
+            step = line.column_width
+            center = body_y + line.height // 2
+            for level, edge in enumerate(line.label):
+                x = body_x + 14 + level * step
+                if edge != " ":
+                    bottom = center if edge == "└" else body_y + line.height
+                    draw.line((x, body_y, x, bottom), fill=palette["muted_text"])
+                if edge in "├└":
+                    draw.line((x, center, x + step // 2, center), fill=palette["muted_text"])
+            color = palette["accent"] if line.tree_folder else palette["body_text"]
+            font = fonts["label"] if line.tree_folder else fonts["meta"]
+            _draw_text(draw, body_x + 14 + len(line.label) * step, body_y + 5, line.text, font, color)
         elif line.kind == "separator":
             rule_y = body_y + line.height // 2
             draw.line(
@@ -612,6 +659,7 @@ class _FallbackFont:
 
     def __init__(self, primary: object, emoji: object) -> None:
         self.primary = primary
+        self.size = primary.size
         self.emoji = emoji
         self.coverage: dict[str, bool] = {}
         missing = emoji.getmask("\U0010ffff")
@@ -747,6 +795,35 @@ def _emoji_font_is_available() -> bool:
     return True
 
 
+def _language_lines(draw: Any, value: str, fonts: dict[str, object], width: int) -> List[_TextLine]:
+    """从完整的语言占比行排出色条与等宽图例列；异常格式沿用原文。"""
+    colors = {"Python": "#3572A5", "Vue": "#41B883", "TypeScript": "#3178C6",
+              "JavaScript": "#D7B632", "HTML": "#E36B45", "CSS": "#8064AA",
+              "Java": "#B07219", "Go": "#00A5C6", "Shell": "#78A953"}
+    fallback = ("#A67796", "#647E9C", "#AC8057", "#568D87", "#8377A6", "#9B9056")
+    shares = []
+    for index, token in enumerate(value.removeprefix("语言占比：").split(" · ")):
+        match = re.fullmatch(r"(.+?) ([<>]?)(\d{1,3}(?:\.\d{1,2})?)%", token)
+        if not match:
+            return []
+        percent = float(match[3])
+        if percent > 100:
+            return []
+        shares.append(_LanguageShare(token, colors.get(match[1], fallback[index % len(fallback)]), percent))
+    font = fonts["meta"]
+    widest = max(_text_width(draw, item.label, font) for item in shares) + font.size + 20
+    if widest > width:
+        return []
+    columns = min(3, max(1, width // widest))
+    height = _line_height(draw, font, 1.6)
+    lines = [_TextLine("语言占比", "section", _line_height(draw, fonts["section"], 1.6), keep_with_next=True),
+             _TextLine("", "language_bar", height, shares=tuple(shares), keep_with_next=True)]
+    for index in range(0, len(shares), columns):
+        lines.append(_TextLine("", "language_legend", height, shares=tuple(shares[index:index + columns]),
+                               column_width=width // columns))
+    return lines
+
+
 def _layout_text(
     draw: Any,
     text: str,
@@ -759,15 +836,18 @@ def _layout_text(
     lines: List[_TextLine] = []
     body_height = _line_height(draw, fonts["body"], line_spacing)
     fence = ""
+    tree = False
     for raw_line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         value = raw_line.strip()
         marker = re.match(r"^(`{3,}|~{3,})(.*)$", value)
         if marker:
             if not fence:
                 fence = marker[1]
+                tree = marker[2].strip() == "tree"
                 continue
             if marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
                 fence = ""
+                tree = False
                 continue
         if not value:
             if lines and lines[-1].kind not in ("blank", "separator"):
@@ -781,6 +861,30 @@ def _layout_text(
                 lines.pop()
             lines.append(_TextLine("", "separator", body_height, keep_with_next=True))
             continue
+        if not fence and value.startswith("语言占比："):
+            language_lines = _language_lines(draw, value, fonts, max_width)
+            if language_lines:
+                lines.extend(language_lines)
+                continue
+        if tree:
+            # 保留空格前缀，最后一个父节点的子项没有左侧竖线。
+            node = re.fullmatch(r"((?:│   |    )*)([├└])── (.+)", raw_line)
+            if node:
+                guides = node[1][::4] + node[2]
+                folder = node[3].endswith("/")
+                font = fonts["label"] if folder else fonts["meta"]
+                step = font.size + 4
+                available = max_width - 28 - len(guides) * step
+                if available > font.size:
+                    parts = _wrap_text(draw, node[3], font, available)
+                    if lines and lines[-1].kind == "tree" and len(lines[-1].label) < len(guides):
+                        lines[-1].keep_with_next = True
+                    height = _line_height(draw, font, 1.4) + 4
+                    for index, part in enumerate(parts):
+                        lines.append(_TextLine(part, "tree", height, guides, column_width=step,
+                                               tree_folder=folder, keep_with_next=index + 1 < len(parts)))
+                        guides = guides.replace("├", "│").replace("└", " ")
+                    continue
         label, content = _split_label(value) if not fence else ("", "")
         kind = "body"
         heading = re.match(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", value) if not fence else None
@@ -788,7 +892,7 @@ def _layout_text(
             kind, value, label = "section", heading[1], ""
         elif label.rstrip("：:") == "标题":
             kind, value, label = "title", content.strip(), ""
-        elif not fence and (value in ("简介/正文：", "简介/正文:", "翻译") or re.fullmatch(
+        elif not fence and (value in ("简介/正文：", "简介/正文:", "仓库简介：", "翻译") or re.fullmatch(
             r"(?:热评|分集弹幕|翻译)[（(].+?[）)][：:]?", value,
         )):
             kind, label = "section", ""

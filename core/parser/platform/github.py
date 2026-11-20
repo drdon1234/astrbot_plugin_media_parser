@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 import aiohttp
 
@@ -13,7 +13,10 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import (
+    build_request_headers, format_directory_tree, format_percentage, select_snapshot_files,
+    verified_blob_excerpt,
+)
 from .base import BaseVideoParser
 
 
@@ -31,7 +34,6 @@ RESERVED_ROUTES = frozenset({
     "organizations", "orgs", "search", "settings", "site", "sponsors", "topics",
     "users",
 })
-MAX_DESCRIPTION_LENGTH = 400
 MAX_REDIRECTS = 2
 README_SELECTOR = 'article.markdown-body, #readme .markdown-body'
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -118,7 +120,7 @@ def _api_url(url: str) -> bool:
 class GitHubParser(BaseVideoParser):
     """通过官方接口解析公开仓库概况、README 截图入口和议题评论。"""
 
-    def __init__(self, proxy_url: Optional[str] = None, hot_comment_count: int = 0) -> None:
+    def __init__(self, proxy_url: Optional[str] = None, hot_comment_count: int = 0, repository_summary: bool = False) -> None:
         """初始化仓库解析器。
 
         Args:
@@ -126,6 +128,7 @@ class GitHubParser(BaseVideoParser):
             hot_comment_count: 议题普通评论条数上限，零表示不请求。
         """
         super().__init__("github")
+        self.repository_summary = repository_summary
         self.proxy_url = proxy_url
         try:
             self.hot_comment_count = max(0, int(hot_comment_count))
@@ -166,10 +169,11 @@ class GitHubParser(BaseVideoParser):
                 links.append(candidate)
         return links
 
-    async def _issue_json(
+    async def _request_json(
         self, session: aiohttp.ClientSession, path: str, params: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """读取有限大小的官方议题响应，不跟随议题转移跳转。"""
+        """读取有限大小的官方接口响应，不跟随子资源重定向。"""
+        response_limit = 100_000 if "/git/blobs/" in path else MAX_RESPONSE_BYTES
         try:
             async with session.get(
                 "https://api.github.com/repos/" + path, params=params,
@@ -178,18 +182,18 @@ class GitHubParser(BaseVideoParser):
                 timeout=aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT),
             ) as response:
                 if response.status != 200:
-                    raise RuntimeError(f"GitHub 议题接口请求失败（HTTP {response.status}），内容可能不可见或访问受限")
+                    raise RuntimeError(f"GitHub 接口请求失败（HTTP {response.status}），内容可能不可见或访问受限")
                 chunks, size = [], 0
                 async for chunk in response.content.iter_chunked(65536):
                     size += len(chunk)
-                    if size > MAX_RESPONSE_BYTES:
-                        raise RuntimeError("GitHub 议题响应过大，已停止读取")
+                    if size > response_limit:
+                        raise RuntimeError("GitHub 接口响应过大，已停止读取")
                     chunks.append(chunk)
                 return json.loads(b"".join(chunks))
         except asyncio.CancelledError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RecursionError) as exc:
-            raise RuntimeError("GitHub 议题网络请求失败或响应格式无效") from exc
+            raise RuntimeError("GitHub 网络请求失败或响应格式无效") from exc
 
     @staticmethod
     def _comment_time(value: Any) -> str:
@@ -212,7 +216,7 @@ class GitHubParser(BaseVideoParser):
             return comments
         try:
             for page in range(1, MAX_COMMENT_PAGES + 1):
-                rows = await self._issue_json(session, f"{path}/issues/{issue_id}/comments", {"per_page": page_size, "page": page})
+                rows = await self._request_json(session, f"{path}/issues/{issue_id}/comments", {"per_page": page_size, "page": page})
                 if not isinstance(rows, list):
                     raise RuntimeError("GitHub 议题评论列表格式无效")
                 previous = len(seen)
@@ -319,13 +323,80 @@ class GitHubParser(BaseVideoParser):
         if not matches_request:
             raise RuntimeError("GitHub 接口返回了其他仓库的数据")
 
+    async def _overview_json(
+        self, session: aiohttp.ClientSession, path: str,
+    ) -> Any:
+        """补充概况失败时保留已取得的仓库信息。"""
+        try:
+            return await self._request_json(session, path)
+        except RuntimeError as exc:
+            logger.warning(f"GitHub 仓库补充信息获取失败：{exc}")
+            return None
+
+    async def _directory_snapshot(
+        self, session: aiohttp.ClientSession, project: Dict[str, Any], evidence: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """列出默认分支根目录，并展开一个实际存在的源码目录。"""
+        branch = project.get("default_branch")
+        if not isinstance(branch, str) or not branch.strip() or branch in (".", ".."):
+            return ""
+        path = project["full_name"]
+        commit = ""
+        if evidence is not None:
+            head = await self._overview_json(session, path + '/branches/' + quote(branch, safe=""))
+            revision = head.get("commit") if isinstance(head, dict) and head.get("name") == branch else None
+            candidate = revision.get("sha") if isinstance(revision, dict) else None
+            if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{40}", candidate):
+                commit = candidate
+        tree_url = path + "/git/trees/"
+        root = await self._overview_json(session, tree_url + quote(commit or branch, safe=""))
+        rows = root.get("tree") if isinstance(root, dict) else None
+        if not isinstance(rows, list):
+            return ""
+        entries = [(row.get("path"), row.get("type")) for row in rows if isinstance(row, dict)]
+        candidates = [(row.get("path"), row.get("type"), row.get("mode"), row.get("sha"))
+                      for row in rows if commit and isinstance(row, dict)]
+        root_note = "目录条目已被平台截断" if root.get("truncated") else ""
+        expanded_name, child_note = "", ""
+        child_entries = []
+        folders = {row.get("path"): row for row in rows if isinstance(row, dict)
+                   and row.get("type") == "tree" and isinstance(row.get("path"), str)}
+        for name in ("src", path.rsplit("/", 1)[-1].lower(), "core", "packages", "app", "lib", "cmd", "apps"):
+            if name not in folders:
+                continue
+            sha = folders[name].get("sha")
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", sha):
+                continue
+            subtree = await self._overview_json(session, tree_url + sha)
+            children = subtree.get("tree") if isinstance(subtree, dict) else None
+            if isinstance(children, list):
+                expanded_name = name
+                if commit:
+                    candidates.extend((name + "/" + item["path"], item.get("type"), item.get("mode"), item.get("sha"))
+                                      for item in children if isinstance(item, dict) and isinstance(item.get("path"), str))
+                child_entries = [
+                    (item.get("path"), item.get("type")) for item in children if isinstance(item, dict)
+                ]
+                if subtree.get("truncated"):
+                    child_note = "目录条目已被平台截断"
+            break
+        tree = format_directory_tree(entries, expanded_name, child_entries, root_note, child_note)
+        if commit and evidence is not None:
+            files = []
+            for filename, blob in select_snapshot_files(candidates):
+                data = await self._overview_json(session, path + "/git/blobs/" + blob)
+                excerpt = verified_blob_excerpt(data, blob, filename)
+                if excerpt:
+                    files.append({"path": filename, "text": excerpt})
+            if files:
+                evidence.update(commit=commit, tree=tree[:1600], files=files)
+        return f"### 目录快照 · {branch} 根目录\n{tree}" if tree else ""
+
     @staticmethod
-    def _build_description(repository: Dict[str, Any]) -> str:
+    def _build_description(repository: Dict[str, Any], languages: Any) -> str:
         """将仓库简介和关键统计整理为简短中文概况。"""
         description = repository.get("description")
-        description = " ".join(description.split()) if isinstance(description, str) else ""
-        if len(description) > MAX_DESCRIPTION_LENGTH:
-            description = description[:MAX_DESCRIPTION_LENGTH].rstrip() + "…"
+        description = description.strip() if isinstance(description, str) else ""
         language = repository.get("language")
         language = language.strip() if isinstance(language, str) else ""
         counts = []
@@ -346,12 +417,20 @@ class GitHubParser(BaseVideoParser):
             if repository.get(key) is True:
                 states.append(label)
         lines = [
-            description or "暂无仓库简介",
-            f"主要语言：{language or '未标注'}",
+            description or "暂无仓库简介", "",
             f"Star：{counts[0]} · Fork：{counts[1]}",
-            f"许可证：{license_name}",
-            "状态：" + " · ".join(states),
+            f"许可证：{license_name}  ·  状态：" + " · ".join(states),
         ]
+        language_line = f"主要语言：{language or '未标注'}"
+        if isinstance(languages, dict):
+            sizes = [(name, size) for name, size in languages.items()
+                     if isinstance(name, str) and name.strip() and type(size) is int and size > 0]
+            total = sum(size for _, size in sizes)
+            if total:
+                sizes.sort(key=lambda item: -item[1])
+                language_line = "语言占比：" + " · ".join(
+                    f"{name} {format_percentage((size / total) * 100)}" for name, size in sizes
+                )
         updated_at = repository.get("updated_at")
         if isinstance(updated_at, str):
             try:
@@ -362,6 +441,7 @@ class GitHubParser(BaseVideoParser):
                     )
             except (ValueError, OverflowError):
                 pass
+        lines.extend(["", language_line])
         return "\n".join(lines)
 
     async def parse(
@@ -384,7 +464,7 @@ class GitHubParser(BaseVideoParser):
             repository = await self._fetch_repository(session, owner, repo)
             if issue_id:
                 path = repository["full_name"]
-                issue = await self._issue_json(session, f"{path}/issues/{issue_id}")
+                issue = await self._request_json(session, f"{path}/issues/{issue_id}")
                 expected_url = f"https://github.com/{path}/issues/{issue_id}"
                 if (not isinstance(issue, dict) or type(issue.get("number")) is not int
                         or str(issue["number"]) != issue_id or issue.get("html_url") != expected_url
@@ -404,12 +484,19 @@ class GitHubParser(BaseVideoParser):
                 if self.hot_comment_count:
                     metadata["hot_comments"] = await self._comments(session, path, issue_id)
                 return metadata
+            evidence = {} if self.repository_summary else None
+            languages, snapshot = await asyncio.gather(
+                self._overview_json(session, repository["full_name"] + "/languages"),
+                self._directory_snapshot(session, repository, evidence),
+            )
+        description = self._build_description(repository, languages)
         return {
             "url": "https://github.com/" + repository["full_name"],
             "title": repository["full_name"],
             "author": repository["owner"]["login"],
-            "desc": self._build_description(repository),
+            "desc": description + ("\n\n" + snapshot if snapshot else ""),
             "platform": self.name,
+            **({"repository_snapshot": evidence} if evidence else {}),
             "readme_url": "https://github.com/" + repository["full_name"],
             "readme_selector": README_SELECTOR,
             "proxy_url": self.proxy_url,

@@ -714,6 +714,7 @@ class ToutiaoParser(BaseVideoParser):
                     state=state,
                     image_urls=[],
                 )
+                metadata["summary_subtype"] = "post" if context["content_type"] == "w" else "article"
                 metadata["image_urls"] = await self._collect_article_image_candidates(
                     session,
                     page_url,

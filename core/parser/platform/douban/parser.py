@@ -230,6 +230,11 @@ class DoubanParser(BaseVideoParser):
             metadata['video_headers'] = {**HEADERS, 'Referer': metadata['url']}
             if not any(metadata.get(key) for key in ('desc', 'image_urls', 'video_urls')):
                 raise RuntimeError('豆瓣页面未包含可读取的公开正文或媒体')
+            metadata.setdefault("summary_subtype", {
+                "reading": "reading", "topic": "post", "note": "article", "status": "post",
+                "review": "article", "comment": "post", "discussion": "post", "photo": "gallery",
+                "album": "gallery", "trailer": "",
+            }.get(kind, "item"))
             await web.prepare_media(metadata)
             return metadata
 

@@ -26,6 +26,9 @@ class MediaMetadata(TypedDict, total=False):
     # README 截图请求：由平台提供规范仓库地址与正文区域选择器，在下载阶段生成本地图片。
     readme_url: str
     readme_selector: str
+    # 总结调用前消费的短期快照，原始摘录不参与消息、翻译或归档。
+    summary_subtype: str
+    repository_snapshot: Dict[str, Any]
 
     video_urls: List[List[str]]
     video_cover_urls: List[List[str]]
@@ -65,6 +68,8 @@ class MediaMetadata(TypedDict, total=False):
     # ── 流程控制与翻译阶段 ──────────────────────────────
 
     _enable_text_metadata: bool
+    content_summary: str
+    repository_summary: Dict[str, Any]
     _enable_rich_media: bool
     _text_metadata_fields: Dict[str, bool]
     translation_target_language: str

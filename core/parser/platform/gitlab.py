@@ -14,7 +14,10 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import (
+    build_request_headers, format_directory_tree, format_percentage, select_snapshot_files,
+    verified_blob_excerpt,
+)
 from .base import BaseVideoParser
 
 
@@ -34,7 +37,6 @@ PROJECT_ROUTES = frozenset({
     "graphs", "issues", "jobs", "merge_requests", "network", "new", "pipelines",
     "raw", "releases", "repository", "settings", "tags", "tree", "wiki", "wikis",
 })
-MAX_DESCRIPTION_LENGTH = 400
 MAX_COMMENT_PAGES = 3
 MAX_NOTES_PER_DISCUSSION = 20
 MAX_REDIRECTS = 2
@@ -127,13 +129,14 @@ def _timestamp(value: Any) -> str:
 class GitLabParser(BaseVideoParser):
     """解析 gitlab.com 上的公开项目及 Issue，不读取仓库文件。"""
 
-    def __init__(self, hot_comment_count: int = 0) -> None:
+    def __init__(self, hot_comment_count: int = 0, repository_summary: bool = False) -> None:
         """初始化解析器。
 
         Args:
             hot_comment_count: 议题评论总数上限，零表示不请求讨论。
         """
         super().__init__("gitlab")
+        self.repository_summary = repository_summary
         try:
             self.hot_comment_count = max(0, int(hot_comment_count))
         except (TypeError, ValueError, OverflowError):
@@ -176,6 +179,7 @@ class GitLabParser(BaseVideoParser):
         params: Optional[Dict[str, Any]] = None, project_redirects: bool = False,
     ) -> Tuple[Any, str]:
         """请求官方只读接口，仅项目详情允许有限且校验过的迁移跳转。"""
+        response_limit = 100_000 if "/repository/blobs/" in url else MAX_RESPONSE_BYTES
         try:
             for redirect_count in range(MAX_REDIRECTS + 1):
                 async with session.get(
@@ -200,7 +204,7 @@ class GitLabParser(BaseVideoParser):
                     chunks, total = [], 0
                     async for chunk in response.content.iter_chunked(65536):
                         total += len(chunk)
-                        if total > MAX_RESPONSE_BYTES:
+                        if total > response_limit:
                             raise RuntimeError("GitLab 接口响应超过大小限制")
                         chunks.append(chunk)
                     return json.loads(b"".join(chunks)), url
@@ -313,19 +317,85 @@ class GitLabParser(BaseVideoParser):
             logger.warning(f"GitLab 议题评论获取失败，保留正文及已取得评论：{exc}")
         return comments
 
+    async def _overview_json(
+        self, session: aiohttp.ClientSession, path: str, params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """补充概况失败时保留已取得的仓库信息。"""
+        try:
+            data, _ = await self._request_json(session, path, params)
+            return data
+        except RuntimeError as exc:
+            logger.warning(f"GitLab 仓库补充信息获取失败：{exc}")
+            return None
+
+    async def _directory_snapshot(
+        self, session: aiohttp.ClientSession, project: Dict[str, Any], evidence: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """列出默认分支根目录，并展开一个实际存在的源码目录。"""
+        branch = _text(project.get("default_branch"))
+        if not branch:
+            return ""
+        path = f"{BASE_URL}/api/v4/projects/{project['id']}"
+        commit = ""
+        if evidence is not None:
+            head = await self._overview_json(session, path + '/repository/branches/' + quote(branch, safe=""))
+            revision = head.get("commit") if isinstance(head, dict) and head.get("name") == branch else None
+            candidate = revision.get("id") if isinstance(revision, dict) else None
+            if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{40}", candidate):
+                commit = candidate
+        params = {"ref": commit or branch, "per_page": 100}
+        tree_url = path + "/repository/tree"
+        rows = await self._overview_json(session, tree_url, params)
+        if not isinstance(rows, list):
+            return ""
+        entries = [(row.get("name"), row.get("type")) for row in rows if isinstance(row, dict)]
+        candidates = [(row.get("name"), row.get("type"), row.get("mode"), row.get("id"))
+                      for row in rows if commit and isinstance(row, dict)]
+        root_note = "仅列出接口首批条目" if len(rows) == 100 else ""
+        expanded_name, child_note = "", ""
+        child_entries = []
+        folders = {name for name, kind in entries if kind == "tree" and isinstance(name, str)}
+        for name in ("src", project["path"], "core", "packages", "app", "lib", "cmd", "apps"):
+            if name not in folders:
+                continue
+            children = await self._overview_json(session, tree_url, {**params, "path": name})
+            if isinstance(children, list):
+                expanded_name = name
+                if commit:
+                    candidates.extend((name + "/" + item["name"], item.get("type"), item.get("mode"), item.get("id"))
+                                      for item in children if isinstance(item, dict) and isinstance(item.get("name"), str))
+                child_entries = [
+                    (item.get("name"), item.get("type")) for item in children if isinstance(item, dict)
+                ]
+                if len(children) == 100:
+                    child_note = "仅列出接口首批条目"
+            break
+        tree = format_directory_tree(entries, expanded_name, child_entries, root_note, child_note)
+        if commit and evidence is not None:
+            files = []
+            for filename, blob in select_snapshot_files(candidates):
+                data = await self._overview_json(session, path + "/repository/blobs/" + blob)
+                excerpt = verified_blob_excerpt(data, blob, filename)
+                if excerpt:
+                    files.append({"path": filename, "text": excerpt})
+            if files:
+                evidence.update(commit=commit, tree=tree[:1600], files=files)
+        return f"### 目录快照 · {branch} 根目录\n{tree}" if tree else ""
+
     @staticmethod
     def _description(project: Dict[str, Any], languages: Any) -> str:
         """构建项目概况，不推断缺失的归档状态。"""
-        description = " ".join(_text(project.get("description")).split())
-        if len(description) > MAX_DESCRIPTION_LENGTH:
-            description = description[:MAX_DESCRIPTION_LENGTH].rstrip() + "…"
-        language = "未标注"
+        description = _text(project.get("description"))
+        language_line = "主要语言：未标注"
         if isinstance(languages, dict):
             values = [(name, value) for name, value in languages.items()
-                      if isinstance(name, str) and type(value) in {int, float}
+                      if _text(name) and type(value) in {int, float}
                       and 0 <= value <= 100 and math.isfinite(value)]
             if values:
-                language = max(values, key=lambda pair: pair[1])[0]
+                values.sort(key=lambda item: -item[1])
+                language_line = "语言占比：" + " · ".join(
+                    f"{name} {format_percentage(value)}" for name, value in values
+                )
         counts = [f"{project[key]:,}" if type(project.get(key)) is int and project[key] >= 0 else "未知"
                   for key in ("star_count", "forks_count")]
         license_data = project.get("license")
@@ -335,12 +405,12 @@ class GitLabParser(BaseVideoParser):
             states.append("已归档")
         if isinstance(project.get("forked_from_project"), dict):
             states.append("分叉仓库")
-        lines = [description or "暂无仓库简介", f"主要语言：{language}",
-                 f"Star：{counts[0]} · Fork：{counts[1]}", f"许可证：{license_name or '未标注'}",
-                 "状态：" + " · ".join(states)]
+        lines = [description or "暂无仓库简介", "", f"Star：{counts[0]} · Fork：{counts[1]}",
+                 f"许可证：{license_name or '未标注'}  ·  状态：" + " · ".join(states)]
         activity = _timestamp(project.get("last_activity_at"))
         if activity:
             lines.append("最近活动：" + activity)
+        lines.extend(["", language_line])
         return "\n".join(lines)
 
     async def parse(self, session: aiohttp.ClientSession, url: str) -> Optional[MediaMetadata]:
@@ -370,16 +440,17 @@ class GitLabParser(BaseVideoParser):
                 "video_urls": [], "image_urls": [],
             }
             if not issue_id:
-                languages = {}
-                try:
-                    languages, _ = await self._request_json(session, f"{BASE_URL}/api/v4/projects/{project['id']}/languages")
-                except asyncio.CancelledError:
-                    raise
-                except RuntimeError as exc:
-                    logger.warning(f"GitLab 项目语言获取失败，保留仓库概况：{exc}")
-                metadata["desc"] = self._description(project, languages)
+                evidence = {} if self.repository_summary else None
+                languages, snapshot = await asyncio.gather(
+                    self._overview_json(session, f"{BASE_URL}/api/v4/projects/{project['id']}/languages"),
+                    self._directory_snapshot(session, project, evidence),
+                )
+                description = self._description(project, languages)
+                metadata["desc"] = description + ("\n\n" + snapshot if snapshot else "")
                 metadata["readme_url"] = project_url
                 metadata["readme_selector"] = README_SELECTOR
+                if evidence:
+                    metadata["repository_snapshot"] = evidence
                 return metadata
             issue, _ = await self._request_json(session, f"{BASE_URL}/api/v4/projects/{project['id']}/issues/{issue_id}")
             self._validate_issue(issue, project, issue_id)

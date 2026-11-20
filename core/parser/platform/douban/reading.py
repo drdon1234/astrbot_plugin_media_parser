@@ -285,6 +285,7 @@ async def parse_reading(web: DoubanWeb, url: str, hot_comment_count: int) -> Med
     root = parse_html(source)
     if kind == "review":
         result = _review_metadata(root, page_url)
+        result["summary_subtype"] = "article"
     else:
         result = _work_metadata(root, kind, identity, page_url)
         kind, identity, page_url = _reading_target(result["url"])

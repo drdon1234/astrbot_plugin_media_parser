@@ -941,6 +941,7 @@ class SteamParser(BaseVideoParser):
             "use_image_proxy": self.use_image_proxy,
             "proxy_url": self.proxy_url if self.use_image_proxy else None,
         }
+        result["summary_subtype"] = "guide" if kind == "指南" else "workshop"
         if content_blocks:
             result["content_blocks"] = content_blocks
         comments = self._extract_page_comments(html_text)

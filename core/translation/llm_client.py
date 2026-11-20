@@ -218,6 +218,13 @@ class LLMClient:
         token_limit_field: Optional[str],
     ) -> ProviderHttpRequest:
         body = copy.deepcopy(payload)
+        images = body.pop("images", [])
+        if images:
+            message = body["messages"][-1]
+            message["content"] = [
+                {"type": "text", "text": message["content"]},
+                *({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image}} for image in images),
+            ]
         self._apply_token_limit_field(
             body,
             self._token_limit_field(token_limit_field),
@@ -241,6 +248,8 @@ class LLMClient:
         token_limit_field: Optional[str],
     ) -> ProviderHttpRequest:
         messages = copy.deepcopy(payload.get("messages") or [])
+        if payload.get("images"):
+            messages[-1]["images"] = list(payload["images"])
         body: Dict[str, Any] = {
             "model": self._model(),
             "messages": messages,

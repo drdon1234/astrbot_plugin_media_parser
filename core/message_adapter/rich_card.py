@@ -8,7 +8,7 @@ from typing import Awaitable, Callable
 
 from astrbot.api.message_components import Plain
 
-from ..config_manager import PARSER_OUTPUT_KEYS, TextMetadataConfig
+from ..config_manager import TextMetadataConfig
 from ..metadata_visibility import text_metadata_field_enabled
 from ..types import LinkBuildMeta, MediaMetadata
 from .node_builder import build_text_node
@@ -19,8 +19,8 @@ from .text_renderer import PictureBlock, ShareHeader
 def _platform_labels() -> dict[str, str]:
     """复用配置面板的平台名称，让新平台自动获得相同的显示名称。"""
     schema = Path(__file__).resolve().parents[2] / "_conf_schema.json"
-    items = json.loads(schema.read_text(encoding="utf-8"))["parsers"]["items"]
-    return {key: items[key]["description"] for key in PARSER_OUTPUT_KEYS}
+    choices = json.loads(schema.read_text(encoding="utf-8"))["parsers"]["items"]["text_platforms"]
+    return dict(zip(choices["options"], choices["labels"]))
 
 
 @dataclass

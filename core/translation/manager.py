@@ -250,6 +250,19 @@ class MetadataTranslator:
         event_context: Dict[str, Any],
     ) -> Dict[str, str]:
         payload = self._build_payload(items, target_language)
+        text = await self.complete(payload, event_context)
+        return self._parse_translation_response(text, {item["id"] for item in items})
+
+    async def complete(self, payload: Dict[str, Any], event_context: Dict[str, Any]) -> str:
+        """通过配置的提供商执行一次独立的文本生成。
+
+        Args:
+            payload: 仅含本次任务消息与生成参数的请求。
+            event_context: 仅用于选择 AstrBot 提供商的会话标识。
+
+        Returns:
+            提供商生成的文本。
+        """
         try:
             timeout_seconds = float(
                 getattr(self.config, "request_timeout_seconds", 60) or 60
@@ -259,16 +272,11 @@ class MetadataTranslator:
         except (TypeError, ValueError):
             timeout_seconds = 60.0
         if self._use_astrbot_provider():
-            text = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self._post_astrbot_completion(payload, event_context),
                 timeout=timeout_seconds,
             )
-        else:
-            text = await self.llm_client.complete(
-                payload,
-                timeout_seconds=max(1, int(timeout_seconds)),
-            )
-        return self._parse_translation_response(text, {item["id"] for item in items})
+        return await self.llm_client.complete(payload, timeout_seconds=max(1, int(timeout_seconds)))
 
     def _build_payload(
         self,
@@ -412,6 +420,7 @@ class MetadataTranslator:
             provider_id=provider_id,
             prompt=prompt,
             system_prompt=system_prompt,
+            image_urls=["base64://" + image for image in payload.get("images", [])] or None,
         )
         text = self._extract_astrbot_response_text(response)
         if not text:
@@ -458,6 +467,7 @@ class MetadataTranslator:
         provider_id: str,
         prompt: str,
         system_prompt: str,
+        image_urls: Optional[List[str]] = None,
     ) -> Any:
         if self.astrbot_context is None:
             raise RuntimeError("未接入 AstrBot Context，无法使用 AstrBot 内置提供商")
@@ -466,7 +476,7 @@ class MetadataTranslator:
                 self.astrbot_context.llm_generate(
                     chat_provider_id=provider_id,
                     prompt=prompt,
-                    image_urls=None,
+                    image_urls=image_urls,
                     system_prompt=system_prompt or None,
                 )
             )
@@ -481,7 +491,7 @@ class MetadataTranslator:
         return await self._maybe_await(
             provider.text_chat(
                 prompt=prompt,
-                image_urls=None,
+                image_urls=image_urls,
                 system_prompt=system_prompt or None,
             )
         )

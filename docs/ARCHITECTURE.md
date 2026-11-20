@@ -164,7 +164,7 @@ astrbot_plugin_media_parser/
 
 #### 输出开关
 
-`parsers.<平台>` 同时控制解析器是否启用以及该平台的输出模式。
+平台的文本与富媒体选择共同决定解析器是否启用及其输出模式。
 
 - `关闭`：不创建该平台解析器，不提取/解析该平台链接。
 - `全部发送`：发送文本元数据节点和图片/视频/音频节点。
@@ -173,7 +173,11 @@ astrbot_plugin_media_parser/
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语按链接发送：每条通过触发、平台输出和频率限制的链接，在调用解析器前发送一次，不依赖最终结果是富媒体还是文本。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
-`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 29 个平台开关默认开启（快手、微信、博客园除外）。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 29 个平台默认可用，使用 `message.hot_comments.excluded` 排除指定平台。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+
+`parsers.text_platforms`、`parsers.media_platforms` 决定各平台发哪些内容，`parsers.video_without_text` 对同时勾选两者的平台启用视频直发。
+
+`translation.summary_categories` 与 `translation.summary_exclusions` 决定总结范围。仓库按固定提交收集和验证有限摘录；其他链接在下载阶段结束后按正文、评论和正文图生成摘要，汇入消息与归档。
 
 Gitee、GitHub 和 GitLab 的仓库根结果提供文本概况以及 `readme_url` / `readme_selector` 截图请求；选择器由各平台模块维护，`ParserManager` 校验目标与当前规范仓库地址一致。`仅文本` 不启动浏览器，`仅富媒体` 只发送 README 截图。仓库概况及 Issue 正文仍复用文本元数据可见性、长度限制和图片渲染链路。Gitee、GitHub、GitLab 的评论开关仅作用于 Issue，Issue 不请求 README；未知赞数省略。
 
@@ -195,7 +199,7 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.packing.thresholds.image_count`、`video_count`、`node_count` 均为非负整数。阈值为 `0` 时表示不按该项触发聚合。
 
-`message.text_metadata.quote_user_message` 控制非聚合发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
+`message.quote_user_message` 控制非聚合发送时文本元数据节点是否引用对应的用户消息。媒体节点、热评节点、翻译节点和消息集合不引用用户消息。
 
 `message.reaction` 默认关闭，启用后可随机回应一个表情或依次回应列表中的表情。回应任务与解析并行，统一由父流程和插件终止流程回收；任一协议调用失败后停止本次回应。
 
@@ -203,13 +207,13 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.archive.command` 为空时关闭 ZIP 功能。配置命令后，用户必须引用含可解析链接的消息，并发送一条只包含该命令的消息；命令与 `admin.clean_cache_keyword` 相同时会被禁用。归档流程会按当前平台输出模式过滤链接并尝试下载原始媒体，不构建聊天节点，但在 `message.opening.enable` 开启时发送一次 `message.opening.archive_content`，也不会注册普通媒体中转 Token 或继承聊天的字段可见性和“视频仅发送封面”策略。`archive_builder.py` 在工作线程中以固定 `media_parser/序号_标题/` 布局写入 ZIP；每条链接生成 `metadata.txt` 与白名单化的 `details.json`，失败媒体记录链接和原因。`message.archive.max_total_size_mb` 限制单次归档媒体总量，配置值会限制在 1–4096 MB。源媒体在发送后立即清理；ZIP 至少保留 300 秒供 AstrBot/协议端延迟拉取，并用持久过期标记回收。
 
-`message.text_metadata.show_title/show_author/show_timestamp/show_original_link/show_description` 分别控制来源元数据字段。开关默认均为 `true`，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
+`message.text_metadata.fields` 选择标题、作者、时间、原始链接和简介。默认选择全部五项，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
 
 `message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成 PNG，再移除已成功渲染的 Plain 节点并发送图片。分享卡和具有正文配图的链接逐条绘制，直接复用下载结果，将图片作为正文块参与测量、分页和绘制。成功后替换对应节点；其余媒体仍单独发送。开启分区渲染时热评、翻译单独出图。普通文字卡继续合并非穿插文本。图片版式与四种配色独立。引用取原图按会话和解析结果登记，所有分页共用一组按绘制顺序登记的源文件，一小时后由媒体缓存清理器回收。字体大小限制为 16–42；`render_line_spacing` 为行高相对文字高度的倍数（1.0–3.0，默认 1.55），`render_paragraph_spacing` 为段落空行相对行高的倍数（0–3.0，默认 0.5）。`message.text_metadata.render_paginate` 开启时，渲染器按正文行拆分高度超过 1800 像素的图片，页首不保留空行和分隔线，多页时在底部标注页码并以 `_pNN` 后缀命名；关闭时保持单张输出。图片采用简洁阅读卡片，区分文章标题、辅助信息、正文、热评与翻译；测量和绘制共用字号与字重，英文单词和中文标点按实际宽度换行，标题及评论信息尽量与后续正文同页。
 
 创建成品画布前限制单页高度为 16384 像素、单页为 1600 万像素、单次渲染为 20 页及 3200 万像素总量；分页时每页仍不得超过 1800 像素。超出任一预算时抛出可回退异常，保留完整原文本，不分配大画布。渲染超时或取消时观察不可强制停止的线程真实结束，再清理本次输出；重复取消不能跳过清理。B站登录二维码生成也先等待线程结束再删除临时文件。
 
-`ensure_render_fonts()` 仅在启用文本图片时于加载阶段准备字体，实际渲染前再次确认。优先以真实加载检查有效的自定义、配置字体族和本地字体，缺少粗体时沿用所选字体族的常规字体；本地可用时不要求默认资源下载。全部本地候选不可用时由 `font_manager.py` 从固定版本 Release 补全默认 Noto Sans CJK，校验大小和 SHA256 后原子落盘。`proxy.font` 开启且代理地址非空时经代理下载。字体保存在 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_media_parser/font`，非 AstrBot 运行时回退插件内 `resource/font/`；可用 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。渲染图片记入 `build_result.temp_files` 统一清理；启用文件 Token 中转时逐页注册 Token，并纳入同一 TTL 清理流程。
+`ensure_render_fonts()` 仅在启用文本图片时于加载阶段准备字体，实际渲染前再次确认。优先以真实加载检查有效的自定义、配置字体族和本地字体，缺少粗体时沿用所选字体族的常规字体；本地可用时不要求默认资源下载。全部本地候选不可用时由 `font_manager.py` 从固定版本 Release 补全默认 Noto Sans CJK，校验大小和 SHA256 后原子落盘。`proxy.uses` 中的 `font` 开启且代理地址非空时经代理下载。字体保存在 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_media_parser/font`，非 AstrBot 运行时回退插件内 `resource/font/`；可用 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。渲染图片记入 `build_result.temp_files` 统一清理；启用文件 Token 中转时逐页注册 Token，并纳入同一 TTL 清理流程。
 
 `message.media_display.interleave_images` 开启后，`node_builder.py` 对提供 `content_blocks` 的链接按正文块顺序输出文字节点与已构建的配图节点：基础文本节点保留“简介/正文：”标题但不再写入正文，正文块之后依次为热评和未穿插的剩余媒体。需要同时满足文本元数据与富媒体输出开启、简介/正文可见且无解析错误，并至少有一张配图节点构建成功，否则回退原有布局。穿插链接在 `LinkBuildMeta.preserve_order` 中标记，发送阶段不再按纯图集把文字与图片分组。
 
@@ -436,7 +440,7 @@ video_count + image_count ..                  音频
 - `message.packing.mode=不聚合`：逐链接独立发送。
 - `message.packing.mode=全部聚合`：使用 `Nodes` 聚合发送普通图片、视频和文本；大媒体、语音与音频文件单独发送。
 - `message.packing.mode=按条件聚合`：节点构建和翻译完成后统计可聚合节点，任一数量达到 `message.packing.thresholds` 中配置的阈值时合并转发。
-- 非聚合时，如果 `message.text_metadata.quote_user_message=true`，只让文本元数据节点引用对应的用户消息；媒体、热评、翻译和分隔符不引用。
+- 非聚合时，如果 `message.quote_user_message=true`，只让文本元数据节点引用对应的用户消息；媒体、热评、翻译和分隔符不引用。
 - 纯图片图集会把文本和图片分组发送；混合内容按节点逐个发送。
 - 大媒体判定来自 `download.large_video_threshold_mb` 和当前 metadata 的最大视频大小。
 
@@ -527,7 +531,7 @@ ZIP 命令?
          按 message.packing.mode 与条件阈值选择发送路径
            ├─ 聚合 -> send_aggregated_results()
            └─ 独立 -> send_individual_results()
-                        └─ 可按 message.text_metadata.quote_user_message 引用用户消息
+                        └─ 可按 message.quote_user_message 引用用户消息
            ↓
          send_translation_results()
   ↓
@@ -769,31 +773,20 @@ DASH 临时 `.m4s` 在合并后由 DASH 处理器清理；M3U8 临时分片目�
 
 ```text
 proxy.address
-proxy.font
-proxy.xiaoheihe_video
-proxy.tiktok
-proxy.youtube
-proxy.steam.parse
-proxy.steam.image
-proxy.steam.video
-proxy.twitter.parse
-proxy.twitter.image
-proxy.twitter.video
-proxy.pixiv
-proxy.github
+proxy.uses  # 多选，例如 font、steam.parse、steam.image、twitter.video、github
 ```
 
-`proxy.font` 不属于平台解析，仅供 `font_manager.py` 补全默认字体时使用全局代理地址，不写入媒体元数据。
+`proxy.uses` 中的 `font` 不属于平台解析，仅供 `font_manager.py` 补全默认字体时使用全局代理地址，不写入媒体元数据。
 
 解析器初始化时接收代理配置：
 
-- `XiaoheiheParser`：直接解析小黑盒时仅视频下载使用代理，详情请求不使用代理；Steam 的小黑盒路径由 `proxy.steam` 分组控制。
+- `XiaoheiheParser`：直接解析小黑盒时仅视频下载使用代理，详情请求不使用代理；Steam 的小黑盒路径由 `proxy.uses` 中的 Steam 选项控制。
 - `TikTokParser`：TikTok 解析和媒体代理。
 - `YoutubeParser`：YouTube 页面和播放器接口解析，以及视频下载共用 `proxy.youtube` 开关。
 - `SteamParser`：Steam 官方接口与社区详情页解析；启用小黑盒路径时复用 `XiaoheiheParser` 的游戏详情能力，并分别控制详情解析、图片下载和视频下载代理。
 - `TwitterParser`：Twitter/X 解析、图片、视频代理。
 - `PixivParser`：Pixiv Web Ajax API 解析和图片下载共用同一代理开关。
-- `GitHubParser`：`proxy.github` 默认关闭，控制官方仓库 API 及 README 截图请求，复用全局代理地址并通过 `proxy_url` 传递给截图浏览器。
+- `GitHubParser`：`proxy.uses` 中的 `github` 默认关闭，控制官方仓库 API 及 README 截图请求，复用全局代理地址并通过 `proxy_url` 传递给截图浏览器。
 
 解析结果写入：
 

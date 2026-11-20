@@ -572,6 +572,7 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
         "timestamp": _publication_date(
             page, "".join(parser.fields["timestamp"]), cgi_data
         ),
+        "summary_subtype": "gallery" if has_gallery_content else "article",
         "image_urls": gallery_images if has_gallery_content else parser.images,
     }
     content_blocks = (
