@@ -110,7 +110,7 @@ class MessageSender:
 
     @staticmethod
     def _message_contents(
-        nodes: List[Any], preserve_order: bool, image_send_mode: str
+        nodes: List[Any], preserve_order: bool, image_send_mode: str, gallery_ids: Optional[set[int]] = None,
     ) -> List[List[Any]]:
         """按图片发送方式分组，正文穿插时不跨文字合并图片。"""
         ordered = [node for node in nodes if node is not None]
@@ -124,11 +124,13 @@ class MessageSender:
         )
         contents: List[List[Any]] = []
         for node in ordered:
+            in_gallery = bool(gallery_ids and id(node) in gallery_ids)
             if (
-                group_images
+                (group_images or (in_gallery and image_send_mode == Config.IMAGE_SEND_MODE_ORIGINAL))
                 and isinstance(node, Image)
                 and contents
                 and isinstance(contents[-1][0], Image)
+                and (not gallery_ids or (id(contents[-1][0]) in gallery_ids) == in_gallery)
             ):
                 contents[-1].append(node)
             else:
@@ -345,30 +347,22 @@ class MessageSender:
         normal_metadata = [
             meta for meta in link_metadata if meta.get("is_normal", True)
         ]
-        ordered_links = {
-            id(meta["link_nodes"])
-            for meta in normal_metadata
-            if meta.get("preserve_order") and meta.get("link_nodes")
-        }
         large_media_metadata = [
             meta for meta in link_metadata if meta.get("is_large_media", False)
         ]
-        normal_link_nodes = [
-            meta["link_nodes"] for meta in normal_metadata if meta.get("link_nodes")
-        ]
         audio_nodes = [
-            node for link_nodes in normal_link_nodes for node in link_nodes
+            node for meta in normal_metadata for node in meta["link_nodes"]
             if isinstance(node, (Record, File))
         ]
         normal_link_nodes = [
             (
-                [node for node in link_nodes if not isinstance(node, (Record, File))],
-                id(link_nodes) in ordered_links,
+                [node for node in meta["link_nodes"] if not isinstance(node, (Record, File))],
+                meta,
             )
-            for link_nodes in normal_link_nodes
+            for meta in normal_metadata
         ]
         normal_link_nodes = [
-            (nodes, preserve_order) for nodes, preserve_order in normal_link_nodes if nodes
+            (nodes, meta) for nodes, meta in normal_link_nodes if nodes
         ]
         large_media_link_nodes = [
             meta["link_nodes"] for meta in large_media_metadata if meta.get("link_nodes")
@@ -394,9 +388,9 @@ class MessageSender:
                 flat_nodes.extend(self._build_forward_nodes(
                     content, sender_name, sender_id, forward_text_length
                 ))
-            for link_idx, (link_nodes, preserve_order) in enumerate(normal_link_nodes):
+            for link_idx, (link_nodes, meta) in enumerate(normal_link_nodes):
                 for content in self._message_contents(
-                    link_nodes, preserve_order, image_send_mode
+                    link_nodes, bool(meta.get("preserve_order")), image_send_mode, meta.get("separate_gallery_ids")
                 ):
                     flat_nodes.extend(self._build_forward_nodes(
                         content, sender_name, sender_id, forward_text_length
@@ -434,6 +428,7 @@ class MessageSender:
                 large_media_link_nodes,
                 large_video_threshold_mb,
                 image_send_mode=image_send_mode,
+                gallery_ids=set().union(*(meta.get("separate_gallery_ids", set()) for meta in large_media_metadata)),
             )
             expected += large_expected
             succeeded += large_succeeded
@@ -454,6 +449,7 @@ class MessageSender:
         large_video_threshold_mb: float = 0.0,
         *,
         image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL,
+        gallery_ids: Optional[set[int]] = None,
     ) -> tuple[int, int, list[Exception]]:
         """发送大媒体结果（单独发送）
 
@@ -478,7 +474,7 @@ class MessageSender:
         succeeded = 0
         errors: list[Exception] = []
         for link_idx, link_nodes in enumerate(link_nodes_list):
-            for content in self._message_contents(link_nodes, True, image_send_mode):
+            for content in self._message_contents(link_nodes, True, image_send_mode, gallery_ids):
                 expected += 1
                 result = await self._try_send_content(event, content)
                 if result is not None:
@@ -555,7 +551,7 @@ class MessageSender:
             meta = self._metadata_for_link(link_metadata, link_idx)
             metadata_text_node = meta.get("metadata_text_node")
             for content in self._message_contents(
-                link_nodes, bool(meta.get("preserve_order")), image_send_mode
+                link_nodes, bool(meta.get("preserve_order")), image_send_mode, meta.get("separate_gallery_ids")
             ):
                 expected += 1
                 result = await self._try_send_content(

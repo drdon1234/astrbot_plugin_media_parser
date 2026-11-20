@@ -69,7 +69,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.15.3",
+    "1.15.4",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -394,6 +394,9 @@ class VideoParserPlugin(Star):
         sources = [reply_comp.message_str or ""]
         if reply_comp.chain:
             for comp in reply_comp.chain:
+                if isinstance(comp, Plain):
+                    sources.append(comp.text)
+                    continue
                 card_url = extract_url_from_card_data(getattr(comp, "data", None))
                 if card_url:
                     sources.append(card_url)
@@ -539,13 +542,13 @@ class VideoParserPlugin(Star):
         )
 
     @staticmethod
-    async def _rendered_image_references(paths, cfg) -> tuple[list[str], bool]:
+    async def _rendered_image_references(paths, cfg, prefer_local_images=False) -> tuple[list[str], bool]:
         """为渲染图片登记文件 Token，登记失败时沿用本地路径。"""
         references: list[str] = []
         registered = False
         for path in paths:
             token_url = None
-            if cfg.relay.enabled:
+            if cfg.relay.enabled and not prefer_local_images:
                 token_url = await register_file_with_token_service(
                     path,
                     cfg.relay.callback_api_base,
@@ -562,6 +565,7 @@ class VideoParserPlugin(Star):
         cfg,
         section_starts=(),
         link_meta=None,
+        prefer_local_images=False,
     ) -> bool:
         """将节点列表中的连续文本节点在原位置渲染为图片。
 
@@ -611,7 +615,7 @@ class VideoParserPlugin(Star):
 
         build_result.temp_files.extend(rendered_paths)
         references, registered = await self._rendered_image_references(
-            rendered_paths, cfg
+            rendered_paths, cfg, prefer_local_images
         )
         reference_iter = iter(references)
         text_node = link_meta.get("metadata_text_node") if link_meta else None
@@ -640,7 +644,7 @@ class VideoParserPlugin(Star):
         return registered
 
     async def _render_link_card(
-        self, link, metadata, translations, session, build_result, cfg, sender,
+        self, link, metadata, translations, session, build_result, cfg, sender, prefer_local_images=False,
     ) -> bool:
         """整条结果成功绘制后再替换其节点，并让每一页关联相同的原图集合。"""
         settings = cfg.message.text_metadata
@@ -669,21 +673,28 @@ class VideoParserPlugin(Star):
         content = await build_card_content(
             metadata, link, settings, cfg.download.max_video_size_mb, translations, fetch_picture,
         )
+        if not content.blocks and content.header and not (content.header.author or content.header.timestamp):
+            return False
         embedded = []
         paths = await self._render_text_to_images(
             "", cfg, blocks=tuple(content.blocks), share=content.header, embedded=embedded,
             original_keyword=settings.original_keyword if content.header and sender and sender.originals else "",
         )
         build_result.temp_files.extend(paths)
-        refs, registered = await self._rendered_image_references(paths, cfg)
+        refs, registered = await self._rendered_image_references(paths, cfg, prefer_local_images)
         pages = [MessageSender._image_from_reference(ref) for ref in refs]
-        if embedded and sender.originals:
+        if embedded and sender and sender.originals:
             source_files = [originals.get(path, path) for path in embedded]
             token = await self._run_blocking_to_completion(sender.originals.save, source_files)
             for page in pages:
                 sender.page_tokens[page.file] = token
 
         remaining = [node for node in link["link_nodes"] if id(node) not in content.consumed]
+        if content.header and not link["inline_images"]:
+            # 单独输出的原图与卡片分页分别分组，保持各自的阅读顺序。
+            link["separate_gallery_ids"] = {
+                id(node) for node in link["image_nodes"].values() if id(node) not in content.consumed
+            }
         link["link_nodes"][:] = [*pages, *remaining]
         link["metadata_text_node"] = pages[0]
         link["preserve_order"] = True
@@ -696,7 +707,7 @@ class VideoParserPlugin(Star):
         build_result,
         translation_nodes,
         cfg,
-        metadata_list=(), session=None, sender=None,
+        metadata_list=(), session=None, sender=None, prefer_local_images=False,
     ) -> tuple[list[str], bool]:
         """将文本节点渲染为图片，失败时保留原文本节点。
 
@@ -720,7 +731,7 @@ class VideoParserPlugin(Star):
                 translations = translation_nodes[idx] if idx < len(translation_nodes or []) else []
                 try:
                     registered = await self._render_link_card(
-                        link_meta, metadata, translations, session, build_result, cfg, sender,
+                        link_meta, metadata, translations, session, build_result, cfg, sender, prefer_local_images,
                     )
                     relay_registered = relay_registered or registered
                     if not separate:
@@ -735,11 +746,12 @@ class VideoParserPlugin(Star):
                 cfg,
                 link_meta.get("section_starts", []) if separate else (),
                 link_meta,
+                prefer_local_images,
             ):
                 relay_registered = True
         if separate:
             for nodes in translation_nodes or []:
-                if await self._render_nodes_in_place(nodes, build_result, cfg):
+                if await self._render_nodes_in_place(nodes, build_result, cfg, prefer_local_images=prefer_local_images):
                     relay_registered = True
             return [], relay_registered
 
@@ -769,7 +781,7 @@ class VideoParserPlugin(Star):
             metadata["metadata_text_node"] = None
         self.logger.debug(f"文本元数据已渲染为图片: {rendered_paths}")
         references, registered = await self._rendered_image_references(
-            rendered_paths, cfg
+            rendered_paths, cfg, prefer_local_images
         )
         return references, relay_registered or registered
 
@@ -951,6 +963,7 @@ class VideoParserPlugin(Star):
         relay_registered = False
         text_metadata_images: list[str] = []
         sender = self.message_sender
+        prefer_local_images = bool(cfg.download.shared_image_dir and event.get_platform_name() == "aiocqhttp")
         settings = cfg.message.text_metadata
         if (not zip_requested and getattr(settings, "render_to_image", False)
                 and getattr(settings, "original_keyword", "") and cfg.download.cache_dir):
@@ -1065,6 +1078,7 @@ class VideoParserPlugin(Star):
                         metadata,
                         cfg.relay.callback_api_base,
                         cfg.relay.file_token_ttl,
+                        prefer_local_images=prefer_local_images,
                     )
                 relay_registered = any(
                     bool(metadata.get("use_file_token_service"))
@@ -1114,7 +1128,7 @@ class VideoParserPlugin(Star):
                 build_result,
                 translation_nodes,
                 cfg,
-                processed_metadata_list, session, sender,
+                processed_metadata_list, session, sender, prefer_local_images,
             )
             relay_registered = relay_registered or rendered_registered
             aggregatable_nodes = [
@@ -1124,6 +1138,8 @@ class VideoParserPlugin(Star):
             ]
             aggregatable_nodes.extend(translation_nodes)
             node_counts = summarize_node_counts(aggregatable_nodes)
+            node_counts["image_count"] += len(text_metadata_images)
+            node_counts["node_count"] += len(text_metadata_images)
             should_aggregate_nodes = cfg.message.aggregation.should_aggregate_nodes(
                 **node_counts
             )
@@ -1259,8 +1275,10 @@ class VideoParserPlugin(Star):
         if not cfg.download.cache_dir:
             return False
         store = OriginalImages(cfg.download.cache_dir, self._original_scope(event))
+        author = str(reply.sender_id or "")
+        own_id = str(event.get_self_id())
         quoted_text = ""
-        if str(reply.sender_id or "") in ("", "0", str(event.get_self_id())):
+        if author in ("", "0", own_id):
             quoted_text = "\n".join([reply.message_str or "", *(
                 node.text for node in reply.chain or [] if isinstance(node, Plain)
             )])
@@ -1272,11 +1290,15 @@ class VideoParserPlugin(Star):
                 max(Config.FILE_SEND_GRACE_SECONDS, cfg.relay.file_token_ttl if cfg.relay.enabled else 0),
             )
             if not files:
-                if not cfg.message.text_metadata.render_to_image:
+                if not cfg.message.text_metadata.render_to_image or author not in ("", "0", own_id):
+                    return False
+                if (cfg.trigger.reply_trigger and cfg.trigger.has_keyword(event.message_str or "")
+                        and author in ("", "0") and self._try_extract_reply_links(event)[0]):
                     return False
                 await event.send(event.plain_result("这条引用没有可取回的原图，或原图缓存已过期。"))
                 return True
-            references, _ = await self._rendered_image_references(files, cfg)
+            prefer_local_images = bool(cfg.download.shared_image_dir and event.get_platform_name() == "aiocqhttp")
+            references, _ = await self._rendered_image_references(files, cfg, prefer_local_images)
             images = [MessageSender._image_from_reference(ref) for ref in references]
             await self.message_sender.send_individual_results(
                 event, [images], image_send_mode=cfg.message.media_display.image_send_mode,

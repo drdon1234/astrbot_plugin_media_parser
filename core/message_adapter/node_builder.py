@@ -877,6 +877,7 @@ def build_all_nodes(
                     preserve_order=bool(inline_images),
                     inline_images=inline_images,
                     image_nodes=image_nodes,
+                    separate_gallery_ids=set(),
                     base_nodes=base_nodes,
                     section_starts=section_starts,
                 )

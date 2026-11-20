@@ -312,9 +312,9 @@ class SteamParser(BaseVideoParser):
 
     def _extract_description_media(
         self, html_text: str
-    ) -> Tuple[List[List[str]], List[str]]:
+    ) -> Tuple[List[Tuple[List[str], List[str]]], List[str]]:
         """从 Steam 简介 HTML 中提取视频候选和图片。"""
-        video_groups: List[List[str]] = []
+        video_items: List[Tuple[List[str], List[str]]] = []
         image_urls: List[str] = []
 
         for video_block in re.findall(
@@ -322,28 +322,26 @@ class SteamParser(BaseVideoParser):
         ):
             candidates = []
             for source in re.findall(
-                r"<source\b[^>]*\bsrc\s*=\s*(['\"])(.*?)\1",
+                r"<(?:video|source)\b[^>]*?\ssrc\s*=\s*(['\"])(.*?)\1",
                 video_block,
                 re.IGNORECASE | re.DOTALL,
             ):
                 candidate = self._normalize_url(source[1])
                 if candidate:
                     candidates.append(candidate)
-            if candidates:
-                video_groups.append(self._unique_keep_order(candidates))
-
             poster_match = re.search(
                 r"\bposter\s*=\s*(['\"])(.*?)\1",
                 video_block,
                 re.IGNORECASE | re.DOTALL,
             )
-            if poster_match:
-                poster = self._normalize_url(poster_match.group(2))
-                if poster:
-                    image_urls.append(poster)
+            poster = self._normalize_url(poster_match.group(2)) if poster_match else None
+            if candidates:
+                video_items.append((candidates, [poster] if poster else []))
+            elif poster:
+                image_urls.append(poster)
 
         image_urls.extend(image for _, image in self._store_image_tags(html_text))
-        return video_groups, self._unique_keep_order(image_urls)
+        return video_items, self._unique_keep_order(image_urls)
 
     def _store_image_tags(self, html_text: str) -> Iterator[Tuple[re.Match, str]]:
         """提取商店简介中的图片及其正文位置。"""
@@ -389,16 +387,17 @@ class SteamParser(BaseVideoParser):
                 if not isinstance(movie, dict):
                     continue
                 thumbnail = self._normalize_url(movie.get("thumbnail"))
-                if thumbnail:
-                    image_urls.append(thumbnail)
                 candidates: List[str] = []
                 hls_url = self._normalize_url(movie.get("hls_h264"))
                 if hls_url:
                     candidates.append(f"m3u8:{hls_url}")
                 for key in ("mp4", "webm"):
-                    direct_url = self._normalize_url(movie.get(key))
-                    if direct_url:
-                        candidates.append(direct_url)
+                    source = movie.get(key)
+                    values = (source.get("max"), source.get("480")) if isinstance(source, dict) else (source,)
+                    for value in values:
+                        direct_url = self._normalize_url(value)
+                        if direct_url:
+                            candidates.append(direct_url)
                 if candidates:
                     video_items.append(
                         (
@@ -406,12 +405,14 @@ class SteamParser(BaseVideoParser):
                             [thumbnail] if thumbnail else [],
                         )
                     )
+                elif thumbnail:
+                    image_urls.append(thumbnail)
 
         description = game.get("detailed_description") or game.get("about_the_game")
         inline_videos, inline_images = self._extract_description_media(
             description if isinstance(description, str) else ""
         )
-        video_items.extend((candidates, []) for candidates in inline_videos)
+        video_items.extend(inline_videos)
         image_urls.extend(inline_images)
 
         unique_video_urls: List[List[str]] = []

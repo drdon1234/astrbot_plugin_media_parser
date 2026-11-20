@@ -1020,9 +1020,9 @@ class XiaoheiheParser(BaseVideoParser):
 
     def _extract_game_media(
         self, game: Dict[str, Any]
-    ) -> Tuple[List[str], List[str]]:
-        """从游戏详情接口的结构化字段中提取视频和图片 URL。"""
-        video_urls: List[str] = []
+    ) -> Tuple[List[List[str]], List[List[str]], List[str]]:
+        """按视频对应封面归集候选地址，独立截图保留显示顺序。"""
+        videos: Dict[Tuple[str, ...], List[str]] = {}
         image_urls: List[str] = []
 
         def append_url(target: List[str], value: Any) -> None:
@@ -1052,6 +1052,8 @@ class XiaoheiheParser(BaseVideoParser):
                     )
                 ]
                 if media_type in {"movie", "video"}:
+                    sources: List[str] = []
+                    covers: List[str] = []
                     for value in direct_values:
                         candidate = self._normalize_media_url(value)
                         if not candidate:
@@ -1061,10 +1063,15 @@ class XiaoheiheParser(BaseVideoParser):
                             candidate,
                             re.IGNORECASE,
                         ):
-                            image_urls.append(candidate)
+                            covers.append(candidate)
                         else:
-                            video_urls.append(candidate)
-                    append_url(image_urls, item.get("thumbnail"))
+                            sources.append(candidate)
+                    append_url(covers, item.get("thumbnail"))
+                    if sources:
+                        key = tuple(self._unique_keep_order(sources))
+                        videos.setdefault(key, []).extend(covers)
+                    else:
+                        image_urls.extend(covers)
                 else:
                     for value in direct_values:
                         append_url(image_urls, value)
@@ -1077,12 +1084,15 @@ class XiaoheiheParser(BaseVideoParser):
                 intro_html,
                 re.IGNORECASE,
             ):
-                append_url(video_urls, value)
+                source = self._normalize_media_url(value)
+                if source:
+                    videos.setdefault((source,), [])
             for _, _, value in _HtmlImagePositions(intro_html).images:
                 append_url(image_urls, value)
 
         return (
-            self._unique_keep_order(video_urls),
+            [self._add_m3u8_prefix_to_urls(list(group)) for group in videos],
+            [self._unique_keep_order(covers) for covers in videos.values()],
             self._unique_keep_order(image_urls),
         )
 
@@ -1536,7 +1546,7 @@ class XiaoheiheParser(BaseVideoParser):
                     rating_line = f"小黑盒评分：{score}（{score_count}）"
 
             types = self._extract_game_types(game)
-            videos, images = self._extract_game_media(game)
+            video_urls, video_covers, images = self._extract_game_media(game)
 
             intro_raw = game.get("about_the_game")
             intro = self._format_intro_text(intro_raw) if isinstance(intro_raw, str) else ""
@@ -1700,8 +1710,6 @@ class XiaoheiheParser(BaseVideoParser):
 
             desc = "\n".join(desc_lines).rstrip()
 
-            prefixed_videos = self._add_m3u8_prefix_to_urls(videos) if videos else []
-            video_urls = [[v] for v in prefixed_videos] if prefixed_videos else []
             image_urls = [[img] for img in images] if images else []
 
             if not video_urls and not image_urls:
@@ -1720,6 +1728,7 @@ class XiaoheiheParser(BaseVideoParser):
                 "summary_subtype": "game",
                 "timestamp": release_date or "",
                 "video_urls": video_urls,
+                "video_cover_urls": video_covers,
                 "image_urls": image_urls,
                 "image_headers": image_headers,
                 "video_headers": video_headers,

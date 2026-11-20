@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from astrbot.api.message_components import Plain
+from astrbot.api.message_components import Plain, Video
 
 from ..config_manager import TextMetadataConfig
 from ..metadata_visibility import text_metadata_field_enabled
@@ -67,16 +67,24 @@ async def build_card_content(
 
     files = metadata.get("file_paths") or []
     offset = len(metadata.get("video_urls") or [])
+    readme_start = metadata.get("readme_image_start", len(metadata.get("image_urls") or []))
     pictures = {
         id(node): files[offset + index]
         for index, node in link["image_nodes"].items()
-        if offset + index < len(files) and files[offset + index]
+        if index < readme_start and offset + index < len(files) and files[offset + index]
     }
     inline = {id(node) for node in link["inline_images"]}
     consumed = set()
     if share and settings.share_cover and metadata.get("_enable_rich_media", True):
         covers = metadata.get("video_cover_urls") or []
-        for candidates in covers:
+        has_video = any(isinstance(node, Video) for node in link["link_nodes"])
+        video_modes = metadata.get("video_modes") or []
+        for index, candidates in enumerate(covers):
+            # 单组封面可能由多个视频共用；独立封面只为未能输出的视频补位。
+            if has_video and (
+                len(covers) == 1 or index >= len(video_modes) or video_modes[index] != "skip"
+            ):
+                continue
             cover = await fetch_picture(candidates)
             if cover:
                 blocks.append(PictureBlock((cover,), "cover"))

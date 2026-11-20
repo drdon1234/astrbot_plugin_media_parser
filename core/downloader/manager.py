@@ -621,6 +621,7 @@ class DownloadManager:
 
         # 网页链接仅保留为来源，成功只能使用本地图片，失败不得转为图片直链。
         count = len(paths) if paths else 1
+        metadata["readme_image_start"] = len(metadata["image_urls"])
         position = len(metadata["video_urls"]) + len(metadata["image_urls"])
         metadata["image_urls"].extend([[readme_url] for _ in range(count)])
         metadata["file_paths"][position:position] = paths or [None]

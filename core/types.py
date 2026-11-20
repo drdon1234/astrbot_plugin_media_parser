@@ -81,6 +81,7 @@ class MediaMetadata(TypedDict, total=False):
     file_paths: List[Optional[str]]
     original_image_paths: Dict[str, str]
     converted_cover_count: int
+    readme_image_start: int
     video_sizes: List[Optional[float]]
     video_size_limit_flags: List[bool]
     video_status_codes: List[Optional[int]]
@@ -128,6 +129,7 @@ class LinkBuildMeta(TypedDict):
     image_nodes: Dict[int, Any]
     inline_images: List[Any]
     base_nodes: List[Any]
+    separate_gallery_ids: set[int]
 
 
 class BuildAllNodesResult(NamedTuple):
