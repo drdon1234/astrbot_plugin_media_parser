@@ -15,6 +15,7 @@ from ...logger import logger
 from ...constants import Config
 from ...types import MediaMetadata
 from ..utils import (
+    profile_image_url,
     build_request_headers, format_directory_tree, format_percentage, select_snapshot_files,
     verified_blob_excerpt,
 )
@@ -437,6 +438,7 @@ class GitLabParser(BaseVideoParser):
             metadata: MediaMetadata = {
                 "url": project_url, "title": project["path_with_namespace"],
                 "author": project["namespace"]["full_path"], "platform": self.name,
+                "author_avatar_url": profile_image_url(project["namespace"], "avatar_url", hosts=("gitlab.com", "gravatar.com"), base=BASE_URL),
                 "video_urls": [], "image_urls": [],
             }
             if not issue_id:
@@ -459,6 +461,7 @@ class GitLabParser(BaseVideoParser):
                 "url": project_url + "/-/issues/" + issue_id,
                 "title": f"{project['path_with_namespace']} #{issue_id} · {issue['title']}",
                 "author": issue["author"]["username"], "timestamp": _timestamp(issue.get("created_at")),
+                "author_avatar_url": profile_image_url(issue["author"], "avatar_url", hosts=("gitlab.com", "gravatar.com"), base=BASE_URL),
                 "desc": f"状态：{state}\n\n" + (_text(issue.get("description")) or "暂无议题正文"),
             })
             if self.hot_comment_count:

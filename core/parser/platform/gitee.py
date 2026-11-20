@@ -14,6 +14,7 @@ from ...logger import logger
 from ...constants import Config
 from ...types import MediaMetadata
 from ..utils import (
+    profile_image_url,
     build_request_headers, format_directory_tree, format_percentage, select_snapshot_files,
     verified_blob_excerpt,
 )
@@ -380,9 +381,13 @@ class GiteeParser(BaseVideoParser):
             repository = await self._request_json(session, path)
             self._validate_repository(repository)
             repository_url = BASE_URL + "/" + repository["full_name"]
+            namespace = repository["namespace"]
+            owner = repository.get("owner")
+            profile = owner if isinstance(owner, dict) and owner.get("login") == namespace["path"] else namespace
             metadata: MediaMetadata = {
                 "url": repository_url, "title": repository["full_name"],
                 "author": repository["namespace"]["path"], "platform": self.name,
+                "author_avatar_url": profile_image_url(profile, "avatar_url", hosts=("gitee.com", "gitee.com.cn")),
                 "video_urls": [], "image_urls": [],
             }
             if not issue_id:
@@ -405,6 +410,7 @@ class GiteeParser(BaseVideoParser):
                 "url": repository_url + "/issues/" + issue_id,
                 "title": f"{repository['full_name']} #{issue_id} · {issue['title']}",
                 "author": _text(issue["user"].get("name")) or issue["user"]["login"],
+                "author_avatar_url": profile_image_url(issue["user"], "avatar_url", hosts=("gitee.com", "gitee.com.cn")),
                 "timestamp": _timestamp(issue.get("created_at")),
                 "desc": f"状态：{state}\n\n" + (_text(issue.get("body")) or "暂无议题正文"),
             })

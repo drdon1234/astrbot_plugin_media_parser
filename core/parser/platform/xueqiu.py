@@ -14,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers
+from ..utils import build_content_blocks, build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -683,6 +683,14 @@ class XueqiuParser(BaseVideoParser):
             self._build_status_page_url(user_id, status_id),
         )
 
+        user = status.get("user")
+        portraits = user.get("profile_image_url") if isinstance(user, dict) else ""
+        avatar = ""
+        if isinstance(portraits, str):
+            for path in portraits.split(","):
+                avatar = profile_image_url({"url": path}, "url", hosts=("xueqiu.com", "xqimg.com", "xavatar.imedao.com"), base="https://xavatar.imedao.com/")
+                if avatar:
+                    break
         author_id = self._first_non_empty(status.get("user_id"), user_id)
         page_url = self._build_status_page_url(author_id, status_id)
 
@@ -708,6 +716,7 @@ class XueqiuParser(BaseVideoParser):
             "url": url,
             "title": title,
             "author": self._extract_author(status),
+            "author_avatar_url": avatar,
             "desc": desc,
             "timestamp": self._format_timestamp(status.get("created_at")),
             "platform": "xueqiu",

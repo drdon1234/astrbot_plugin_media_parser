@@ -15,7 +15,7 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import SkipParse, build_content_blocks, join_content_text
+from ...utils import SkipParse, build_content_blocks, join_content_text, profile_image_url
 from ..base import BaseVideoParser
 from .sign import sign_article
 
@@ -389,6 +389,7 @@ class ZhihuParser(BaseVideoParser):
             "url": canonical_url,
             "title": str(payload.get("title") or "").strip(),
             "author": str(author_name or "").strip(),
+            "author_avatar_url": profile_image_url(author, "avatar_url", hosts=("zhimg.com",)),
             "desc": parser.text(),
             "timestamp": _format_timestamp(
                 payload.get("created") or payload.get("createdTime")

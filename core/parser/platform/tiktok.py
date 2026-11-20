@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import SkipParse, build_request_headers, is_live_url
+from ..utils import SkipParse, build_request_headers, is_live_url, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -609,6 +609,8 @@ class TikTokParser(BaseVideoParser):
             "item_id": item_id,
             "title": title,
             "author": self._build_tiktok_author(nickname, unique_id),
+            "author_avatar_url": profile_image_url(author_info, "avatarMedium", "avatarThumb", "avatarLarger",
+                                                  hosts=("tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com", "tiktok.com")),
             "timestamp": self._format_timestamp(
                 item_info.get("createTime") or item_info.get("create_time")
             ),
@@ -901,6 +903,7 @@ class TikTokParser(BaseVideoParser):
                     "url": display_url,
                     "title": title,
                     "author": author,
+                    "author_avatar_url": result.get("author_avatar_url", ""),
                     "desc": "",
                     "timestamp": timestamp,
                     "platform": "tiktok",
@@ -920,6 +923,7 @@ class TikTokParser(BaseVideoParser):
                 "url": display_url,
                 "title": title,
                 "author": author,
+                "author_avatar_url": result.get("author_avatar_url", ""),
                 "desc": "",
                 "timestamp": timestamp,
                 "platform": "tiktok",

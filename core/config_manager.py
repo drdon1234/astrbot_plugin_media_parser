@@ -1292,6 +1292,11 @@ class ConfigManager:
         }
         proxy_addr = self.proxy.address or None
 
+        def fetch_avatar(platform: str) -> bool:
+            settings = self.message.text_metadata
+            return (settings.render_to_image and settings.render_layout == "分享卡" and settings.show_author
+                    and self.parser_output.output_for_controller(platform)[0])
+
         def summarize(platform: str) -> bool:
             return (self.translation.repository_summary and platform not in self.translation.summary_exclusions
                     and platform + ".repo" not in self.translation.summary_exclusions and self.message.text_metadata.show_summary
@@ -1321,11 +1326,11 @@ class ConfigManager:
             parsers.append(HongguoParser(hot_comment_count=hot_comment_counts["hongguo"]))
         if self._enable_netease:
             parsers.append(
-                NeteaseParser(hot_comment_count=hot_comment_counts["netease"])
+                NeteaseParser(hot_comment_count=hot_comment_counts["netease"], fetch_avatar=fetch_avatar("netease"))
             )
         if self._enable_ximalaya:
             parsers.append(
-                XimalayaParser(hot_comment_count=hot_comment_counts["ximalaya"])
+                XimalayaParser(hot_comment_count=hot_comment_counts["ximalaya"], fetch_avatar=fetch_avatar("ximalaya"))
             )
         if self._enable_weibo:
             parsers.append(
@@ -1409,7 +1414,7 @@ class ConfigManager:
                 CsdnParser(hot_comment_count=hot_comment_counts["csdn"])
             )
         if self._enable_cnblogs:
-            parsers.append(CnblogsParser())
+            parsers.append(CnblogsParser(fetch_avatar=fetch_avatar("cnblogs")))
         if self._enable_gitee:
             parsers.append(
                 GiteeParser(hot_comment_count=hot_comment_counts["gitee"], repository_summary=summarize("gitee"))
@@ -1458,6 +1463,7 @@ class ConfigManager:
                     cookie=self.pixiv.cookie,
                     proxy=proxy_addr if self.proxy.pixiv_use_proxy else None,
                     hot_comment_count=hot_comment_counts["pixiv"],
+                    fetch_avatar=fetch_avatar("pixiv"),
                 )
             )
         if self._enable_github:

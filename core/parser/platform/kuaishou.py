@@ -13,7 +13,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers, is_live_url, SkipParse
+from ..utils import build_request_headers, is_live_url, SkipParse, profile_image_url
 from .base import BaseVideoParser
 
 MOBILE_HEADERS = {
@@ -199,6 +199,7 @@ class KuaishouParser(BaseVideoParser):
                 if isinstance(photo, dict):
                     metadata["userName"] = metadata["userName"] or photo.get("userName")
                     metadata["caption"] = metadata["caption"] or photo.get("caption")
+                    metadata["author_avatar_url"] = profile_image_url(photo, "headUrl", hosts=("yximgs.com", "kwaicdn.com", "gifshow.com"))
                     uid = photo.get("userId")
                     if uid is not None:
                         metadata["userId"] = str(uid)
@@ -668,6 +669,7 @@ class KuaishouParser(BaseVideoParser):
                         "url": url,
                         "title": title,
                         "author": author,
+                        "author_avatar_url": metadata.get("author_avatar_url") or "",
                         "desc": "",
                         "timestamp": self._extract_timestamp_from_photo(photo, vurl),
                         "video_urls": [[vurl]],
@@ -690,6 +692,7 @@ class KuaishouParser(BaseVideoParser):
                             "url": url,
                             "title": title or "快手图集",
                             "author": author,
+                            "author_avatar_url": metadata.get("author_avatar_url") or "",
                             "desc": "",
                             "timestamp": self._extract_timestamp_from_photo(
                                 photo, first_url
@@ -709,6 +712,7 @@ class KuaishouParser(BaseVideoParser):
                     "url": url,
                     "title": title,
                     "author": author,
+                    "author_avatar_url": metadata.get("author_avatar_url") or "",
                     "desc": "",
                     "timestamp": upload_time or "",
                     "video_urls": [[video_url]],
@@ -734,6 +738,7 @@ class KuaishouParser(BaseVideoParser):
                         "url": url,
                         "title": title or "快手图集",
                         "author": author,
+                        "author_avatar_url": metadata.get("author_avatar_url") or "",
                         "desc": "",
                         "timestamp": upload_time or "",
                         "video_urls": [],
@@ -755,6 +760,7 @@ class KuaishouParser(BaseVideoParser):
                             "url": url,
                             "title": title,
                             "author": author,
+                            "author_avatar_url": metadata.get("author_avatar_url") or "",
                             "desc": "",
                             "timestamp": upload_time or "",
                             "video_urls": [[video_url]],
@@ -790,6 +796,7 @@ class KuaishouParser(BaseVideoParser):
                                 "url": url,
                                 "title": title or "快手图集",
                                 "author": author,
+                                "author_avatar_url": metadata.get("author_avatar_url") or "",
                                 "desc": "",
                                 "timestamp": upload_time or "",
                                 "video_urls": [],

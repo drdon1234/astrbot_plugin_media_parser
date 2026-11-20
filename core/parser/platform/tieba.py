@@ -256,7 +256,7 @@ class TiebaParser(BaseVideoParser):
             return ""
 
     @staticmethod
-    def _author_name(thread: Dict[str, Any], post: Dict[str, Any], payload: Dict[str, Any]) -> str:
+    def _author_profile(thread: Dict[str, Any], post: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         """优先使用主题作者昵称，必要时按首楼作者标识查找用户。"""
         author = thread.get("author")
         if not isinstance(author, dict):
@@ -268,6 +268,11 @@ class TiebaParser(BaseVideoParser):
                     user for user in users if isinstance(user, dict)
                     and str(user.get("id", "")) == str(post.get("author_id", ""))
                 ), {})
+        return author
+
+    @staticmethod
+    def _author_name(author: Dict[str, Any]) -> str:
+        """读取用户展示名。"""
         for key in ("name_show", "name"):
             value = author.get(key)
             if isinstance(value, str) and value.strip():
@@ -414,10 +419,15 @@ class TiebaParser(BaseVideoParser):
 
         url = f"https://tieba.baidu.com/p/{thread_id}"
         title = thread.get("title")
+        author = self._author_profile(thread, post, payload)
+        portrait = str(author.get("portrait") or "").split("?", 1)[0]
+        if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", portrait):
+            portrait = ""
         metadata: MediaMetadata = {
             "url": url,
             "title": html.unescape(title.strip()) if isinstance(title, str) else "",
-            "author": self._author_name(thread, post, payload),
+            "author": self._author_name(author),
+            "author_avatar_url": f"https://himg.bdimg.com/sys/portrait/item/{portrait}" if portrait else "",
             "desc": self._clean_text(join_content_text(texts)),
             "timestamp": self._format_timestamp(post.get("time") or thread.get("create_time")),
             "platform": self.name,
@@ -593,7 +603,7 @@ class TiebaParser(BaseVideoParser):
                     if not message:
                         continue
                     uid = str(post.get("author_id", ""))
-                    author = self._author_name({"author": users.get(uid, {})}, post, {})
+                    author = self._author_name(users.get(uid, {}))
                     agree = post.get("agree")
                     try:
                         likes = (

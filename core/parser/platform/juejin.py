@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers, join_content_text
+from ..utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -401,6 +401,7 @@ class JuejinParser(BaseVideoParser):
             metadata: MediaMetadata = {
                 "url": f"{BASE_URL}/post/{identity}", "title": html.unescape(title).strip(),
                 "author": author.strip(), "timestamp": _timestamp(info.get("ctime")),
+                "author_avatar_url": profile_image_url(user, "avatar_large", hosts=("juejin.cn", "byteimg.com", "byteacctimg.com", "juejin.im", "bytegoofy.com")),
                 "desc": content.text(), "image_urls": content.images, "video_urls": [],
                 "image_headers": build_request_headers(referer=BASE_URL + "/"), "platform": "稀土掘金",
             }

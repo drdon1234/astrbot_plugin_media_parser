@@ -19,7 +19,7 @@ from ...logger import logger
 from ...constants import Config
 from ...types import MediaMetadata
 from ..runtime_manager.bilibili.auth import BilibiliAuthRuntime
-from ..utils import build_request_headers, is_live_url, SkipParse, format_duration_ms
+from ..utils import build_request_headers, is_live_url, SkipParse, format_duration_ms, profile_image_url
 from .base import BaseVideoParser
 
 UA = (
@@ -1121,8 +1121,8 @@ class BilibiliParser(BaseVideoParser):
 
     def _extract_polymer_author(
         self, item: Dict[str, Any], modules: Dict[str, Any]
-    ) -> str:
-        """从 polymer 动态结构中提取作者显示文本。"""
+    ) -> Tuple[str, str]:
+        """从同一条动态的作者资料中提取署名与头像。"""
         author_obj = modules.get("module_author") or {}
         if not isinstance(author_obj, dict):
             author_obj = {}
@@ -1132,13 +1132,10 @@ class BilibiliParser(BaseVideoParser):
 
         name = str(author_obj.get("name", "") or "").strip()
         mid = author_obj.get("mid") or basic.get("uid")
-        if name and mid:
-            return f"{name}(uid:{mid})"
-        if name:
-            return name
         if mid:
-            return f"(uid:{mid})"
-        return ""
+            name = f"{name}(uid:{mid})"
+        avatar = profile_image_url(author_obj, "face", hosts=("hdslb.com", "biliimg.com"))
+        return name, avatar if name else ""
 
     def _extract_polymer_timestamp(self, modules: Dict[str, Any]) -> str:
         """从 polymer 动态结构中提取发布时间。"""
@@ -1321,7 +1318,7 @@ class BilibiliParser(BaseVideoParser):
             major = {}
 
         title, desc = self._extract_polymer_title_desc(item, modules, opus_id)
-        author = self._extract_polymer_author(item, modules)
+        author, avatar = self._extract_polymer_author(item, modules)
         timestamp = self._extract_polymer_timestamp(modules)
 
         origin_item = self._extract_polymer_origin_item(item, modules)
@@ -1330,6 +1327,7 @@ class BilibiliParser(BaseVideoParser):
         origin_title = ""
         origin_desc = ""
         origin_author = ""
+        origin_avatar = ""
         origin_timestamp = ""
         if isinstance(origin_item, dict):
             origin_modules = self._extract_polymer_modules(origin_item)
@@ -1341,7 +1339,7 @@ class BilibiliParser(BaseVideoParser):
             origin_title, origin_desc = self._extract_polymer_title_desc(
                 origin_item, origin_modules, str(origin_item.get("id_str") or opus_id)
             )
-            origin_author = self._extract_polymer_author(origin_item, origin_modules)
+            origin_author, origin_avatar = self._extract_polymer_author(origin_item, origin_modules)
             origin_timestamp = self._extract_polymer_timestamp(origin_modules)
 
         video_url = self._extract_polymer_video_url(major)
@@ -1385,6 +1383,7 @@ class BilibiliParser(BaseVideoParser):
                 final_author = f"{author} ({video_author})"
             elif not final_author and video_author:
                 final_author = video_author
+                avatar = video_result.get("author_avatar_url", "") if video_result.get("author") else origin_avatar
 
             final_desc = desc
             video_desc = video_result.get("desc", "") or origin_desc
@@ -1403,6 +1402,7 @@ class BilibiliParser(BaseVideoParser):
                 "url": display_url,
                 "title": final_title or f"动态 #{opus_id}",
                 "author": final_author,
+                "author_avatar_url": avatar,
                 "desc": final_desc,
                 "timestamp": final_timestamp,
                 "video_urls": self._add_range_prefix_to_video_urls(
@@ -1448,7 +1448,7 @@ class BilibiliParser(BaseVideoParser):
                 if author and origin_author:
                     author = f"{author} ({origin_author})"
                 elif origin_author:
-                    author = origin_author
+                    author, avatar = origin_author, origin_avatar
                 if timestamp and origin_timestamp:
                     timestamp = f"{timestamp} ({origin_timestamp})"
                 elif origin_timestamp:
@@ -1458,6 +1458,7 @@ class BilibiliParser(BaseVideoParser):
             "url": display_url,
             "title": title,
             "author": author,
+            "author_avatar_url": avatar,
             "desc": desc,
             "timestamp": timestamp,
             "video_urls": [],
@@ -2476,6 +2477,7 @@ class BilibiliParser(BaseVideoParser):
 
         mid = None
         name = ""
+        avatar = ""
         if isinstance(desc_obj, dict):
             user_profile = desc_obj.get("user_profile", {})
             if isinstance(user_profile, dict):
@@ -2483,6 +2485,7 @@ class BilibiliParser(BaseVideoParser):
                 if isinstance(user_info, dict):
                     mid = user_info.get("uid")
                     name = user_info.get("uname", "")
+                    avatar = profile_image_url(user_info, "face", hosts=("hdslb.com", "biliimg.com"))
 
         if name and mid:
             author = f"{name}(uid:{mid})"
@@ -2621,6 +2624,7 @@ class BilibiliParser(BaseVideoParser):
                     "url": dynamic_url,
                     "title": final_title,
                     "author": final_author,
+                    "author_avatar_url": avatar if author else video_result.get("author_avatar_url", ""),
                     "desc": final_desc,
                     "timestamp": final_timestamp,
                     "video_urls": self._add_range_prefix_to_video_urls(
@@ -2670,7 +2674,8 @@ class BilibiliParser(BaseVideoParser):
                 result = {
                     "url": original_url if _is_b23_url(original_url) else url,
                     "title": final_title,
-                    "author": author,
+                    "author": author or video_result.get("author", ""),
+                    "author_avatar_url": avatar if author else video_result.get("author_avatar_url", ""),
                     "desc": final_desc,
                     "timestamp": timestamp,
                     "video_urls": self._add_range_prefix_to_video_urls(
@@ -2727,6 +2732,7 @@ class BilibiliParser(BaseVideoParser):
             "title": title,
             "author": author,
             "desc": desc,
+            "author_avatar_url": avatar,
             "timestamp": timestamp,
             "video_urls": [],
             "image_urls": image_urls,

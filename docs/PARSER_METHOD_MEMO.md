@@ -1031,7 +1031,9 @@ store.steampowered.com/api/appdetails/?appids={appid}&l=schinese&cc=cn
   └─ movies HLS、简介内嵌视频与封面
 ```
 
-开启 `steam.use_xiaoheihe` 后，解析器将同一 appid 交由小黑盒游戏详情接口处理，结果保留原始 Steam 链接，并可额外获得小黑盒评分、在线人数、峰值、销量排行与平均游戏时间等统计；该模式不请求 Steam HTML 页面。
+开启 `steam.use_xiaoheihe` 后，解析器将同一 appid 交由小黑盒游戏详情接口处理，结果保留原始 Steam 链接，并可额外获得小黑盒评分、在线人数、峰值、销量排行与平均游戏时间等统计。
+
+显示作者的分享卡会按 Steam 游戏编号查询 `IStoreBrowseService/GetItems` 的开发商资料。仅在能确认唯一开发商时，从对应官方账号页读取头像。小黑盒 PC 游戏使用详情接口明确返回的 `steam_appid`。作品署名冲突、资料缺失或请求失败时，分享卡仍可正常绘制。
 
 社区物品不经过小黑盒路径。匿名 `ISteamRemoteStorage/GetPublishedFileDetails` 对指南返回 `result=9`，且不含创意工坊预览截图，因此改为读取社区详情页 HTML：
 

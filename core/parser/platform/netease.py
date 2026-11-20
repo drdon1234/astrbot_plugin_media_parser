@@ -14,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers, format_duration_ms
+from ..utils import build_request_headers, format_duration_ms, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -115,13 +115,15 @@ def _media_url(value: Any) -> str:
 class NeteaseParser(BaseVideoParser):
     """解析网易云单曲，保留音频不可用时的详情与热评。"""
 
-    def __init__(self, hot_comment_count: int = 0) -> None:
+    def __init__(self, hot_comment_count: int = 0, *, fetch_avatar: bool = False) -> None:
         """初始化请求并发限制和热评条数。
 
         Args:
+            fetch_avatar: 是否为分享卡查询作者资料。
             hot_comment_count: 热评输出上限，零表示不请求评论。
         """
         super().__init__("netease")
+        self.fetch_avatar = fetch_avatar
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         try:
             self.hot_comment_count = max(0, int(hot_comment_count))
@@ -329,8 +331,20 @@ class NeteaseParser(BaseVideoParser):
             album = album if isinstance(album, dict) else {}
             cover = _media_url(album.get("picUrl"))
             album_name = album.get("name")
+            avatar = ""
+            if self.fetch_avatar and isinstance(artists, list) and len(artists) == 1 and isinstance(artists[0], dict):
+                artist_id = _integer(artists[0].get("id"))
+                if artist_id and artist_id > 0:
+                    try:
+                        details = await asyncio.wait_for(self._fetch_json(session, f"/api/artist/{artist_id}", {}), 5)
+                        profile = details.get("artist")
+                        if isinstance(profile, dict) and _integer(profile.get("id")) == artist_id:
+                            avatar = profile_image_url(profile, "img1v1Url", "picUrl", hosts=("music.126.net",))
+                    except (RuntimeError, asyncio.TimeoutError) as exc:
+                        logger.debug(f"网易云音乐歌手头像暂不可用：{exc}")
             metadata: MediaMetadata = {
                 "url": f"{BASE_URL}/song?id={identity}", "title": title.strip(),
+                "author_avatar_url": avatar,
                 "author": author, "platform": "网易云音乐",
                 "desc": f"专辑：{album_name.strip()}" if isinstance(album_name, str) and album_name.strip() else "",
                 "timestamp": _timestamp(album.get("publishTime")),

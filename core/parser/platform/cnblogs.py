@@ -76,6 +76,7 @@ class _ArticleHTML(HTMLParser):
         self.fields: Dict[str, List[Union[str, int]]] = {"body": [], "title": [], "date": []}
         self.images: List[List[str]] = []
         self.canonical = ""
+        self.author_avatar = ""
         self.body_count = 0
         self.documents: List[str] = []
         self._script: Optional[List[str]] = None
@@ -98,6 +99,11 @@ class _ArticleHTML(HTMLParser):
         if in_head and tag == "script" and values.get("type") == "application/ld+json":
             self._script = []
         classes = set((values.get("class") or "").split())
+        if tag == "img" and "author_avatar" in classes and not hidden and not field and parent[0] == "a":
+            author_link = urlsplit(parent[4])
+            blog = urlsplit(self.url).path.split("/")[1]
+            if author_link.hostname == "home.cnblogs.com" and author_link.path.lower().rstrip("/") == "/u/" + blog:
+                self.author_avatar = _content_url(values.get("src"), self.url, image=True)
         hidden = (hidden or tag in {"script", "style", "noscript", "template", "iframe"}
                   or "hidden" in values or values.get("aria-hidden") == "true"
                   or bool(classes & {"cnblogs_code_toolbar", "code_img_closed", "code_img_opened", "advertisement", "d-none"})
@@ -110,7 +116,7 @@ class _ArticleHTML(HTMLParser):
         elif not hidden and values.get("id") == "post-date" and not field:
             field = "date"
         pre = pre or tag == "pre"
-        href = _content_url(values.get("href"), self.url) if tag == "a" and field == "body" else ""
+        href = _content_url(values.get("href"), self.url) if tag == "a" and field in ("", "body") else ""
         if tag not in self.VOIDS:
             self.stack.append((tag, field, hidden, pre, href, len(self.fields.get(field, []))))
         if not field or hidden:
@@ -187,9 +193,10 @@ class _ArticleHTML(HTMLParser):
 class CnblogsParser(BaseVideoParser):
     """解析匿名可见的博客园文章，不请求需要登录的评论。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, fetch_avatar: bool = False) -> None:
         """初始化公开博客解析器。"""
         super().__init__("cnblogs")
+        self.fetch_avatar = fetch_avatar
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
 
     def can_parse(self, url: str) -> bool:
@@ -234,7 +241,7 @@ class CnblogsParser(BaseVideoParser):
                     if response.status in {301, 302, 303, 307, 308}:
                         location = response.headers.get("Location", "")
                         target = urljoin(url, location)
-                        if not location or _article_parts(target) != identity:
+                        if not identity or not location or _article_parts(target) != identity:
                             raise RuntimeError("博客园文章需要登录或返回了无效重定向")
                         if redirect == 2:
                             raise RuntimeError("博客园文章重定向次数过多")
@@ -311,8 +318,19 @@ class CnblogsParser(BaseVideoParser):
                 published = datetime.fromisoformat(page.text("date"))
             except ValueError as exc:
                 raise RuntimeError("博客园页面缺少有效发布时间") from exc
+            if self.fetch_avatar and not page.author_avatar:
+                try:
+                    profile_url = f"{BASE_URL}/{identity[0]}/ajax/BlogPostInfo.aspx?postId={identity[1]}"
+                    source = await asyncio.wait_for(self._request(session, profile_url), 5)
+                    profile = _ArticleHTML(canonical)
+                    profile.feed(source)
+                    profile.close()
+                    page.author_avatar = profile.author_avatar
+                except (RuntimeError, asyncio.TimeoutError):
+                    pass
             metadata: MediaMetadata = {
                 "url": canonical, "platform": self.name, "title": title, "author": author,
+                "author_avatar_url": page.author_avatar,
                 "timestamp": published.strftime("%Y-%m-%d %H:%M:%S"), "desc": body,
                 "image_urls": page.images, "video_urls": [],
                 "image_headers": build_request_headers(referer=canonical),

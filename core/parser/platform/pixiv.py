@@ -17,7 +17,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -157,15 +157,18 @@ class PixivParser(BaseVideoParser):
         cookie: str = "",
         proxy: Optional[str] = None,
         hot_comment_count: int = 0,
+        *, fetch_avatar: bool = False,
     ) -> None:
         """初始化作品解析与可选评论读取。
 
         Args:
             cookie: Pixiv 登录 Cookie。
             proxy: 作品与评论请求使用的代理地址。
+            fetch_avatar: 作品详情缺少头像时是否读取画师公开资料。
             hot_comment_count: 最多读取的根评论数量，0 表示关闭。
         """
         super().__init__("pixiv")
+        self.fetch_avatar = fetch_avatar
         try:
             self.hot_comment_count = max(0, int(hot_comment_count))
         except (TypeError, ValueError, OverflowError):
@@ -356,6 +359,28 @@ class PixivParser(BaseVideoParser):
         title = str(body.get("illustTitle") or body.get("title") or "Untitled")
         user_name = str(body.get("userName") or "Unknown")
 
+        illustrations = body.get("userIllusts")
+        avatar = ""
+        if isinstance(illustrations, dict) and body.get("userId"):
+            for work in illustrations.values():
+                if isinstance(work, dict) and str(work.get("userId")) == str(body["userId"]):
+                    avatar = profile_image_url(work, "profileImageUrl", hosts=("pximg.net",))
+                    if avatar:
+                        break
+
+        user_id = str(body.get("userId") or "")
+        if self.fetch_avatar and not avatar and re.fullmatch(r"[1-9][0-9]{0,19}", user_id):
+            try:
+                profile = await asyncio.wait_for(_fetch_json(
+                    session, f"https://www.pixiv.net/ajax/user/{user_id}?full=0", illust_id,
+                    "作者头像", self.cookie, proxy=self.proxy,
+                ), 5)
+                user = profile.get("body")
+                if isinstance(user, dict) and str(user.get("userId")) == user_id:
+                    avatar = profile_image_url(user, "imageBig", "image", hosts=("pximg.net",))
+            except (aiohttp.ClientError, RuntimeError, asyncio.TimeoutError) as exc:
+                logger.debug(f"Pixiv 画师头像暂不可用：{type(exc).__name__}")
+
         def safe_int(value: Any) -> int:
             try:
                 return int(value or 0)
@@ -386,6 +411,7 @@ class PixivParser(BaseVideoParser):
             "url": url,
             "title": title,
             "author": user_name,
+            "author_avatar_url": avatar,
             "platform": "pixiv",
             "desc": desc,
             "image_urls": image_urls,

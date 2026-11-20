@@ -14,7 +14,7 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import build_content_blocks, build_request_headers, join_content_text
+from ...utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from ..base import BaseVideoParser
 from .content import clean_content_text, parse_content, parse_content_parts
 
@@ -327,6 +327,7 @@ class NgaParser(BaseVideoParser):
                 "url": canonical_url,
                 "title": html.unescape(title.strip()) if isinstance(title, str) else "",
                 "author": self._author_name(payload, post),
+                "author_avatar_url": profile_image_url(post.get("author"), "avatar", hosts=("nga.cn", "nga.178.com", "ngabbs.com")),
                 "timestamp": self._format_timestamp(post),
                 "desc": desc,
                 "image_urls": images,

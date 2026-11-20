@@ -2,6 +2,7 @@
 
 import asyncio
 import html as html_lib
+import json
 import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
@@ -13,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers
+from ..utils import build_content_blocks, build_request_headers, profile_image_url
 from .base import BaseVideoParser
 from .xiaoheihe import XiaoheiheParser
 
@@ -38,6 +39,57 @@ STEAM_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v={}"
+
+
+async def fetch_developer_profile(
+    session: aiohttp.ClientSession, appid: str, proxy: Optional[str] = None,
+) -> Tuple[str, str]:
+    """按商店游戏编号取唯一开发商的公开账号名称和头像。"""
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", appid):
+        return "", ""
+    query = {
+        "ids": [{"appid": int(appid)}],
+        "context": {"language": "english", "country_code": "US"},
+        "data_request": {"include_basic_info": True},
+    }
+    options = {"proxy": proxy, "timeout": aiohttp.ClientTimeout(total=8), "allow_redirects": False}
+    try:
+        async with session.get(
+            "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/",
+            params={"input_json": json.dumps(query)}, **options,
+        ) as response:
+            if response.status != 200:
+                return "", ""
+            payload = await response.json()
+        items = payload.get("response", {}).get("store_items", [])
+        if len(items) != 1 or str(items[0].get("appid")) != appid:
+            return "", ""
+        developers = items[0].get("basic_info", {}).get("developers", [])
+        if len(developers) != 1 or not isinstance(developers[0], dict):
+            return "", ""
+        name = developers[0].get("name")
+        clan = str(developers[0].get("creator_clan_account_id") or "")
+        if not isinstance(name, str) or not name.strip() or not re.fullmatch(r"[1-9][0-9]{0,9}", clan):
+            return "", ""
+        async with session.get(f"https://store.steampowered.com/curator/{clan}/", **options) as response:
+            if response.status != 200:
+                return "", ""
+            prefix = bytearray()
+            async for chunk in response.content.iter_chunked(32768):
+                prefix.extend(chunk)
+                if len(prefix) >= 262144:
+                    break
+        page = prefix.decode("utf-8", errors="replace")
+        for tag in re.findall(r"<img\b[^>]*>", page, re.I):
+            if not re.search(r"""\sclass=["']curator_avatar["']""", tag, re.I):
+                continue
+            src = re.search(r"""\ssrc=["']([^"']+)["']""", tag, re.I)
+            if src:
+                avatar = profile_image_url({"src": html_lib.unescape(src[1])}, "src", hosts=("steamstatic.com",))
+                return name.strip(), avatar
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError, AttributeError, KeyError) as exc:
+        logger.debug(f"[steam] 获取游戏 {appid} 的开发商头像失败：{exc}")
+    return "", ""
 
 
 class SteamParser(BaseVideoParser):
@@ -907,6 +959,12 @@ class SteamParser(BaseVideoParser):
                 re.DOTALL,
             )
         ]
+        avatar = ""
+        if len(authors) == 1 and creators:
+            portraits = self._div_blocks(creators[0], "playerAvatar", limit=1)
+            match = re.search(r'<img\b[^>]*\bsrc="([^"]+)"', portraits[0], re.I) if portraits else None
+            if match:
+                avatar = profile_image_url({"src": html_lib.unescape(match[1])}, "src", hosts=("steamstatic.com",))
         app_name = self._first_block_text(html_text, "apphub_AppName")
         detail_lines, published = self._build_community_details(html_text)
         lines = ["", "", "=============", intro, "=============", ""] if intro else [""]
@@ -930,6 +988,7 @@ class SteamParser(BaseVideoParser):
         result: MediaMetadata = {
             "url": url,
             "title": title,
+            "author_avatar_url": avatar,
             "author": ", ".join(dict.fromkeys(name for name in authors if name)),
             "desc": "\n".join(lines).rstrip(),
             "timestamp": published,
@@ -987,6 +1046,7 @@ class SteamParser(BaseVideoParser):
                 "url": url,
                 "title": name,
                 "author": ", ".join(self._string_values(game.get("developers"))),
+                "steam_developer_appid": str(appid),
                 "desc": description,
                 "timestamp": release_date,
                 "video_urls": video_urls,

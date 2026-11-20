@@ -9,7 +9,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.15.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.15.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
 [![GitHub](https://img.shields.io/badge/作者-drdon1234-blue)](https://github.com/drdon1234)
 
 </div>
@@ -114,7 +114,7 @@ _✨ 自动解析流媒体平台链接，发送视频、音频、图片与文本
 
 对于能识别配图位置的文章与帖子，只要同时输出正文和富媒体，两种图片版式都会把配图嵌入原文位置。已嵌入的图片不再另发。图文超过单张图片的硬限制时自动分页，生成失败时保留文字和配图。关闭图片渲染时，仍可通过 `富媒体展示 → 正文与配图按原文顺序穿插` 控制逐条发送顺序。
 
-引用含有嵌入图片的解析结果并发送 **原图**，可按画面顺序取回该条结果的全部原图，包括实际绘制的头像、封面与配图。引用任意分页都返回同一组原图；引用 OneBot 合并转发时返回其中各条结果的原图。关键词在同一面板设置，留空关闭。关闭转图后仍可取回有效期内的历史原图，引用其他消息时插件会继续正常处理。原图在当前会话保留一小时，管理员清理缓存后会提前失效。OneBot 和 Telegram 图片消息通过消息编号定位；其他适配器需能在引用中返回结果编号文字或提供发送回执。
+引用解析结果并发送 **原图**，可按画面顺序取回卡片中的封面、图集和正文配图。作者头像仅在分享卡顶部展示。引用任意分页都返回同一组原图；引用 OneBot 合并转发时返回其中各条结果的原图。关键词在同一面板设置，留空关闭。关闭转图后仍可取回有效期内的历史原图，引用其他消息时插件会继续正常处理。原图在当前会话保留一小时，管理员清理缓存后会提前失效。OneBot 和 Telegram 图片消息通过消息编号定位；其他适配器需能在引用中返回结果编号文字或提供发送回执。
 
 支持设置字体、字号（16–42）、行距（1.0–3.0）和段落间距（0–3.0）。`长图自动分页` 默认关闭，开启后文本图片和 README 截图按 1800 像素分页。`正文、热评与翻译分区渲染` 可让三部分分别出图。
 

@@ -14,7 +14,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -181,6 +181,7 @@ class TwitterParser(BaseVideoParser):
         tweet_text = article_text or self._twitter_text(tweet)
         author_info = tweet.get("author", {})
         author = self._fxtwitter_author(author_info)
+        avatar = profile_image_url(author_info, "avatar_url", hosts=("twimg.com",))
         timestamp = self._parse_twitter_date(tweet.get("created_at"))
         quote = self._extract_fxtwitter_quote(tweet.get("quote"))
         desc = self._build_tweet_desc(tweet_text, quote)
@@ -198,6 +199,7 @@ class TwitterParser(BaseVideoParser):
             or (f"{author} 的推文" if author else "Twitter 推文"),
             "text": desc,
             "author": self._combine_parenthetical(author, quote.get("author", "")),
+            "author_avatar_url": avatar,
             "timestamp": self._combine_parenthetical(
                 timestamp, quote.get("timestamp", "")
             ),
@@ -442,6 +444,9 @@ class TwitterParser(BaseVideoParser):
             raise RuntimeError("Twitter GraphQL响应中未找到tweet")
 
         legacy = tweet.get("legacy") or {}
+        user = self._graphql_user(tweet)
+        avatar = (profile_image_url(user.get("avatar"), "image_url", hosts=("twimg.com",))
+                  or profile_image_url(user.get("legacy"), "profile_image_url_https", hosts=("twimg.com",)))
         author = self._graphql_author(tweet)
 
         timestamp = ""
@@ -479,22 +484,30 @@ class TwitterParser(BaseVideoParser):
             "title": f"{author} 的推文" if author else "Twitter 推文",
             "text": desc,
             "author": self._combine_parenthetical(author, quote.get("author", "")),
+            "author_avatar_url": avatar,
             "timestamp": self._combine_parenthetical(
                 timestamp, quote.get("timestamp", "")
             ),
         }
 
-    def _graphql_author(self, tweet: Dict[str, Any]) -> str:
-        """从 GraphQL tweet 节点提取作者。"""
+    @staticmethod
+    def _graphql_user(tweet: Dict[str, Any]) -> Dict[str, Any]:
+        """取当前推文的用户资料。"""
         user_core = tweet.get("core") or {}
         user_result = (
             ((user_core.get("user_results") or {}).get("result") or {})
             if isinstance(user_core, dict)
             else {}
         )
-        user_legacy = user_result.get("legacy") or {}
-        name = user_legacy.get("name") or ""
-        screen_name = user_legacy.get("screen_name") or ""
+        return user_result if isinstance(user_result, dict) else {}
+
+    def _graphql_author(self, tweet: Dict[str, Any]) -> str:
+        """从 GraphQL tweet 节点提取作者。"""
+        user = self._graphql_user(tweet)
+        identity = user.get("core") or {}
+        legacy = user.get("legacy") or {}
+        name = identity.get("name") or legacy.get("name") or ""
+        screen_name = identity.get("screen_name") or legacy.get("screen_name") or ""
         return (
             f"{name}(@{screen_name})" if name and screen_name else (name or screen_name)
         )
@@ -812,6 +825,7 @@ class TwitterParser(BaseVideoParser):
                 "url": url,
                 "title": title or (f"{author} 的推文" if author else "Twitter 推文"),
                 "author": author,
+                "author_avatar_url": media_info.get("author_avatar_url", ""),
                 "desc": text,
                 "timestamp": timestamp,
                 "image_headers": image_headers,

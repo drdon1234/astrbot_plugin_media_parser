@@ -14,6 +14,7 @@ class MediaMetadata(TypedDict, total=False):
     title: str
     author_name: str
     author_avatar_url: str
+    steam_developer_appid: str  # 用于按游戏编号核对分享卡开发商署名与头像
     published_at: str
     author: str
     desc: str

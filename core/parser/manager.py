@@ -22,6 +22,7 @@ _PARSER_STRING_FIELDS = frozenset(
         "author",
         "author_name",
         "author_avatar_url",
+        "steam_developer_appid",
         "published_at",
         "desc",
         "hot_comments_label",

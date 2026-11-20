@@ -19,7 +19,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers, is_live_url, SkipParse
+from ..utils import build_request_headers, is_live_url, SkipParse, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -545,6 +545,7 @@ class XiaohongshuParser(BaseVideoParser):
             "title": title,
             "desc": desc,
             "author_name": author_name,
+            "author_avatar_url": profile_image_url(user_data, "avatar", "avatarUrl", "image", hosts=("xhscdn.com", "xiaohongshu.com")),
             "author_id": author_id,
             "publish_time": publish_time,
             "video_url": video_url,
@@ -802,6 +803,7 @@ class XiaohongshuParser(BaseVideoParser):
                     "url": full_url,
                     "title": title,
                     "author": author,
+                    "author_avatar_url": note_data.get("author_avatar_url", ""),
                     "desc": desc,
                     "timestamp": publish_time,
                     "video_urls": [[video_url]],
@@ -824,6 +826,7 @@ class XiaohongshuParser(BaseVideoParser):
                     "url": full_url,
                     "title": title,
                     "author": author,
+                    "author_avatar_url": note_data.get("author_avatar_url", ""),
                     "desc": desc,
                     "timestamp": publish_time,
                     "video_urls": [],

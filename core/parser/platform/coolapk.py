@@ -19,7 +19,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers, join_content_text
+from ..utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -502,6 +502,7 @@ class CoolapkParser(BaseVideoParser):
             "summary_subtype": {"apk": "app", "u": "user", "t": "topic", "product_name": "product"}.get(kind, kind),
             "url": page_url, "platform": "coolapk", "title": _clean_text(title) if isinstance(title, str) else "",
             "author": str(data.get("username") or data.get("developername") or data.get("author") or ""),
+            "author_avatar_url": profile_image_url(data, "userAvatar", hosts=("coolapk.com", "coolapkmarket.com")) if data.get("username") else "",
             "desc": _clean_text("\n".join(lines)), "image_urls": [[image] for image in images], "video_urls": [],
             "timestamp": _timestamp(data.get("lastupdate") or data.get("dateline") or data.get("update_time")),
             "image_headers": build_request_headers(is_video=False, referer=page_url),
@@ -586,6 +587,7 @@ class CoolapkParser(BaseVideoParser):
                 }.get(feed.get("feedType"), "article" if feed.get("message_raw_output") else "post")),
                 "url": page_url, "platform": self.name,
                 "title": title, "author": str(feed.get("username") or ""),
+                "author_avatar_url": profile_image_url(feed, "userAvatar", hosts=("coolapk.com", "coolapkmarket.com")),
                 "desc": desc, "timestamp": _timestamp(feed.get("dateline")),
                 "image_urls": images, "video_urls": [],
                 "image_headers": build_request_headers(is_video=False, referer=page_url),

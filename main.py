@@ -31,6 +31,8 @@ from .core.storage import (
 )
 from .core.storage.original_images import OriginalImages
 from .core.constants import Config
+from .core.metadata_visibility import text_metadata_field_enabled
+from .core.parser.platform.steam import fetch_developer_profile
 from .core.message_adapter.rich_card import build_card_content
 from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.shared_images import SharedImageDelivery
@@ -67,7 +69,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.15.0",
+    "1.15.1",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -642,6 +644,15 @@ class VideoParserPlugin(Star):
     ) -> bool:
         """整条结果成功绘制后再替换其节点，并让每一页关联相同的原图集合。"""
         settings = cfg.message.text_metadata
+        appid = metadata.get("steam_developer_appid")
+        if (appid and settings.render_layout == "分享卡" and not metadata.get("author_avatar_url")
+                and text_metadata_field_enabled(metadata, "author")):
+            name, avatar = await fetch_developer_profile(
+                session, appid, cfg.proxy.address if cfg.proxy.steam_use_parse_proxy else None,
+            )
+            byline = metadata.get("author_name") or metadata.get("author") or ""
+            if avatar and (not byline or byline.strip().casefold() == name.casefold()):
+                metadata = dict(metadata, author_name=name, author_avatar_url=avatar)
         originals = dict(metadata.get("original_image_paths") or {})
 
         async def fetch_picture(candidates):

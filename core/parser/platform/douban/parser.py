@@ -12,7 +12,7 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import build_content_blocks
+from ...utils import build_content_blocks, profile_image_url
 from ..base import BaseVideoParser
 from .content import (
     Node, clean_block_text, content_parts, first, html_comments, image_candidates,
@@ -118,11 +118,29 @@ def _date(value: str) -> str:
     return match.group(0) if match else ''
 
 
-def _author(root: Optional[Node]) -> str:
+def _page_author_fields(root: Optional[Node]) -> Dict[str, str]:
     """读取当前内容区域的作者链接，不搜索页面推荐区。"""
-    if not root:
+    if root:
+        for link in root.find_all('a'):
+            href = link.attrs.get('href', '')
+            if '/people/' in href and link.text():
+                return {'author': link.text(), 'author_avatar_url': _page_avatar(root, href)}
+    return {'author': ''}
+
+
+def _page_avatar(root: Optional[Node], profile: str) -> str:
+    """只从指向同一豆瓣用户的链接读取官方头像。"""
+    if not root or not re.fullmatch(r'https?://www\.douban\.com/people/[\w.-]+/?', profile):
         return ''
-    return next((node.text() for node in root.find_all('a') if '/people/' in node.attrs.get('href', '') and node.text()), '')
+    for link in root.find_all('a'):
+        if link.attrs.get('href', '').rstrip('/') != profile.rstrip('/'):
+            continue
+        image = link.find('img')
+        if image:
+            avatar = profile_image_url(image.attrs, 'src', hosts=('doubanio.com',))
+            if urlsplit(avatar).path.startswith('/icon/'):
+                return avatar
+    return ''
 
 
 def _append_images(metadata: MediaMetadata, groups: List[List[str]]) -> None:
@@ -285,6 +303,7 @@ class DoubanParser(BaseVideoParser):
         root = parse_html(content) if kind != 'status' and isinstance(content, str) else Node()
         metadata: MediaMetadata = {
             'url': url, 'title': str(data.get('title') or ''), 'author': str(author.get('name') or ''),
+            "author_avatar_url": profile_image_url(author, "large_avatar", "avatar", hosts=("doubanio.com", "douban.com")),
             'desc': content.strip() if isinstance(content, str) and (kind == 'status' or not re.search(r'<[A-Za-z][^>]*>', content)) else root.text(),
             'timestamp': str(data.get('create_time') or ''), 'image_urls': [],
         }
@@ -369,6 +388,12 @@ class DoubanParser(BaseVideoParser):
         if kind == 'review':
             body = root.find(cls='review-content')
             metadata['author'] = body.attrs.get('data-author', '') if body else ''
+            main = root.find(id=_route(url)[1])
+            header = main.find(cls='main-hd') if main else None
+            if header:
+                profile = next((a.attrs.get('href', '') for a in header.find_all('a')
+                                if a.text() == metadata['author']), '')
+                metadata['author_avatar_url'] = _page_avatar(main, profile)
             metadata['timestamp'] = str(data.get('datePublished') or text_of(root.find(cls='main-meta')))
         elif kind == 'comment':
             comments = html_comments(root)
@@ -378,19 +403,20 @@ class DoubanParser(BaseVideoParser):
             if not selected:
                 raise ValueError('豆瓣短评身份与请求不一致')
             metadata.update(desc=selected['message'], author=selected['username'], timestamp=selected['time'])
+            metadata['author_avatar_url'] = _page_avatar(root, f"https://www.douban.com/people/{selected['uid']}/")
             return metadata
         elif kind == 'discussion':
             body = root.find(cls='post-content')
             report = body.find(id='link-report') if body else None
             header = report.find(cls='post-author') if report else None
-            metadata['author'] = _author(header)
+            metadata.update(_page_author_fields(header))
             metadata['timestamp'] = _date(text_of(header))
             if report:
                 body = Node()
                 body.children = [node for node in report.children if node is not header]
         elif kind == 'doulist':
             info = root.find(id='doulist-info')
-            metadata['author'] = _author(info)
+            metadata.update(_page_author_fields(info))
             metadata['timestamp'] = _date(text_of(info))
             items = root.find_all(cls='doulist-item')[:MAX_COLLECTION_ITEMS]
             sections = [text_of(info), f'以下为豆列首批 {len(items)} 项预览。']
@@ -420,7 +446,7 @@ class DoubanParser(BaseVideoParser):
             if not footer:
                 aside = root.find(cls='aside')
                 footer = next((node for node in aside.find_all(cls='mod') if '上传于' in node.text()), None) if aside else None
-            metadata['author'] = _author(footer)
+            metadata.update(_page_author_fields(footer))
             metadata['timestamp'] = _date(text_of(footer))
         elif kind == 'album':
             album = root.find(cls='photolst') or root.find(id='photo_album')

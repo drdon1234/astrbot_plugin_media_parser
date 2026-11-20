@@ -16,7 +16,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers, join_content_text
+from ..utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -430,6 +430,7 @@ class V2exParser(BaseVideoParser):
             metadata: MediaMetadata = {
                 "url": f"{BASE_URL}/t/{identity}", "title": html.unescape(title),
                 "author": member["username"], "timestamp": _timestamp(topic.get("created")),
+                "author_avatar_url": profile_image_url(member, "avatar_large", "avatar_normal", hosts=("v2ex.com", "gravatar.com")),
                 "desc": content.text(), "image_urls": content.images, "video_urls": [],
                 # 网页配图使用 no-referrer，外部图床不附带主题 Referer 或账号信息。
                 "image_headers": build_request_headers(), "platform": "V2EX",

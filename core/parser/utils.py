@@ -7,11 +7,33 @@ import hashlib
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlsplit
 
 
 class SkipParse(Exception):
     pass
+
+
+def profile_image_url(profile: Any, *fields: str, hosts: Sequence[str], base: str = "") -> str:
+    """从已定位的作者资料中选择平台图床上的头像，保留图片签名。"""
+    if not isinstance(profile, dict):
+        return ""
+    for field in fields:
+        value = profile.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value = value.strip()
+        if re.search(r"[\s\\\x00-\x1f\x7f]", value):
+            continue
+        try:
+            parts = urlsplit(urljoin(base or "https:", value))
+            host = parts.hostname or ""
+            if (parts.scheme in ("https", "http") and parts.netloc.lower() == host
+                    and any(host == domain or host.endswith("." + domain) for domain in hosts)):
+                return parts.geturl()
+        except ValueError:
+            continue
+    return ""
 
 
 def select_snapshot_files(entries: Sequence[tuple[str, str, str, str]]) -> List[tuple[str, str]]:

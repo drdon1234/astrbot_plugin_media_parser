@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers, join_content_text
+from ..utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -539,6 +539,7 @@ class AcfunParser(BaseVideoParser):
             "url": source_url,
             "title": title,
             "author": self._first_non_empty(user.get("name")),
+            "author_avatar_url": profile_image_url(user, "headUrl", hosts=("acfun.cn", "aixifan.com")),
             "desc": self._first_non_empty(
                 state.get("description"), state.get("introduction"), state.get("bangumiIntro")
             ),
@@ -591,6 +592,7 @@ class AcfunParser(BaseVideoParser):
             "url": source_url,
             "title": self._first_non_empty(state.get("title")),
             "author": self._first_non_empty(user.get("name")),
+            "author_avatar_url": profile_image_url(user, "headUrl", hosts=("acfun.cn", "aixifan.com")),
             "desc": self._clean_article_text(join_content_text(content.text))
             or self._first_non_empty(state.get("description")),
             "timestamp": self._format_timestamp(

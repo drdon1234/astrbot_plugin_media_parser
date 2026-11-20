@@ -14,6 +14,7 @@ from ...logger import logger
 from ...constants import Config
 from ...types import MediaMetadata
 from ..utils import (
+    profile_image_url,
     build_request_headers, format_directory_tree, format_percentage, select_snapshot_files,
     verified_blob_excerpt,
 )
@@ -477,6 +478,7 @@ class GitHubParser(BaseVideoParser):
                 metadata: MediaMetadata = {
                     "url": expected_url, "platform": self.name, "title": f"{path} #{issue_id} · {issue['title'].strip()}",
                     "author": str(issue["user"].get("login") or "未知用户"),
+                    "author_avatar_url": profile_image_url(issue["user"], "avatar_url", hosts=("githubusercontent.com",)),
                     "timestamp": self._comment_time(issue.get("created_at")),
                     "desc": f"状态：{state}\n\n" + (body.strip() if isinstance(body, str) and body.strip() else "暂无议题正文"),
                     "video_urls": [], "image_urls": [],
@@ -494,6 +496,7 @@ class GitHubParser(BaseVideoParser):
             "url": "https://github.com/" + repository["full_name"],
             "title": repository["full_name"],
             "author": repository["owner"]["login"],
+            "author_avatar_url": profile_image_url(repository["owner"], "avatar_url", hosts=("githubusercontent.com",)),
             "desc": description + ("\n\n" + snapshot if snapshot else ""),
             "platform": self.name,
             **({"repository_snapshot": evidence} if evidence else {}),

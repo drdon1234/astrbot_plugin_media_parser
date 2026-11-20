@@ -81,6 +81,7 @@ class _ArticleHTML(HTMLParser):
         self.images: List[List[str]] = []
         self.meta: Dict[str, str] = {}
         self.canonical = ""
+        self.author_avatar = ""
         self.body_count = 0
         self.scripts: List[str] = []
         self._script: Optional[List[str]] = None
@@ -106,6 +107,9 @@ class _ArticleHTML(HTMLParser):
         if in_head and tag == "script":
             self._script = []
         classes = set((values.get("class") or "").split())
+        if tag == "img" and "avatar_pic" in classes and not field and not hidden and self.stack:
+            if parent[0] == "a" and parent[4].rstrip("/").lower() == self.url.rsplit("/article/", 1)[0].lower():
+                self.author_avatar = _content_url(values.get("src"), self.url, image=True)
         if "vip-mask" in classes:
             self.has_paywall = True
         hidden = (hidden or tag in {"script", "style", "noscript", "template", "iframe"}
@@ -118,7 +122,7 @@ class _ArticleHTML(HTMLParser):
         elif not hidden and values.get("id") == "articleContentId" and not field:
             field = "title"
         pre = pre or tag == "pre"
-        href = _content_url(values.get("href"), self.url) if tag == "a" and field == "body" else ""
+        href = _content_url(values.get("href"), self.url) if tag == "a" and field in ("", "body") else ""
         if tag not in self.VOIDS:
             self.stack.append((tag, field, hidden, pre, href, len(self.fields.get(field, []))))
         if not field or hidden:
@@ -355,6 +359,7 @@ class CsdnParser(BaseVideoParser):
                 body = "【付费文章公开预览，完整内容请前往原文查看】\n\n" + body
             metadata: MediaMetadata = {
                 "url": canonical, "platform": self.name, "title": title, "author": author,
+                "author_avatar_url": page.author_avatar,
                 "timestamp": published.astimezone(CHINA_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
                 "desc": body, "image_urls": page.images, "video_urls": [],
                 "image_headers": build_request_headers(referer=canonical),

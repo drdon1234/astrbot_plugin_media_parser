@@ -12,7 +12,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -296,6 +296,28 @@ class YoutubeParser(BaseVideoParser):
         elif isinstance(value, list):
             for child in value:
                 yield from YoutubeParser._walk_dicts(child)
+
+    @classmethod
+    def _channel_avatar(cls, page: str, channel_id: str) -> str:
+        """仅从当前视频所属频道的作者栏读取缩略头像。"""
+        if not channel_id:
+            return ""
+        initial = next(cls._page_json_objects(page, r"\bytInitialData\s*="), {})
+        for node in cls._walk_dicts(initial):
+            owner = node.get("videoOwnerRenderer")
+            if not isinstance(owner, dict):
+                continue
+            endpoint = owner.get("navigationEndpoint")
+            browse = endpoint.get("browseEndpoint") if isinstance(endpoint, dict) else None
+            if not isinstance(browse, dict) or browse.get("browseId") != channel_id:
+                continue
+            thumbnail = owner.get("thumbnail")
+            images = thumbnail.get("thumbnails") if isinstance(thumbnail, dict) else None
+            for image in images if isinstance(images, list) else ():
+                avatar = profile_image_url(image, "url", hosts=("ggpht.com", "googleusercontent.com", "ytimg.com"))
+                if avatar:
+                    return avatar
+        return ""
 
     @staticmethod
     def _continuation_token(endpoint: Any) -> str:
@@ -692,6 +714,7 @@ class YoutubeParser(BaseVideoParser):
                 "url": canonical_url,
                 "title": title,
                 "author": author,
+                "author_avatar_url": self._channel_avatar(page, str(details.get("channelId") or "")),
                 "desc": description,
                 "timestamp": timestamp,
                 "platform": "youtube",

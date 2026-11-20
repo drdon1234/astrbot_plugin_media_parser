@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -144,13 +144,15 @@ def _text(value: Any) -> str:
 class XimalayaParser(BaseVideoParser):
     """解析喜马拉雅单集，评论失败时保留已取得的详情和音频。"""
 
-    def __init__(self, hot_comment_count: int = 0) -> None:
+    def __init__(self, hot_comment_count: int = 0, *, fetch_avatar: bool = False) -> None:
         """初始化单集解析器与评论数量。
 
         Args:
+            fetch_avatar: 是否为分享卡查询作者资料。
             hot_comment_count: 评论输出上限，零表示不请求评论。
         """
         super().__init__("ximalaya")
+        self.fetch_avatar = fetch_avatar
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
         try:
             self.hot_comment_count = min(MAX_COMMENT_COUNT, max(0, int(hot_comment_count)))
@@ -292,10 +294,21 @@ class XimalayaParser(BaseVideoParser):
                 value for key in ("cover_url", "cover_url_142")
                 if (value := _media_url(payload.get(key)))
             ))
+            avatar = ""
+            uid = _integer(payload.get("uid"))
+            if self.fetch_avatar and uid and uid > 0:
+                try:
+                    profile_url = f"https://mobile.ximalaya.com/mobile/others/ca/homePage?toUid={uid}"
+                    profile = await asyncio.wait_for(self._request_json(session, profile_url), 5)
+                    if _integer(profile.get("uid")) == uid:
+                        avatar = profile_image_url(profile, "mobileMiddleLogo", "mobileSmallLogo", hosts=("xmcdn.com",))
+                except (RuntimeError, asyncio.TimeoutError) as exc:
+                    logger.debug(f"喜马拉雅主播头像暂不可用：{exc}")
             duration = _integer(payload.get("duration"))
             is_preview = bool(audio_urls and all("_preview_" in urlsplit(value).path for value in audio_urls))
             metadata: MediaMetadata = {
                 "url": f"{BASE_URL}/sound/{identity}", "platform": "喜马拉雅",
+                "author_avatar_url": avatar,
                 "title": title, "author": _text(payload.get("nickname")),
                 "desc": _text(payload.get("intro")),
                 "timestamp": _text(payload.get("formatted_created_at")),

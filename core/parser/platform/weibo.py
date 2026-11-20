@@ -11,7 +11,7 @@ import aiohttp
 from ...logger import logger
 
 from ...types import MediaMetadata
-from ..utils import build_request_headers
+from ..utils import build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -359,6 +359,7 @@ class WeiboParser(BaseVideoParser):
         timestamp: str,
         video_urls: List[List[str]],
         image_urls: List[List[str]],
+        user: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """构建解析结果字典
 
@@ -389,6 +390,7 @@ class WeiboParser(BaseVideoParser):
             "url": url,
             "title": "",
             "author": author,
+            "author_avatar_url": profile_image_url(user, "avatar_large", "profile_image_url", "avatar_hd", hosts=("sinaimg.cn",)),
             "desc": desc,
             "timestamp": timestamp,
             "video_urls": video_urls,
@@ -643,7 +645,7 @@ class WeiboParser(BaseVideoParser):
                 status_id = str(json_data.get("id") or json_data.get("mid") or page_id)
                 uid = str(user_id or "")
                 result = self._build_result_dict(
-                    url, author, clean_text, formatted_timestamp, video_urls, image_urls
+                    url, author, clean_text, formatted_timestamp, video_urls, image_urls, user
                 )
                 await self._attach_hot_comments_to_result(
                     session=session,
@@ -735,6 +737,7 @@ class WeiboParser(BaseVideoParser):
                                 formatted_timestamp,
                                 video_urls,
                                 image_urls,
+                                user,
                             )
                             await self._attach_hot_comments_to_result(
                                 session=session,
@@ -815,7 +818,7 @@ class WeiboParser(BaseVideoParser):
                 status_id = str(playinfo.get("mid") or "")
                 uid = str(user_id or "")
                 result = self._build_result_dict(
-                    url, author, desc, "", video_urls, image_urls
+                    url, author, desc, "", video_urls, image_urls, playinfo_user
                 )
                 await self._attach_hot_comments_to_result(
                     session=session,

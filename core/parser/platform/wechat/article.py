@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urljoin, urlparse
 
 from ....types import MediaMetadata
-from ...utils import build_content_blocks, join_content_text
+from ...utils import build_content_blocks, join_content_text, profile_image_url
 
 
 VOID_TAGS = {
@@ -568,6 +568,10 @@ def parse_article_page(page: str, source_url: str) -> MediaMetadata:
         "url": source_url,
         "title": title,
         "author": author,
+        "author_avatar_url": profile_image_url(
+            {"avatar": _property_string(cgi_data, "round_head_img") or _property_string(cgi_data, "hd_head_img")},
+            "avatar", hosts=("qpic.cn", "qlogo.cn"),
+        ) if account else "",
         "desc": content or _clean_summary(summary),
         "timestamp": _publication_date(
             page, "".join(parser.fields["timestamp"]), cgi_data

@@ -18,7 +18,7 @@ from ....logger import logger
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import build_request_headers
+from ...utils import build_request_headers, profile_image_url
 from ..base import BaseVideoParser
 from .sign import decode_video_key
 from .web import HongguoClient
@@ -474,10 +474,14 @@ class HongguoParser(BaseVideoParser):
             metadata["video_decryption_keys"] = keys
         celebrities = detail.get("celebrities")
         if isinstance(celebrities, list):
-            names = [item["nickname"].strip() for item in celebrities
-                     if isinstance(item, dict) and isinstance(item.get("nickname"), str) and item["nickname"].strip()]
-            if names:
-                metadata["author"] = " / ".join(dict.fromkeys(names))
+            credits = [item for item in celebrities if isinstance(item, dict)
+                       and isinstance(item.get("nickname"), str) and item["nickname"].strip()]
+            if credits:
+                names = list(dict.fromkeys(item["nickname"].strip() for item in credits))
+                metadata["author"] = " / ".join(names)
+                label = f"演员：{names[0]}"
+                metadata["author_name"] = label if len(names) == 1 else f"{label} 等{len(names)}人"
+                metadata["author_avatar_url"] = profile_image_url(credits[0], "avatar", hosts=("byteimg.com",))
         try:
             published = int(detail.get("first_visible_time", 0))
             if published > 0:

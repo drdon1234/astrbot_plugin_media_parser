@@ -13,7 +13,7 @@ import aiohttp
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers, join_content_text
+from ..utils import build_content_blocks, build_request_headers, join_content_text, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -450,6 +450,7 @@ class HupuParser(BaseVideoParser):
             "url": canonical,
             "title": html.unescape(str(thread.get("title") or "")),
             "author": str(author.get("puname") or ""),
+            "author_avatar_url": profile_image_url(author, "header", hosts=("hoopchina.com.cn", "hupu.com")),
             "desc": description,
             "timestamp": _timestamp(thread.get("createdAt")),
             "platform": "虎扑",

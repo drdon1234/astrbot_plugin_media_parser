@@ -15,7 +15,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import SkipParse, build_request_headers, is_live_url
+from ..utils import SkipParse, build_request_headers, is_live_url, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -645,6 +645,7 @@ class XianyuParser(BaseVideoParser):
             "url": source_url,
             "title": title,
             "author": author,
+            "author_avatar_url": profile_image_url(detail_data.get("sellerDO"), "portraitUrl", hosts=("alicdn.com",)),
             "desc": self._build_description(detail_data),
             "timestamp": timestamp,
             "video_urls": video_urls,

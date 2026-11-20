@@ -16,7 +16,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import SkipParse, build_content_blocks, build_request_headers
+from ..utils import SkipParse, build_content_blocks, build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 
@@ -345,7 +345,7 @@ class ToutiaoParser(BaseVideoParser):
                 return value_str
         return ""
 
-    def _format_author(self, article_info: Dict[str, Any]) -> str:
+    def _author_fields(self, article_info: Dict[str, Any]) -> Dict[str, str]:
         media_user = article_info.get("mediaUser") or {}
         if not isinstance(media_user, dict):
             media_user = {}
@@ -366,9 +366,14 @@ class ToutiaoParser(BaseVideoParser):
             article_info.get("creatorUid"),
             thread_user_info.get("userId"),
         )
-        if screen_name and user_id:
-            return f"{screen_name}(uid:{user_id})"
-        return screen_name or user_id
+        hosts = ("toutiaostatic.com", "byteimg.com", "toutiaoimg.com", "pstatp.com")
+        avatar = profile_image_url(media_user, "avatarUrl", hosts=hosts)
+        if not avatar:
+            avatar = profile_image_url(thread_user_info, "avatarUrl", hosts=hosts)
+        return {
+            "author": f"{screen_name}(uid:{user_id})" if screen_name and user_id else screen_name or user_id,
+            "author_avatar_url": avatar,
+        }
 
     @staticmethod
     def _get_thread_base(article_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -557,7 +562,7 @@ class ToutiaoParser(BaseVideoParser):
         metadata = {
             "url": source_url,
             "title": title,
-            "author": self._format_author(article_info),
+            **self._author_fields(article_info),
             "desc": self._clean_html_text(content_html),
             "timestamp": self._format_timestamp(
                 self._first_non_empty(
@@ -669,7 +674,7 @@ class ToutiaoParser(BaseVideoParser):
         return {
             "url": source_url,
             "title": title,
-            "author": self._format_author(article_info),
+            **self._author_fields(article_info),
             "desc": self._clean_html_text(str(article_info.get("content") or "")),
             "timestamp": self._format_timestamp(article_info.get("publishTime")),
             "video_urls": self._collect_video_urls(vod_payload),

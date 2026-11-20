@@ -118,7 +118,7 @@ async def render_text_metadata_images(
         font_proxy_url: 补全默认字体时使用的代理地址，为空时直接连接。
         blocks: 按原文顺序排列的文本与本地图片。
         share: 分享卡头部，省略时使用文字卡。
-        embedded: 渲染成功后供调用方登记原图的文件列表。
+        embedded: 按绘制顺序登记的封面、图集与正文配图路径。
         timeout_seconds: 渲染超时时间（秒）。
 
     Returns:
@@ -558,8 +558,6 @@ def _draw_page(
             if share.avatar:
                 try:
                     _paste_pictures(canvas, (share.avatar,), (body_x, header_y, 60, 60), "avatar")
-                    if embedded is not None:
-                        embedded.append(share.avatar)
                 except (OSError, ValueError):
                     pass
         top = header_y

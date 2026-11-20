@@ -14,7 +14,7 @@ import aiohttp
 
 from ....constants import Config
 from ....types import MediaMetadata
-from ...utils import build_request_headers
+from ...utils import build_request_headers, profile_image_url
 from ..base import BaseVideoParser
 from .article import parse_article_page
 
@@ -368,6 +368,7 @@ class WechatParser(BaseVideoParser):
         result: MediaMetadata = {
             "title": str(feed_info.get("description") or "").strip(),
             "author": str(author_info.get("nickname") or "视频号用户").strip(),
+            "author_avatar_url": profile_image_url(author_info, "headUrl", "head_url", hosts=("qpic.cn", "qlogo.cn")),
             "desc": self._build_stats(feed_info),
             "timestamp": self._format_timestamp(feed_info.get("createtime")),
             "platform": self.name,

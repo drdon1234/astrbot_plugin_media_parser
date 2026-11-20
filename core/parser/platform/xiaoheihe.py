@@ -20,7 +20,7 @@ from ...logger import logger
 
 from ...constants import Config
 from ...types import MediaMetadata
-from ..utils import build_content_blocks, build_request_headers
+from ..utils import build_content_blocks, build_request_headers, profile_image_url
 from .base import BaseVideoParser
 
 try:
@@ -1251,6 +1251,7 @@ class XiaoheiheParser(BaseVideoParser):
             "url": url,
             "title": title,
             "author": author,
+            "author_avatar_url": profile_image_url(user, "avatar", hosts=("max-c.com", "xiaoheihe.cn")),
             "desc": desc,
             "timestamp": "",
             "video_urls": video_urls,
@@ -1639,7 +1640,7 @@ class XiaoheiheParser(BaseVideoParser):
             result_dict = {
                 "url": url,
                 "title": title or "",
-                "author": "",
+                "author": developer,
                 "desc": desc,
                 "summary_subtype": "game",
                 "timestamp": release_date or "",
@@ -1650,6 +1651,9 @@ class XiaoheiheParser(BaseVideoParser):
                 "use_video_proxy": self.use_video_proxy,
                 "proxy_url": self.proxy_url if self.use_video_proxy else None,
             }
+            steam_id = str(game.get("steam_appid") or "")
+            if game_type == "pc" and re.fullmatch(r"[1-9][0-9]{0,9}", steam_id):
+                result_dict["steam_developer_appid"] = steam_id
             if video_urls:
                 result_dict["video_force_download"] = True
             if self.hot_comment_count and game_type == "pc":
