@@ -69,7 +69,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.15.1",
+    "1.15.2",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -672,6 +672,7 @@ class VideoParserPlugin(Star):
         embedded = []
         paths = await self._render_text_to_images(
             "", cfg, blocks=tuple(content.blocks), share=content.header, embedded=embedded,
+            original_keyword=settings.original_keyword if content.header and sender and sender.originals else "",
         )
         build_result.temp_files.extend(paths)
         refs, registered = await self._rendered_image_references(paths, cfg)

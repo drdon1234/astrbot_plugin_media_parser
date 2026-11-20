@@ -101,6 +101,7 @@ async def render_text_metadata_images(
     blocks: tuple[str | PictureBlock, ...] = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
+    original_keyword: str = "",
 ) -> List[str]:
     """将文本元数据渲染为本地 PNG 文件。
 
@@ -119,6 +120,7 @@ async def render_text_metadata_images(
         blocks: 按原文顺序排列的文本与本地图片。
         share: 分享卡头部，省略时使用文字卡。
         embedded: 按绘制顺序登记的封面、图集与正文配图路径。
+        original_keyword: 分享卡引用取原图的实际关键词，留空隐藏提示。
         timeout_seconds: 渲染超时时间（秒）。
 
     Returns:
@@ -135,7 +137,7 @@ async def render_text_metadata_images(
     await ensure_render_fonts(font_family, font_proxy_url)
     visible_text = str(text) + str(title) + "".join(part for part in blocks if isinstance(part, str))
     if share:
-        visible_text += share.author + share.platform
+        visible_text += share.author + share.platform + original_keyword
     if _has_emoji(visible_text) and not await asyncio.to_thread(_emoji_font_is_available):
         await ensure_emoji_font(font_proxy_url)
     output = Path(output_path).resolve()
@@ -153,7 +155,7 @@ async def render_text_metadata_images(
         PAGINATED_MAX_HEIGHT if paginate else 0,
         _normalize_spacing(line_spacing, DEFAULT_LINE_SPACING, 1.0),
         _normalize_spacing(paragraph_spacing, DEFAULT_PARAGRAPH_SPACING, 0.0),
-        blocks, share, embedded,
+        blocks, share, embedded, original_keyword,
     ))
     completed = False
     try:
@@ -394,6 +396,7 @@ def _render_text_metadata_image_sync(
     blocks: tuple[str | PictureBlock, ...] = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
+    original_keyword: str = "",
 ) -> List[str]:
     """同步绘制文本元数据图片，max_height 大于 0 时按高度分页。"""
     try:
@@ -411,7 +414,7 @@ def _render_text_metadata_image_sync(
         "meta": _load_font(ImageFont, meta_size, font_family=font_family),
         "label": _load_font(ImageFont, meta_size, True, font_family),
     }
-    if _has_emoji(text + title + "".join(b for b in blocks if isinstance(b, str)) + (share.author if share else "")):
+    if _has_emoji(text + title + "".join(b for b in blocks if isinstance(b, str)) + (share.author + original_keyword if share else "")):
         fonts = {
             key: _FallbackFont(font, _load_emoji_font(ImageFont, font.size))
             for key, font in fonts.items()
@@ -420,6 +423,8 @@ def _render_text_metadata_image_sync(
         probe_draw = ImageDraw.Draw(probe)
         margin = max(24, width // 30)
         padding = max(28, width // 20)
+        # 末行已包含行距，分享卡底部留白随字号调整。
+        bottom_padding = min(padding, max(12, round(meta_size * 0.8))) if share else padding
         body_x = margin + padding
         content_width = width - body_x * 2
         page_font = fonts["meta"]
@@ -442,7 +447,7 @@ def _render_text_metadata_image_sync(
                 profile_height = max(60, profile_height)
         body_top = margin + padding + max(profile_height, len(header) * header_height) + 24
         footer_height = header_height + 28
-        capacity = max_height - body_top - padding - footer_height - margin
+        capacity = max_height - body_top - bottom_padding - footer_height - margin
         if max_height and capacity <= PICTURE_GAP:
             raise ValueError("卡片头部超过分页高度")
         lines = []
@@ -458,17 +463,32 @@ def _render_text_metadata_image_sync(
                 lines.extend(_layout_text(
                     probe_draw, block, fonts, content_width, line_spacing, paragraph_spacing,
                 ))
+        if share and original_keyword and any(line.pictures for line in lines):
+            hint = f"引用本消息并发送「{original_keyword}」，即可获取原图。"
+            hint_rows = _wrap_text(probe_draw, hint, page_font, content_width)
+            hint_line_height = _line_height(probe_draw, page_font, 1.25)
+            hint_height = meta_size + len(hint_rows) * hint_line_height
+            while lines[-1].kind in ("blank", "separator"):
+                lines.pop()
+            # 让提示与末段内容同页；末行若是满页长图，按剩余高度等比缩放。
+            last = lines[-1]
+            if last.pictures and max_height and capacity - hint_height > PICTURE_GAP:
+                last.height = min(last.height, capacity - hint_height)
+            last.keep_with_next = True
+            lines.append(_TextLine("", "separator", meta_size, keep_with_next=True))
+            lines.extend(_TextLine(row, "meta", hint_line_height, keep_with_next=i < len(hint_rows) - 1)
+                         for i, row in enumerate(hint_rows))
     if blocks and not max_height:
         # 图文长图超过单页硬限制时分页，避免因一张超长图退回逐段发送原图。
         limit = min(MAX_RENDER_HEIGHT, MAX_RENDER_PAGE_PIXELS // width)
-        if body_top + sum(line.height for line in lines) + padding + margin > limit:
+        if body_top + sum(line.height for line in lines) + bottom_padding + margin > limit:
             max_height = limit
-            capacity = limit - body_top - padding - footer_height - margin
+            capacity = limit - body_top - bottom_padding - footer_height - margin
     pages = _paginate_lines(lines, capacity) if max_height > 0 else [lines]
     if len(pages) == 1:
         footer_height = 0
     heights = [
-        body_top + sum(line.height for line in page) + padding + footer_height + margin
+        body_top + sum(line.height for line in page) + bottom_padding + footer_height + margin
         for page in pages
     ]
     height_limit = min(max_height, MAX_RENDER_HEIGHT) if max_height > 0 else MAX_RENDER_HEIGHT
@@ -484,8 +504,8 @@ def _render_text_metadata_image_sync(
     completed = False
     try:
         for page_index, page_lines in enumerate(pages, start=1):
-            card_bottom = body_top + sum(line.height for line in page_lines) + padding
-            height = card_bottom + footer_height + margin
+            height = heights[page_index - 1]
+            card_bottom = height - footer_height - margin
             page_path = _page_path(output, page_index, len(pages))
             with Image.new("RGB", (width, height), palette["background"]) as image:
                 draw = ImageDraw.Draw(image)
