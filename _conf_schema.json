@@ -435,7 +435,7 @@
                             "文字卡",
                             "分享卡"
                         ],
-                        "default": "文字卡",
+                        "default": "分享卡",
                         "condition": {
                             "render_to_image": true
                         }
@@ -596,7 +596,7 @@
                         "description": "正文与配图按原文顺序穿插",
                         "type": "bool",
                         "hint": "以消息发送时，开启后按原文顺序交替发送正文段落和配图；渲染为图片时自动将这些配图嵌入正文，需同时显示简介/正文并发送富媒体；其余内容保持原有发送方式。目前支持 AcFun 文章、今日头条、小黑盒帖子、雪球、酷安图文与转发、微信公众号、知乎、百度贴吧、NGA、虎扑、豆瓣、V2EX、稀土掘金、CSDN、博客园与 Steam 社区指南 / 创意工坊。",
-                        "default": false
+                        "default": true
                     },
                     "image_send_mode": {
                         "description": "图片发送方式",
@@ -620,7 +620,7 @@
                         "description": "热评条数",
                         "type": "int",
                         "hint": "填 0 不获取热评；大于 0 后按平台开关选择来源。实际数量受平台公开范围、分页和风控限制，可能少于设置值。",
-                        "default": 0
+                        "default": 5
                     },
                     "excluded": {
                         "description": "不显示热评的平台",
@@ -736,7 +736,7 @@
                     "enable": {
                         "description": "发送开场语",
                         "type": "bool",
-                        "default": true
+                        "default": false
                     },
                     "content": {
                         "description": "开场语内容",
@@ -1145,7 +1145,7 @@
                                 "description": "模型",
                                 "type": "string",
                                 "hint": "填写所选厂商的模型名，例如 deepseek-chat、qwen-plus、gpt-4o-mini 或本地 Ollama 模型；切换厂商不会自动修改此值。",
-                                "default": "gpt-5.5"
+                                "default": ""
                             }
                         }
                     }
@@ -1331,7 +1331,7 @@
                 "description": "视频大小上限（MB）",
                 "type": "float",
                 "hint": "普通视频先预检；DASH/M3U8 下载后按实际大小兜底；填 0 不限制。",
-                "default": 1000.0
+                "default": 300.0
             },
             "max_video_duration_seconds": {
                 "description": "视频时长上限（秒）",

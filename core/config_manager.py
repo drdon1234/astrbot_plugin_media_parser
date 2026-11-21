@@ -280,7 +280,7 @@ class ParserOutputConfig:
 
 @dataclass
 class OpeningMessageConfig:
-    enabled: bool = True
+    enabled: bool = False
     content: str = Config.DEFAULT_OPENING_CONTENT
     archive_content: str = Config.DEFAULT_ARCHIVE_OPENING_CONTENT
 
@@ -341,7 +341,7 @@ class MediaDisplayConfig:
     video_cover_only: bool = False
     audio_send_mode: str = "语音"
     image_send_mode: str = Config.IMAGE_SEND_MODE_ORIGINAL
-    interleave_images: bool = False
+    interleave_images: bool = True
 
 
 @dataclass
@@ -353,7 +353,7 @@ class TextMetadataConfig:
     show_description: bool = True
     quote_user_message: bool = False
     render_to_image: bool = False
-    render_layout: str = "文字卡"
+    render_layout: str = "分享卡"
     share_cover: bool = True
     original_keyword: str = "原图"
     link_keyword: str = "链接"
@@ -380,7 +380,7 @@ class TextMetadataConfig:
 
 @dataclass
 class HotCommentConfig:
-    count: int = 0
+    count: int = 5
     bilibili: bool = True
     douyin: bool = True
     acfun: bool = True
@@ -470,7 +470,7 @@ class PermissionConfig:
 
 @dataclass
 class DownloadConfig:
-    max_video_size_mb: float = 1000.0
+    max_video_size_mb: float = 300.0
     max_video_duration_seconds: int = 0
     video_duration_limit_reply: str = Config.DEFAULT_VIDEO_DURATION_LIMIT_REPLY
     max_audio_size_mb: float = 30.0
@@ -584,7 +584,7 @@ class TranslationConfig:
     llm_provider: str = "openai_compatible"
     base_url: str = ""
     api_key: str = ""
-    model: str = "gpt-5.5"
+    model: str = ""
     temperature: float = 0.0
     max_completion_tokens: int = 4000
     request_timeout_seconds: int = 60
@@ -733,7 +733,7 @@ class ConfigManager:
         hot_comments = self._as_dict(message_raw.get("hot_comments"))
         aggregation_thresholds = self._as_dict(aggregation.get("thresholds"))
 
-        hot_count = self._parse_non_negative_int(hot_comments.get("count", 0), 0)
+        hot_count = self._parse_non_negative_int(hot_comments.get("count", 5), 5)
         any_text_output_enabled = self.parser_output.has_any_text_output()
         if not any_text_output_enabled:
             hot_count = 0
@@ -758,8 +758,8 @@ class ConfigManager:
             ),
             opening=OpeningMessageConfig(
                 enabled=self._parse_bool(
-                    opening.get("enable", True),
-                    True,
+                    opening.get("enable", False),
+                    False,
                     "message.opening.enable",
                 ),
                 content=str(
@@ -831,8 +831,8 @@ class ConfigManager:
                     "message.media_display.video_cover_only",
                 ),
                 interleave_images=self._parse_bool(
-                    media_display.get("interleave_images", False),
-                    False,
+                    media_display.get("interleave_images", True),
+                    True,
                     "message.media_display.interleave_images",
                 ),
             ),
@@ -848,7 +848,7 @@ class ConfigManager:
                     "message.text_metadata.render_to_image",
                 ),
                 render_layout=(
-                    "分享卡" if text_metadata.get("render_layout") == "分享卡" else "文字卡"
+                    "文字卡" if text_metadata.get("render_layout") == "文字卡" else "分享卡"
                 ),
                 share_cover=self._parse_bool(
                     text_metadata.get("share_cover", True), True, "message.text_metadata.share_cover"
@@ -955,7 +955,7 @@ class ConfigManager:
         download_raw = self._as_dict(config.get("download"))
 
         max_video_size_mb = self._parse_non_negative_float(
-            download_raw.get("max_video_size_mb", 1000.0), 1000.0
+            download_raw.get("max_video_size_mb", 300.0), 300.0
         )
         large_video_threshold_mb = self._parse_non_negative_float(
             download_raw.get(
@@ -1059,7 +1059,7 @@ class ConfigManager:
             llm_provider=llm_provider,
             base_url=base_url,
             api_key=str(custom_provider_raw.get("api_key", "") or "").strip(),
-            model=str(custom_provider_raw.get("model", "gpt-5.5") or "gpt-5.5").strip(),
+            model=str(custom_provider_raw.get("model", "") or "").strip(),
         )
 
         cache_dir_available = check_cache_dir_available(cache_dir)

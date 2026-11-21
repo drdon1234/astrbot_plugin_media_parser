@@ -288,7 +288,7 @@ class MetadataTranslator:
             "items": items,
         }
         return {
-            "model": str(getattr(self.config, "model", "") or "gpt-5.5").strip(),
+            "model": str(getattr(self.config, "model", "") or "").strip(),
             "messages": [
                 {
                     "role": "system",

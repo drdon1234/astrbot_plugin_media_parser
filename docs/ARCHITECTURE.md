@@ -173,7 +173,7 @@ astrbot_plugin_media_parser/
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语按链接发送：每条通过触发、平台输出和频率限制的链接，在调用解析器前发送一次，不依赖最终结果是富媒体还是文本。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
-`message.hot_comments.count` 默认 `0`，控制各支持平台的热评条数；已接入的 29 个平台默认可用，使用 `message.hot_comments.excluded` 排除指定平台。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+`message.hot_comments.count` 默认 `5`，控制各支持平台的热评条数；已接入的 29 个平台默认可用，使用 `message.hot_comments.excluded` 排除指定平台。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
 `parsers.text_platforms`、`parsers.media_platforms` 决定各平台发哪些内容，`parsers.video_without_text` 对同时勾选两者的平台启用视频直发。
 
