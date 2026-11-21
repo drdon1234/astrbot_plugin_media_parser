@@ -356,6 +356,7 @@ class TextMetadataConfig:
     render_layout: str = "文字卡"
     share_cover: bool = True
     original_keyword: str = "原图"
+    link_keyword: str = "链接"
     render_style: str = "fresh"
     render_font_family: str = "noto_sans"
     render_font_size: int = 24
@@ -853,6 +854,7 @@ class ConfigManager:
                     text_metadata.get("share_cover", True), True, "message.text_metadata.share_cover"
                 ),
                 original_keyword=str(text_metadata.get("original_keyword", "原图") or "").strip(),
+                link_keyword=str(text_metadata.get("link_keyword", "链接") or "").strip(),
                 render_style=normalize_style(text_metadata.get("render_style")),
                 render_font_family=normalize_font_family(text_metadata.get("render_font_family")),
                 render_font_size=min(
@@ -1258,6 +1260,7 @@ class ConfigManager:
         for owner, field_name, label in (
             (self.message.archive, "command", "引用链接归档命令"),
             (self.message.text_metadata, "original_keyword", "引用取原图关键词"),
+            (self.message.text_metadata, "link_keyword", "引用取链接关键词"),
         ):
             value = getattr(owner, field_name)
             if not value:

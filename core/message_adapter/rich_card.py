@@ -11,6 +11,7 @@ from astrbot.api.message_components import Plain, Video
 from ..config_manager import TextMetadataConfig
 from ..metadata_visibility import text_metadata_field_enabled
 from ..types import LinkBuildMeta, MediaMetadata
+from .download_list import DownloadList, download_blocks
 from .node_builder import build_text_node
 from .text_renderer import PictureBlock, ShareHeader
 
@@ -27,7 +28,7 @@ def _platform_labels() -> dict[str, str]:
 class CardContent:
     """记录画稿与对应消息节点，仅在整张图绘制成功后替换节点。"""
 
-    blocks: list[str | PictureBlock]
+    blocks: list[str | PictureBlock | DownloadList]
     header: ShareHeader | None
     consumed: set[int]
 
@@ -42,7 +43,7 @@ async def build_card_content(
 ) -> CardContent:
     """从已启用的输出字段和本地媒体构造单条链接的图片内容。"""
     share = settings.render_layout == "分享卡"
-    blocks: list[str | PictureBlock] = []
+    blocks: list[str | PictureBlock | DownloadList] = []
     header = None
     if share:
         author = (
@@ -75,24 +76,33 @@ async def build_card_content(
     }
     inline = {id(node) for node in link["inline_images"]}
     consumed = set()
+    video_card = False
     if share and settings.share_cover and metadata.get("_enable_rich_media", True):
         covers = metadata.get("video_cover_urls") or []
         has_video = any(isinstance(node, Video) for node in link["link_nodes"])
         video_modes = metadata.get("video_modes") or []
+        cover_kinds = {}
         for index, candidates in enumerate(covers):
-            # 单组封面可能由多个视频共用；独立封面只为未能输出的视频补位。
-            if has_video and (
-                len(covers) == 1 or index >= len(video_modes) or video_modes[index] != "skip"
-            ):
+            if not candidates:
                 continue
-            cover = await fetch_picture(candidates)
+            preview = has_video and (
+                len(covers) == 1 or index >= len(video_modes) or video_modes[index] != "skip"
+            )
+            key = tuple(candidates)
+            if preview or key not in cover_kinds:
+                cover_kinds[key] = "video_preview" if preview else "cover"
+        for candidates, kind in cover_kinds.items():
+            cover = await fetch_picture(list(candidates))
             if cover:
-                blocks.append(PictureBlock((cover,), "cover"))
+                blocks.append(PictureBlock((cover,), kind))
         converted = metadata.get("converted_cover_count", 0)
         for index, node in link["image_nodes"].items():
             if index < converted and id(node) in pictures:
                 blocks.append(PictureBlock((pictures[id(node)],), "cover"))
                 consumed.add(id(node))
+        video_card = bool(blocks)
+        if video_card and text_metadata_field_enabled(metadata, "title") and metadata.get("title"):
+            blocks.insert(0, f"标题：{metadata['title']}")
         if not inline:
             gallery = [path for key, path in pictures.items() if key not in consumed]
             if gallery:
@@ -123,9 +133,19 @@ async def build_card_content(
                         max_video_mb,
                         include_description=not inline,
                         share_body=True,
+                        video_card=video_card,
                     )
                     if body:
-                        blocks.append(body.text)
+                        desc = str(metadata.get("desc") or "").strip()
+                        parts = (
+                            download_blocks(desc) if desc and not inline
+                            and text_metadata_field_enabled(metadata, "description") else []
+                        )
+                        if any(isinstance(part, DownloadList) for part in parts):
+                            before, _, after = body.text.rpartition(desc)
+                            blocks.extend([before, *parts, after])
+                        else:
+                            blocks.append(body.text)
             else:
                 blocks.append(node.text)
         else:

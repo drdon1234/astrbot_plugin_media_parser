@@ -244,6 +244,7 @@ def build_text_node(
     enable_text_metadata: bool = True,
     include_description: bool = True,
     share_body: bool = False,
+    video_card: bool = False,
 ) -> Optional[Plain]:
     """构建文本节点
 
@@ -252,11 +253,15 @@ def build_text_node(
         max_video_size_mb: 最大允许的视频大小(MB)，用于显示详细的错误信息
         enable_text_metadata: 是否包含视频图文文本信息的附加文本
         include_description: 是否写入简介/正文；为否时只保留正文标题，正文由后续节点发送
+        video_card: 视频分享卡已在封面上方排好标题，来源与大小收在正文之后。
 
     Returns:
         Plain文本节点，无内容时为None
     """
     text_parts = []
+    # 穿插正文由后续消息节点提供，保留其连续的图文顺序。
+    footer = video_card and include_description
+    details = [] if footer else text_parts
     desc_text = (
         str(metadata.get("desc") or "").strip()
         if enable_text_metadata and text_metadata_field_enabled(metadata, "description")
@@ -265,6 +270,7 @@ def build_text_node(
 
     if (
         enable_text_metadata
+        and not video_card
         and text_metadata_field_enabled(metadata, "title")
         and metadata.get("title")
     ):
@@ -300,9 +306,9 @@ def build_text_node(
 
         if actual_max_video_size_mb is not None:
             if sendable_video_count == 1:
-                text_parts.append(f"视频大小：{actual_max_video_size_mb:.1f} MB")
+                details.append(f"视频大小：{actual_max_video_size_mb:.1f} MB")
             else:
-                text_parts.append(
+                details.append(
                     f"视频大小：最大 {actual_max_video_size_mb:.1f} MB "
                     f"(共 {sendable_video_count} 个可发送视频, "
                     f"总计 {total_video_size_mb:.1f} MB)"
@@ -315,7 +321,7 @@ def build_text_node(
         (enable_text_metadata and text_metadata_field_enabled(metadata, "original_link"))
         or (not enable_text_metadata and text_parts)
     ):
-        text_parts.append(f"原始链接：{url}")
+        details.append(f"原始链接：{url}")
 
     if (enable_text_metadata and text_metadata_field_enabled(metadata, "summary")
             and metadata.get("repository_summary")):
@@ -331,10 +337,15 @@ def build_text_node(
     if desc_text:
         if text_parts:
             text_parts.append(TEXT_SECTION_SEPARATOR)
-        text_parts.append("仓库简介：" if metadata.get("readme_url") else "简介/正文：")
+        if not video_card:
+            text_parts.append("仓库简介：" if metadata.get("readme_url") else "简介/正文：")
         if include_description:
             text_parts.append(desc_text)
 
+    if footer and details:
+        if text_parts:
+            text_parts.append(TEXT_SECTION_SEPARATOR)
+        text_parts.append("  ·  ".join(details))
     if not text_parts:
         return None
     return Plain("\n".join(text_parts))

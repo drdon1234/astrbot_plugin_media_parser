@@ -97,7 +97,7 @@ class MessageSender:
                     await self._bind_originals(str(receipt.message_id), [token])
             return
         else:
-            marker = Plain(" ".join(f"〔原图·{token}〕" for token in tokens))
+            marker = Plain(" ".join(f"〔分享·{token}〕" for token in tokens))
             if isinstance(content[0], Nodes):
                 content[0].nodes[0].content.append(marker)
             else:
@@ -320,6 +320,25 @@ class MessageSender:
             except (ValueError, TypeError):
                 sender_id = 10000
         return sender_name, sender_id
+
+    async def send_body_links(self, event: AstrMessageEvent, links: list[tuple[str, str]]) -> None:
+        """在 OneBot 转发中逐条展示说明和网址，其他适配器按段合并正文。"""
+        if event.get_platform_name() == "aiocqhttp":
+            name, sender_id = self.get_sender_info(event)
+            for start in range(0, len(links), 50):
+                nodes = [Node(name=name, uin=str(sender_id), content=[Plain(value)])
+                         for entry in links[start:start + 50] for value in entry]
+                await event.send(event.chain_result([Nodes(nodes)]))
+            return
+        batch = ""
+        for label, url in links:
+            entry = f"{label}\n{url}"
+            if batch and len(batch) + len(entry) + 2 > MAX_MESSAGE_TEXT_LENGTH:
+                await event.send(event.plain_result(batch))
+                batch = ""
+            batch = f"{batch}\n\n{entry}" if batch else entry
+        if batch:
+            await event.send(event.plain_result(batch))
 
     async def send_aggregated_results(
         self,

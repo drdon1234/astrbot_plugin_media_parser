@@ -457,7 +457,7 @@
                     "share_cover": {
                         "description": "分享卡显示封面与图集",
                         "type": "bool",
-                        "hint": "随消息发送的视频会省略对应封面。关闭后，分享卡和独立图集分开发送，图集按「图片发送方式」分组。正文插图保留在原文位置，仓库 README 截图始终独立输出。",
+                        "hint": "在分享卡内展示视频封面和图集。随视频展示的封面仅作预览；选择「视频仅发送封面」时可引用取回封面。关闭后，独立图集按「图片发送方式」另发。正文插图保留在原文位置，仓库 README 截图始终独立输出。",
                         "default": true,
                         "condition": {
                             "render_to_image": true,
@@ -468,9 +468,19 @@
                         "description": "引用取原图关键词",
                         "type": "string",
                         "default": "原图",
-                        "hint": "引用解析结果并发送此关键词，可按顺序取回卡片中的封面、图集和正文配图。原图保留一小时，关闭转图后仍可取回有效记录。留空关闭。",
+                        "hint": "引用解析结果并发送此关键词，可按顺序取回图集、正文配图，以及替代视频发送的封面。原图保留一小时，关闭转图后仍可取回有效记录。留空关闭。",
                         "condition": {
                             "render_to_image": true
+                        }
+                    },
+                    "link_keyword": {
+                        "description": "引用取链接关键词",
+                        "type": "string",
+                        "default": "链接",
+                        "hint": "引用分享卡并发送此关键词，可取回正文中的网址及说明。有效期一小时，留空关闭。",
+                        "condition": {
+                            "render_to_image": true,
+                            "render_layout": "分享卡"
                         }
                     },
                     "show_render_details": {

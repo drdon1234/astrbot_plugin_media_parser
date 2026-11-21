@@ -33,6 +33,7 @@ from .core.storage.original_images import OriginalImages
 from .core.constants import Config
 from .core.metadata_visibility import text_metadata_field_enabled
 from .core.parser.platform.steam import fetch_developer_profile
+from .core.message_adapter.body_links import collect_body_links
 from .core.message_adapter.rich_card import build_card_content
 from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.shared_images import SharedImageDelivery
@@ -676,16 +677,26 @@ class VideoParserPlugin(Star):
         if not content.blocks and content.header and not (content.header.author or content.header.timestamp):
             return False
         embedded = []
+        links = []
+        if (content.header and sender and sender.originals and settings.link_keyword
+                and text_metadata_field_enabled(metadata, "description")):
+            body = metadata.get("desc") or ""
+            if link["inline_images"]:
+                body = "\n".join(str(block.get("text") or "")
+                                 for block in metadata.get("content_blocks") or []
+                                 if isinstance(block, dict) and block.get("type") == "text")
+            links = collect_body_links(body)
         paths = await self._render_text_to_images(
             "", cfg, blocks=tuple(content.blocks), share=content.header, embedded=embedded,
             original_keyword=settings.original_keyword if content.header and sender and sender.originals else "",
+            link_keyword=settings.link_keyword if links else "",
         )
         build_result.temp_files.extend(paths)
         refs, registered = await self._rendered_image_references(paths, cfg, prefer_local_images)
         pages = [MessageSender._image_from_reference(ref) for ref in refs]
-        if embedded and sender and sender.originals:
-            source_files = [originals.get(path, path) for path in embedded]
-            token = await self._run_blocking_to_completion(sender.originals.save, source_files)
+        if sender and sender.originals and ((embedded and settings.original_keyword) or links):
+            source_files = [originals.get(path, path) for path in embedded] if settings.original_keyword else []
+            token = await self._run_blocking_to_completion(sender.originals.save, source_files, links)
             for page in pages:
                 sender.page_tokens[page.file] = token
 
@@ -966,7 +977,8 @@ class VideoParserPlugin(Star):
         prefer_local_images = bool(cfg.download.shared_image_dir and event.get_platform_name() == "aiocqhttp")
         settings = cfg.message.text_metadata
         if (not zip_requested and getattr(settings, "render_to_image", False)
-                and getattr(settings, "original_keyword", "") and cfg.download.cache_dir):
+                and (getattr(settings, "original_keyword", "") or
+                     (settings.render_layout == "分享卡" and settings.link_keyword)) and cfg.download.cache_dir):
             sender = MessageSender(
                 OriginalImages(cfg.download.cache_dir, self._original_scope(event)),
                 shared_images=self.message_sender.shared_images,
@@ -1013,7 +1025,7 @@ class VideoParserPlugin(Star):
                             ),
                             video_cover_only=(False if zip_requested else None),
                             keep_original_images=bool(
-                                sender.originals and metadata.get("_enable_text_metadata", True) and (
+                                sender.originals and settings.original_keyword and metadata.get("_enable_text_metadata", True) and (
                                     settings.render_layout == "分享卡" or metadata.get("content_blocks")
                                 )
                             ),
@@ -1270,8 +1282,8 @@ class VideoParserPlugin(Star):
         target = f"群:{group}" if group else event.unified_msg_origin
         return f"{event.get_platform_id()}:{event.get_self_id()}:{target}"
 
-    async def _send_quoted_originals(self, event: AstrMessageEvent, reply: Reply, cfg) -> bool:
-        """仅查找当前会话中被引用结果的原图，逐条处理实际发送失败。"""
+    async def _send_quoted_originals(self, event: AstrMessageEvent, reply: Reply, cfg, *, links: bool = False) -> bool:
+        """查找当前会话中被引用结果的原图或正文链接。"""
         if not cfg.download.cache_dir:
             return False
         store = OriginalImages(cfg.download.cache_dir, self._original_scope(event))
@@ -1285,17 +1297,26 @@ class VideoParserPlugin(Star):
         async with self._cache_cleanup_lock:
             self._active_media_flows += 1
         try:
-            files = await asyncio.to_thread(
-                store.find, str(reply.id or ""), quoted_text,
-                max(Config.FILE_SEND_GRACE_SECONDS, cfg.relay.file_token_ttl if cfg.relay.enabled else 0),
-            )
+            message_id = str(reply.id or "")
+            if links:
+                entries = await asyncio.to_thread(store.find_links, message_id, quoted_text)
+                if entries:
+                    await self.message_sender.send_body_links(event, entries)
+                    return True
+                files = []
+            else:
+                files = await asyncio.to_thread(
+                    store.find, message_id, quoted_text,
+                    max(Config.FILE_SEND_GRACE_SECONDS, cfg.relay.file_token_ttl if cfg.relay.enabled else 0),
+                )
             if not files:
                 if not cfg.message.text_metadata.render_to_image or author not in ("", "0", own_id):
                     return False
                 if (cfg.trigger.reply_trigger and cfg.trigger.has_keyword(event.message_str or "")
                         and author in ("", "0") and self._try_extract_reply_links(event)[0]):
                     return False
-                await event.send(event.plain_result("这条引用没有可取回的原图，或原图缓存已过期。"))
+                kind = "正文链接" if links else "原图"
+                await event.send(event.plain_result(f"这条引用没有可取回的{kind}，或{kind}缓存已过期。"))
                 return True
             prefer_local_images = bool(cfg.download.shared_image_dir and event.get_platform_name() == "aiocqhttp")
             references, _ = await self._rendered_image_references(files, cfg, prefer_local_images)
@@ -1398,9 +1419,11 @@ class VideoParserPlugin(Star):
             return
 
         original_kw = cfg.message.text_metadata.original_keyword
-        if original_kw and original_message_text.strip() == original_kw:
+        link_kw = cfg.message.text_metadata.link_keyword
+        command = original_message_text.strip()
+        if command and command in (original_kw, link_kw):
             reply = next((node for node in event.get_messages() if isinstance(node, Reply)), None)
-            if reply is not None and await self._send_quoted_originals(event, reply, cfg):
+            if reply is not None and await self._send_quoted_originals(event, reply, cfg, links=command == link_kw):
                 return
 
         if not cfg.parser_output.has_any_output():

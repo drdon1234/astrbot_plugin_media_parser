@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
 
+from .download_list import DownloadList
 from .font_manager import FONT_DIR, ensure_default_fonts, ensure_emoji_font
 from .render_options import (
     DEFAULT_RENDER_FONT_FAMILY, DEFAULT_RENDER_STYLE, normalize_font_family, normalize_style,
@@ -28,7 +29,8 @@ MAX_RENDER_PAGE_PIXELS = 16000000
 MAX_RENDER_TOTAL_PIXELS = 32000000
 MAX_RENDER_PAGES = 20
 PICTURE_GAP = 8
-CONTENT_PICTURE_KINDS = ("photo", "gallery")
+COVER_KINDS = ("cover", "video_preview")
+CONTENT_PICTURE_KINDS = ("photo", "gallery", *COVER_KINDS)
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
 NO_LINE_START_CHARS = "，。！？；：、,.!?;:)]}）】》〉」』”’％%…"
 NO_LINE_END_CHARS = "([{（【《〈「『“‘"
@@ -98,10 +100,11 @@ async def render_text_metadata_images(
     paginate: bool = False,
     font_proxy_url: str = "",
     timeout_seconds: int = 60,
-    blocks: tuple[str | PictureBlock, ...] = (),
+    blocks: tuple[str | PictureBlock | DownloadList, ...] = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
     original_keyword: str = "",
+    link_keyword: str = "",
 ) -> List[str]:
     """将文本元数据渲染为本地 PNG 文件。
 
@@ -121,6 +124,7 @@ async def render_text_metadata_images(
         share: 分享卡头部，省略时使用文字卡。
         embedded: 按绘制顺序登记的封面、图集与正文配图路径。
         original_keyword: 分享卡引用取原图的实际关键词，留空隐藏提示。
+        link_keyword: 有正文链接可取回时显示的关键词。
         timeout_seconds: 渲染超时时间（秒）。
 
     Returns:
@@ -137,7 +141,7 @@ async def render_text_metadata_images(
     await ensure_render_fonts(font_family, font_proxy_url)
     visible_text = str(text) + str(title) + "".join(part for part in blocks if isinstance(part, str))
     if share:
-        visible_text += share.author + share.platform + original_keyword
+        visible_text += share.author + share.platform + original_keyword + link_keyword
     if _has_emoji(visible_text) and not await asyncio.to_thread(_emoji_font_is_available):
         await ensure_emoji_font(font_proxy_url)
     output = Path(output_path).resolve()
@@ -155,7 +159,7 @@ async def render_text_metadata_images(
         PAGINATED_MAX_HEIGHT if paginate else 0,
         _normalize_spacing(line_spacing, DEFAULT_LINE_SPACING, 1.0),
         _normalize_spacing(paragraph_spacing, DEFAULT_PARAGRAPH_SPACING, 0.0),
-        blocks, share, embedded, original_keyword,
+        blocks, share, embedded, original_keyword, link_keyword,
     ))
     completed = False
     try:
@@ -322,7 +326,9 @@ def _picture_lines(block: PictureBlock, width: int, max_height: int) -> list[_Te
     if not block.paths:
         raise ValueError("图片块缺少本地文件")
     if block.kind != "gallery":
-        height = width * 9 // 16 if block.kind == "cover" else round(width / _picture_geometry(block.paths[0])[0])
+        height = round(width / _picture_geometry(block.paths[0])[0])
+        if block.kind in COVER_KINDS:
+            height = min(height, width * 5 // 4)
         height = max(1, min(height, max_height))
         return [_TextLine("", block.kind, height + PICTURE_GAP, pictures=block.paths)]
 
@@ -350,9 +356,35 @@ def _picture_lines(block: PictureBlock, width: int, max_height: int) -> list[_Te
     return lines
 
 
+def _draw_avatar(canvas, x: int, y: int, share: ShareHeader, font, color: str, text_color: str) -> None:
+    """将头像或缺图时的首字绘入同一张抗锯齿圆形蒙版。"""
+    from PIL import Image, ImageChops, ImageDraw, ImageOps
+
+    size = 60
+    avatar = None
+    if share.avatar:
+        try:
+            with _open_picture(share.avatar) as source:
+                photo = ImageOps.exif_transpose(source).convert("RGBA")
+                avatar = ImageOps.fit(photo, (size, size), method=Image.Resampling.LANCZOS)
+        except (OSError, ValueError):
+            pass
+    if avatar is None:
+        avatar = Image.new("RGBA", (size, size), color)
+        draw = ImageDraw.Draw(avatar)
+        initial = _text_clusters(share.author)[0]
+        _draw_text(draw, (size - _text_width(draw, initial, font)) / 2, 14, initial, font, text_color)
+
+    # 按高分辨率圆形的像素覆盖率计算透明度，边缘直接与卡片背景混合。
+    mask = Image.new("L", (size * 4, size * 4))
+    ImageDraw.Draw(mask).ellipse((0, 0, mask.width - 1, mask.height - 1), fill=255)
+    mask = mask.resize(avatar.size, Image.Resampling.BOX)
+    canvas.paste(avatar, (x, y), ImageChops.multiply(mask, avatar.getchannel("A")))
+
+
 def _paste_pictures(canvas, paths, box, kind: str, widths: tuple[int, ...] = (), crops: tuple = ()) -> None:
     """解码当前行的图片并按用途裁切或等比缩放。"""
-    from PIL import Image, ImageDraw, ImageOps
+    from PIL import Image, ImageChops, ImageDraw, ImageOps
 
     x, y, width, height = box
     for index, (path, cell) in enumerate(zip(paths, widths or (width,), strict=True)):
@@ -360,26 +392,21 @@ def _paste_pictures(canvas, paths, box, kind: str, widths: tuple[int, ...] = (),
             photo = ImageOps.exif_transpose(source).convert("RGBA")
             if crops and crops[index]:
                 photo = photo.crop(crops[index])
-            if kind in ("cover", "avatar"):
-                thumb = ImageOps.fit(photo, (cell, height), method=Image.Resampling.LANCZOS)
-            else:
-                scale = min(cell / photo.width, height / photo.height)
-                size = (max(1, round(photo.width * scale)), max(1, round(photo.height * scale)))
-                thumb = photo.resize(size, Image.Resampling.LANCZOS)
+            scale = min(cell / photo.width, height / photo.height)
+            size = (max(1, round(photo.width * scale)), max(1, round(photo.height * scale)))
+            thumb = photo.resize(size, Image.Resampling.LANCZOS)
             left = x + (cell - thumb.width) // 2
             top = y + (height - thumb.height) // 2
-            if kind == "avatar":
+            if kind in COVER_KINDS:
                 mask = Image.new("L", thumb.size)
-                ImageDraw.Draw(mask).ellipse((0, 0, cell - 1, height - 1), fill=255)
-                canvas.paste(thumb, (left, top), mask)
+                ImageDraw.Draw(mask).rounded_rectangle(
+                    (0, 0, thumb.width - 1, thumb.height - 1),
+                    radius=min(18, thumb.width // 12, thumb.height // 12), fill=255,
+                )
+                canvas.paste(thumb, (left, top), ImageChops.multiply(mask, thumb.getchannel("A")))
             else:
                 canvas.paste(thumb, (left, top), thumb)
         x += cell + PICTURE_GAP
-    if kind == "cover":
-        overlay = ImageDraw.Draw(canvas, "RGBA")
-        cx, cy = box[0] + width // 2, y + height // 2
-        overlay.ellipse((cx-28, cy-28, cx+28, cy+28), fill=(0, 0, 0, 135))
-        overlay.polygon(((cx-7, cy-13), (cx-7, cy+13), (cx+14, cy)), fill="white")
 
 
 def _render_text_metadata_image_sync(
@@ -393,10 +420,11 @@ def _render_text_metadata_image_sync(
     max_height: int = 0,
     line_spacing: float = DEFAULT_LINE_SPACING,
     paragraph_spacing: float = DEFAULT_PARAGRAPH_SPACING,
-    blocks: tuple[str | PictureBlock, ...] = (),
+    blocks: tuple[str | PictureBlock | DownloadList, ...] = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
     original_keyword: str = "",
+    link_keyword: str = "",
 ) -> List[str]:
     """同步绘制文本元数据图片，max_height 大于 0 时按高度分页。"""
     try:
@@ -414,7 +442,7 @@ def _render_text_metadata_image_sync(
         "meta": _load_font(ImageFont, meta_size, font_family=font_family),
         "label": _load_font(ImageFont, meta_size, True, font_family),
     }
-    if _has_emoji(text + title + "".join(b for b in blocks if isinstance(b, str)) + (share.author + original_keyword if share else "")):
+    if _has_emoji(text + title + "".join(b for b in blocks if isinstance(b, str)) + (share.author + original_keyword + link_keyword if share else "")):
         fonts = {
             key: _FallbackFont(font, _load_emoji_font(ImageFont, font.size))
             for key, font in fonts.items()
@@ -457,14 +485,21 @@ def _render_text_metadata_image_sync(
                     # 文字行自身已有行距，再补足图前留白；独立空行可在分页边缘自然移除。
                     lines.append(_TextLine("", "blank", round(font_size * 2 / 3), keep_with_next=True))
                 lines.extend(_picture_lines(block, content_width, capacity - PICTURE_GAP if max_height else 2400))
+            elif isinstance(block, DownloadList):
+                lines.extend(_download_lines(probe_draw, block, fonts, content_width))
             elif block.strip():
                 if lines and lines[-1].kind in CONTENT_PICTURE_KINDS:
                     lines.append(_TextLine("", "blank", font_size, keep_with_next=True))
                 lines.extend(_layout_text(
                     probe_draw, block, fonts, content_width, line_spacing, paragraph_spacing,
                 ))
-        if share and original_keyword and any(line.pictures for line in lines):
-            hint = f"引用本消息并发送「{original_keyword}」，即可获取原图。"
+        hint_parts = []
+        if original_keyword and any(line.pictures and line.kind != "video_preview" for line in lines):
+            hint_parts.append(f"发送「{original_keyword}」获取原图")
+        if link_keyword:
+            hint_parts.append(f"发送「{link_keyword}」获取正文链接")
+        if share and hint_parts and lines:
+            hint = "引用本消息，" + "，".join(hint_parts) + "。"
             hint_rows = _wrap_text(probe_draw, hint, page_font, content_width)
             hint_line_height = _line_height(probe_draw, page_font, 1.25)
             hint_height = meta_size + len(hint_rows) * hint_line_height
@@ -571,15 +606,7 @@ def _draw_page(
         elif share.platform == "抖音":
             author_color = "#FF8CA5" if dark else "#B82A55"
         if share.author:
-            draw.ellipse((body_x, header_y, body_x + 60, header_y + 60), fill=author_color)
-            initial = _text_clusters(share.author)[0]
-            initial_x = body_x + (60 - _text_width(draw, initial, fonts["section"])) / 2
-            _draw_text(draw, initial_x, header_y + 14, initial, fonts["section"], palette["card_fill"])
-            if share.avatar:
-                try:
-                    _paste_pictures(canvas, (share.avatar,), (body_x, header_y, 60, 60), "avatar")
-                except (OSError, ValueError):
-                    pass
+            _draw_avatar(canvas, body_x, header_y, share, fonts["section"], author_color, palette["card_fill"])
         top = header_y
         for value, role, row_height in profile:
             _draw_text(draw, body_x + (76 if share.author else 0), top, value, fonts[role],
@@ -602,8 +629,29 @@ def _draw_page(
             _paste_pictures(canvas, line.pictures,
                             (body_x, body_y, width - 2 * body_x, line.height - PICTURE_GAP),
                             line.kind, line.picture_widths, line.picture_crops)
-            if embedded is not None:
+            if embedded is not None and line.kind != "video_preview":
                 embedded.extend(line.pictures)
+        elif line.kind == "download_label":
+            _draw_text(draw, body_x, body_y, line.text, fonts["meta"], palette["muted_text"])
+            if line.label:
+                _draw_text(draw, body_x + line.column_width, body_y, line.label,
+                           fonts["meta"], palette["muted_text"])
+        elif line.kind in ("download_url", "download_continuation"):
+            font = fonts["meta"]
+            x = body_x + line.column_width
+            color = palette["accent"]
+            if line.kind == "download_url":
+                # 外链箭头与网址首行共用基线和颜色。
+                side = max(8, round(font.size * 0.55))
+                y = body_y + font.size // 5
+                stroke = max(2, font.size // 9)
+                draw.line((body_x, y + side, body_x + side, y), fill=color, width=stroke)
+                draw.line([(body_x, y), (body_x + side, y), (body_x + side, y + side)],
+                          fill=color, width=stroke)
+            _draw_text(draw, x, body_y, line.text, font, color)
+            underline_y = body_y + line.height - 4
+            draw.line((x, underline_y, x + _text_width(draw, line.text, font), underline_y),
+                      fill=palette["rule"])
         elif line.kind == "language_bar":
             bar_width = width - body_x * 2
             bar_height = max(7, fonts["meta"].size // 2)
@@ -855,6 +903,33 @@ def _language_lines(draw: Any, value: str, fonts: dict[str, object], width: int)
     for index in range(0, len(shares), columns):
         lines.append(_TextLine("", "language_legend", height, shares=tuple(shares[index:index + columns]),
                                column_width=width // columns))
+    return lines
+
+
+def _download_lines(draw, block: DownloadList, fonts: dict, width: int) -> List[_TextLine]:
+    """给链接首行预留外链标记，续行对齐网址，渠道和提取码使用辅助文字。"""
+    font = fonts["meta"]
+    label_height = _line_height(draw, font, 1.3)
+    url_height = _line_height(draw, font, 1.55)
+    gap = max(8, font.size // 2)
+    indent = font.size + 2
+    lines = [_TextLine("", "blank", gap, keep_with_next=True)]
+    for label, url, code in block.entries:
+        name = re.sub(r"(?:地址|链接|入口)$", "", label)
+        name = re.sub(r"^curseforge", "CurseForge", name, flags=re.I)
+        offset = _text_width(draw, name, font) + font.size
+        inline_code = code and offset + _text_width(draw, code, font) <= width
+        for row in _wrap_text(draw, name, font, width):
+            lines.append(_TextLine(row, "download_label", label_height, code if inline_code else "",
+                                   keep_with_next=True, column_width=offset))
+        if code and not inline_code:
+            for row in _wrap_text(draw, code, font, width):
+                lines.append(_TextLine(row, "download_label", label_height, keep_with_next=True))
+        for index, row in enumerate(_wrap_text(draw, url, font, width - indent)):
+            kind = "download_url" if index == 0 else "download_continuation"
+            lines.append(_TextLine(row, kind, url_height, keep_with_next=True, column_width=indent))
+        lines[-1].keep_with_next = False
+        lines.append(_TextLine("", "blank", gap))
     return lines
 
 
