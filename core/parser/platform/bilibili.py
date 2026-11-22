@@ -52,6 +52,7 @@ PGC_PLAYURL_API = "https://api.bilibili.com/pgc/player/web/v2/playurl"
 HOT_COMMENT_MODE = 3
 FNVAL_MP4 = 1
 FNVAL_DASH = 4048
+PCDN_HOST_SUFFIXES = (".mcdn.bilivideo.cn", ".edge.mountaintoys.cn")
 WBI_KEY_TTL_SECONDS = 6 * 60 * 60
 MIXIN_KEY_ENC_TAB = [
     46,
@@ -1992,25 +1993,64 @@ class BilibiliParser(BaseVideoParser):
             audios, key=lambda x: (x.get("id", 0), x.get("bandwidth", 0)), reverse=True
         )[0]
 
-    def _build_dash_download_url(self, dash_obj: Dict[str, Any]) -> Optional[str]:
-        """从 DASH 数据中构建下载 URL（优先 video+audio）。"""
-        best_video = self.pick_best_video(dash_obj)
-        if not best_video:
-            return None
+    @classmethod
+    def _split_stream_urls(cls, stream: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+        """提取同一分段或轨道的主备地址，各组内保留接口顺序。"""
+        candidates = [stream.get("url") or stream.get("baseUrl") or stream.get("base_url")]
+        for key in ("backup_url", "backupUrl"):
+            backups = stream.get(key)
+            if isinstance(backups, list):
+                candidates.extend(backups)
 
-        video_url = best_video.get("baseUrl") or best_video.get("base_url")
-        if not video_url:
-            return None
+        cdn_urls = []
+        pcdn_urls = []
+        seen = set()
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            url = cls._normalize_bilibili_url(candidate)
+            if url in seen:
+                continue
+            try:
+                parsed = urlparse(url)
+                host = (parsed.hostname or "").rstrip(".")
+            except ValueError:
+                continue
+            if not host or parsed.scheme not in ("http", "https"):
+                continue
+            seen.add(url)
+            if ("." + host).endswith(PCDN_HOST_SUFFIXES):
+                pcdn_urls.append(url)
+            else:
+                cdn_urls.append(url)
+        return cdn_urls, pcdn_urls
 
-        best_audio = self.pick_best_audio(dash_obj)
-        audio_url = (
-            (best_audio.get("baseUrl") or best_audio.get("base_url"))
-            if best_audio
-            else ""
-        )
-        if audio_url:
-            return f"dash:{video_url}||{audio_url}"
-        return video_url
+    def _merged_download_urls(self, payload: Dict[str, Any]) -> List[str]:
+        """只收集首个分段的镜像地址，后续分段属于不同时间区间。"""
+        segments = payload.get("durl")
+        if not isinstance(segments, list) or not segments or not isinstance(segments[0], dict):
+            return []
+        cdn, pcdn = self._split_stream_urls(segments[0])
+        return cdn + pcdn
+
+    def _build_dash_download_urls(self, dash_obj: Dict[str, Any]) -> List[str]:
+        """组合所选音视频轨的镜像，先尝试双 CDN，再回退到含 PCDN 的组合。"""
+        video_cdn, video_pcdn = self._split_stream_urls(self.pick_best_video(dash_obj) or {})
+        audio_cdn, audio_pcdn = self._split_stream_urls(self.pick_best_audio(dash_obj) or {})
+        if not audio_cdn and not audio_pcdn:
+            return video_cdn + video_pcdn
+
+        return [
+            f"dash:{video}||{audio}"
+            for videos, audios in (
+                (video_cdn, audio_cdn),
+                (video_cdn, audio_pcdn),
+                (video_pcdn, audio_cdn),
+                (video_pcdn, audio_pcdn),
+            )
+            for video in videos
+            for audio in audios
+        ]
 
     @staticmethod
     def _unwrap_playurl_data(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2291,7 +2331,7 @@ class BilibiliParser(BaseVideoParser):
             "available_length_ms": access_info.get("available_length_ms"),
         }
 
-    async def _get_ugc_direct_url(
+    async def _get_ugc_download_urls(
         self,
         bvid: str = None,
         aid: str = None,
@@ -2299,8 +2339,8 @@ class BilibiliParser(BaseVideoParser):
         referer: str = None,
         session: aiohttp.ClientSession = None,
         cookie_header: str = "",
-    ) -> Optional[str]:
-        """获取UGC视频直链（统一处理bvid和aid）
+    ) -> List[str]:
+        """获取 UGC 视频的下载候选地址（统一处理 bvid 和 aid）
 
         Args:
             bvid: BV号（优先）
@@ -2310,7 +2350,7 @@ class BilibiliParser(BaseVideoParser):
             session: aiohttp会话
 
         Returns:
-            视频直链，失败时为None
+            按下载优先级排列的候选地址
         """
         FNVAL_MAX = FNVAL_DASH
         if bvid:
@@ -2359,8 +2399,9 @@ class BilibiliParser(BaseVideoParser):
                 cookie_header=cookie_header,
             )
         merged_payload = self._unwrap_playurl_data(merged_try)
-        if merged_payload.get("durl"):
-            return merged_payload["durl"][0].get("url")
+        merged_urls = self._merged_download_urls(merged_payload)
+        if merged_urls:
+            return merged_urls
         if bvid:
             dash_try = await self.ugc_playurl(
                 bvid=bvid,
@@ -2382,7 +2423,7 @@ class BilibiliParser(BaseVideoParser):
                 cookie_header=cookie_header,
             )
         dash_payload = self._unwrap_playurl_data(dash_try)
-        return self._build_dash_download_url(dash_payload.get("dash") or {})
+        return self._build_dash_download_urls(dash_payload.get("dash") or {})
 
     async def parse_opus(
         self,
@@ -2905,7 +2946,7 @@ class BilibiliParser(BaseVideoParser):
                 cid=cid,
             )
             logger.debug(f"[{self.name}] parse_bilibili_minimal: 获取分P{cid}的直链")
-            direct_url = await self._get_ugc_direct_url(
+            download_urls = await self._get_ugc_download_urls(
                 bvid=bvid,
                 aid=aid,
                 cid=cid,
@@ -2913,7 +2954,7 @@ class BilibiliParser(BaseVideoParser):
                 session=session,
                 cookie_header=cookie_header,
             )
-            if not direct_url:
+            if not download_urls:
                 raise RuntimeError(f"无法获取视频直链: {url}")
             logger.debug(f"[{self.name}] parse_bilibili_minimal: 直链获取成功")
         elif vtype == "pgc":
@@ -2969,9 +3010,8 @@ class BilibiliParser(BaseVideoParser):
                 cookie_header=cookie_header,
             )
             merged_payload = self._unwrap_playurl_data(merged_try)
-            if merged_payload.get("durl"):
-                direct_url = merged_payload["durl"][0].get("url")
-            else:
+            download_urls = self._merged_download_urls(merged_payload)
+            if not download_urls:
                 dash_try = await self.pgc_playurl_v2(
                     ep_id,
                     qn=target_qn,
@@ -2981,15 +3021,13 @@ class BilibiliParser(BaseVideoParser):
                     cookie_header=cookie_header,
                 )
                 dash_payload = self._unwrap_playurl_data(dash_try)
-                direct_url = (
-                    self._build_dash_download_url(dash_payload.get("dash") or {}) or ""
-                )
+                download_urls = self._build_dash_download_urls(dash_payload.get("dash") or {})
         else:
             raise RuntimeError(f"无法识别视频类型: {url}")
         card_fields = {
             key: info[key] for key in ("author_name", "author_avatar_url", "published_at") if info.get(key)
         }
-        if not direct_url:
+        if not download_urls:
             referer = page_url
             origin = "https://www.bilibili.com"
             image_headers, video_headers = self._build_media_headers(
@@ -3039,7 +3077,7 @@ class BilibiliParser(BaseVideoParser):
             **card_fields,
             "desc": info.get("desc", ""),
             "timestamp": info.get("timestamp", ""),
-            "video_urls": self._add_range_prefix_to_video_urls([[direct_url]]),
+            "video_urls": self._add_range_prefix_to_video_urls([download_urls]),
             "image_urls": [],
             "image_headers": image_headers,
             "video_headers": video_headers,

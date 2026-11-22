@@ -6,15 +6,19 @@ import asyncio
 import os
 import re
 import unicodedata
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List
 
 from .download_list import DownloadList
 from .font_manager import FONT_DIR, ensure_default_fonts, ensure_emoji_font
 from .render_options import (
     DEFAULT_RENDER_FONT_FAMILY, DEFAULT_RENDER_STYLE, normalize_font_family, normalize_style,
 )
+
+if TYPE_CHECKING:
+    from .card_themes import CardTheme
 
 
 DEFAULT_RENDER_WIDTH = 960
@@ -114,12 +118,12 @@ async def render_text_metadata_images(
         title: 图片顶部标题。
         width: 图片宽度。
         font_size: 正文文字大小。
-        style: 图片渲染风格。
+        style: 卡片主题。
         font_family: 图片字体族。
         line_spacing: 行高相对文字高度的倍数，限制在 1.0–3.0。
         paragraph_spacing: 段落空行高度相对行高的倍数，限制在 0–3.0。
         paginate: 是否将超过最大高度的长图按行拆分为多页。
-        font_proxy_url: 补全默认字体时使用的代理地址，为空时直接连接。
+        font_proxy_url: 补全所选字体和表情字体时使用的代理地址，为空时直接连接。
         blocks: 按原文顺序排列的文本与本地图片。
         share: 分享卡头部，省略时使用文字卡。
         embedded: 按绘制顺序登记的封面、图集与正文配图路径。
@@ -154,7 +158,7 @@ async def render_text_metadata_images(
         str(title or "媒体解析结果"),
         _normalize_width(width),
         _normalize_font_size(font_size),
-        normalize_style(style),
+        style,
         normalize_font_family(font_family),
         PAGINATED_MAX_HEIGHT if paginate else 0,
         _normalize_spacing(line_spacing, DEFAULT_LINE_SPACING, 1.0),
@@ -191,17 +195,17 @@ async def ensure_render_fonts(
     font_family: str = DEFAULT_RENDER_FONT_FAMILY,
     proxy_url: str = "",
 ) -> None:
-    """优先使用有效本地字体，仅缺少可用字体时补全默认资源。
+    """优先使用有效本地字体，缺少所选字体时补全该字体资源。
 
     Args:
         font_family: 文本图片配置的字体族。
-        proxy_url: 补全默认字体时使用的代理地址。
+        proxy_url: 补全所选字体时使用的代理地址。
     """
     if await asyncio.to_thread(_render_fonts_are_available, font_family):
         return
-    await ensure_default_fonts(proxy_url)
+    await ensure_default_fonts(proxy_url, font_family)
     if not await asyncio.to_thread(_render_fonts_are_available, font_family):
-        raise RuntimeError("默认字体补全后仍无法加载文本图片字体")
+        raise RuntimeError("补全后仍无法加载选定的卡片字体")
 
 
 def _render_fonts_are_available(font_family: str) -> bool:
@@ -432,7 +436,10 @@ def _render_text_metadata_image_sync(
     except ImportError as exc:
         raise RuntimeError("缺少 Pillow，无法渲染文本元数据图片") from exc
 
-    palette = _style_palette(style)
+    from .card_themes import CARD_THEMES
+
+    theme = CARD_THEMES[normalize_style(style)]
+    palette = theme.palette
     meta_size = max(MIN_RENDER_FONT_SIZE, round(font_size * 0.83))
     fonts = {
         "body": _load_font(ImageFont, font_size, font_family=font_family),
@@ -547,7 +554,7 @@ def _render_text_metadata_image_sync(
                 _draw_page(
                     draw, page_lines, header=header, fonts=fonts, width=width,
                     margin=margin, padding=padding, body_top=body_top,
-                    card_bottom=card_bottom, header_height=header_height, palette=palette,
+                    card_bottom=card_bottom, header_height=header_height, theme=theme,
                     canvas=image, share=share, profile=profile, embedded=embedded,
                 )
                 if len(pages) > 1:
@@ -577,30 +584,24 @@ def _draw_page(
     body_top: int,
     card_bottom: int,
     header_height: int,
-    palette: dict[str, str],
-    canvas: Any = None,
+    theme: CardTheme,
+    canvas: Any,
     profile: tuple | list = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
 ) -> None:
-    """绘制有清楚阅读层级的单页卡片。"""
-    draw.rounded_rectangle(
-        (margin, margin + 3, width - margin, card_bottom + 3),
-        radius=22,
-        fill=palette["card_shadow"],
-    )
-    draw.rounded_rectangle(
-        (margin, margin, width - margin, card_bottom),
-        radius=22,
-        fill=palette["card_fill"],
-        outline=palette["card_outline"],
-        width=1,
-    )
+    """先绘制主题表面，再按版式与测量结果绘制本页内容。"""
+    source = None
+    if theme.surface == "glass":
+        source = next((line.pictures[0] for line in body_lines if line.pictures), None)
+    with _open_picture(source) if source else nullcontext() as picture:
+        theme.draw(canvas, (margin, margin, width - margin, card_bottom), picture)
+    palette = theme.palette
     body_x = margin + padding
     header_y = margin + padding
     author_color = palette["accent"]
     if share:
-        dark = palette["background"] == "#0D1420"
+        dark = _relative_luminance(palette["body_text"]) > _relative_luminance(palette["card_fill"])
         if share.platform == "bilibili":
             author_color = "#73D2F6" if dark else "#087DA5"
         elif share.platform == "抖音":
@@ -1130,128 +1131,44 @@ def _normalize_font_size(value: object) -> int:
     return max(MIN_RENDER_FONT_SIZE, min(MAX_RENDER_FONT_SIZE, parsed))
 
 
-def _style_palette(style: str) -> dict[str, str]:
-    """返回渲染风格对应的颜色方案。"""
-    palettes = {
-        "fresh": {
-            "background": "#F5F0F0",
-            "card_fill": "#FFFCFC",
-            "card_outline": "#EAE0E2",
-            "card_shadow": "#EAE3E5",
-            "title": "#322D35",
-            "accent": "#984D66",
-            "muted_text": "#7B707A",
-            "body_text": "#403A43",
-            "rule": "#EDE3E7",
-        },
-        "tech": {
-            "background": "#0D1420",
-            "card_fill": "#162131",
-            "card_outline": "#28384B",
-            "card_shadow": "#080F19",
-            "title": "#EDF5FC",
-            "accent": "#82C7E8",
-            "muted_text": "#A0B0C1",
-            "body_text": "#D4DEE9",
-            "rule": "#2C3C4F",
-        },
-        "serious": {
-            "background": "#EDF0F4",
-            "card_fill": "#FFFFFF",
-            "card_outline": "#DFE4EA",
-            "card_shadow": "#DEE3EA",
-            "title": "#1E293B",
-            "accent": "#355A7E",
-            "muted_text": "#697586",
-            "body_text": "#354052",
-            "rule": "#E2E7ED",
-        },
-        "card": {
-            "background": "#F0F2ED",
-            "card_fill": "#FDFDF9",
-            "card_outline": "#E0E5DA",
-            "card_shadow": "#E0E5DB",
-            "title": "#2C3831",
-            "accent": "#53745F",
-            "muted_text": "#616E62",
-            "body_text": "#3F4A42",
-            "rule": "#E4E8DF",
-        },
-    }
-    return palettes.get(normalize_style(style), palettes[DEFAULT_RENDER_STYLE])
-
-
 def _load_font(
     image_font: object,
     size: int,
     bold: bool = False,
     font_family: str = DEFAULT_RENDER_FONT_FAMILY,
 ) -> object:
-    """按常见部署环境尝试加载中文字体，找不到时交由上层回退文本。"""
-    configured_path = str(
-        os.environ.get("ASTRBOT_MEDIA_PARSER_FONT", "") or ""
-    ).strip()
+    """按所选字体族加载对应字重，优先使用管理员指定的文件。"""
+    configured = os.environ.get("ASTRBOT_MEDIA_PARSER_FONT", "").strip()
     family = normalize_font_family(font_family)
-    family_paths = {
-        "noto_sans": (
-            str(FONT_DIR / "NotoSansCJKsc-Bold.otf")
-            if bold
-            else str(FONT_DIR / "NotoSansCJKsc-Regular.otf"),
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-            if bold
-            else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"
-            if bold
-            else "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc",
-        ),
-        "noto_serif": (
-            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"
-            if bold
-            else "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSerifCJK-Bold.ttc"
-            if bold
-            else "/usr/share/fonts/truetype/noto/NotoSerifCJK-Regular.ttc",
-            "C:/Windows/Fonts/simsun.ttc",
-        ),
-        "lxgw_wenkai": (
-            "/usr/share/fonts/truetype/lxgw/LXGWWenKai-Medium.ttf"
-            if bold
-            else "/usr/share/fonts/truetype/lxgw/LXGWWenKai-Regular.ttf",
-        ),
-        "zcool_xiaowei": (
-            "/usr/share/fonts/truetype/zcool/ZCOOLXiaoWei-Regular.ttf",
-        ),
-        "zcool_qingke": (
-            "/usr/share/fonts/truetype/zcool/ZCOOLQingKeHuangYou-Regular.ttf",
-        ),
-    }
-    candidates = [
-        configured_path,
-        *family_paths.get(family, ()),
-    ]
-    if bold:
-        # 没有专用粗体时沿用相同字体族的常规字体，不因强调文字强制联网。
-        candidates.extend(
-            candidate.replace("-Bold", "-Regular").replace("-Medium", "-Regular").replace("msyhbd", "msyh")
-            for candidate in family_paths.get(family, ())
-        )
-    if family != "noto_sans":
-        candidates.extend(family_paths["noto_sans"])
+    weight = "Bold" if bold else "Regular"
+    if family == "lxgw_wenkai":
+        names = ["LXGWWenKai-Medium.ttf", "LXGWWenKai-Regular.ttf"] if bold else ["LXGWWenKai-Regular.ttf"]
+        paths = [path for name in names for path in (
+            str(FONT_DIR / name), f"/usr/share/fonts/truetype/lxgw/{name}", f"C:/Windows/Fonts/{name}",
+        )]
+    else:
+        face = "NotoSerif" if family == "noto_serif" else "NotoSans"
+        variable = f"{face}SC-VF.ttf"
+        paths = [
+            str(FONT_DIR / variable),
+            str(FONT_DIR / f"{face}CJKsc-{weight}.otf"),
+            f"/usr/share/fonts/opentype/noto/{face}CJK-{weight}.ttc",
+            f"/usr/share/fonts/truetype/noto/{face}CJK-{weight}.ttc",
+            f"C:/Windows/Fonts/{variable}",
+        ]
         if bold:
-            candidates.extend(
-                candidate.replace("-Bold", "-Regular").replace("msyhbd", "msyh")
-                for candidate in family_paths["noto_sans"]
-            )
-    candidates.append("C:/Windows/Fonts/simhei.ttf")
-    for candidate in candidates:
+            paths.extend(path.replace("-Bold", "-Regular") for path in paths.copy() if "-Bold" in path)
+
+    for candidate in [configured, *paths]:
         if not candidate or not os.path.isfile(candidate):
             continue
         try:
-            return image_font.truetype(candidate, size)
+            # Noto CJK 系统合集的第 3 个字面为简体中文。
+            index = 2 if candidate != configured and candidate.endswith(".ttc") else 0
+            font = image_font.truetype(candidate, size, index=index)
+            if candidate.endswith(("NotoSansSC-VF.ttf", "NotoSerifSC-VF.ttf")):
+                font.set_variation_by_axes([700 if bold else 400])
+            return font
         except (OSError, ValueError):
             continue
-    raise RuntimeError(
-        "未找到可用中文字体，请安装 Noto Sans CJK、微软雅黑或配置 "
-        "ASTRBOT_MEDIA_PARSER_FONT"
-    )
+    raise RuntimeError(f"未找到可用的卡片字体 {family}")

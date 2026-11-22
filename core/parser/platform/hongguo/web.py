@@ -23,6 +23,30 @@ _USER_AGENT = (
 )
 
 
+class HongguoEmptyResponse(ValueError):
+    """接口响应成功但正文为空。"""
+
+
+async def _read_json(response: aiohttp.ClientResponse) -> Dict[str, Any]:
+    """按解压后的字节数限制响应，只接受 JSON 对象。"""
+    if response.status != 200:
+        raise ValueError(f"红果接口请求失败（HTTP {response.status}）")
+    content = bytearray()
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        content.extend(chunk)
+        if len(content) > _MAX_RESPONSE_BYTES:
+            raise ValueError("红果接口响应过大")
+    if not content:
+        raise HongguoEmptyResponse("红果接口返回 HTTP 200，但响应正文为空")
+    try:
+        result = json.loads(content)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("红果接口响应格式异常") from exc
+    if not isinstance(result, dict):
+        raise ValueError("红果接口响应格式异常")
+    return result
+
+
 class HongguoClient:
     """在解析器生命周期内复用匿名设备标识。"""
 
@@ -97,21 +121,7 @@ class HongguoClient:
             timeout=aiohttp.ClientTimeout(total=30),
             allow_redirects=False,
         ) as response:
-            if response.status != 200:
-                raise ValueError(f"红果接口请求失败（HTTP {response.status}）")
-            content = bytearray()
-            async for chunk in response.content.iter_chunked(64 * 1024):
-                content.extend(chunk)
-                if len(content) > _MAX_RESPONSE_BYTES:
-                    raise ValueError("红果接口响应过大")
-        if not content:
-            raise ValueError("红果接口未返回有效数据")
-        try:
-            result = json.loads(content)
-        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
-            raise ValueError("红果接口响应格式异常") from exc
-        if not isinstance(result, dict):
-            raise ValueError("红果接口响应格式异常")
+            result = await _read_json(response)
         codes = [result[key] for key in ("code", "Code", "status_code") if key in result]
         base_response = result.get("BaseResp")
         if isinstance(base_response, dict) and "StatusCode" in base_response:
@@ -119,3 +129,28 @@ class HongguoClient:
         if any(code not in (0, "0") for code in codes):
             raise ValueError("红果接口返回失败状态")
         return result
+
+    async def guest_video_url(
+        self, session: aiohttp.ClientSession, video_id: str, headers: Dict[str, str],
+    ) -> str:
+        """请求官网游客播放器返回的当前分集媒体地址。
+
+        Args:
+            session: 已读取官网播放页的会话。
+            video_id: 已核验可播放的分集编号。
+            headers: 对应播放页的请求头。
+
+        Returns:
+            官网播放器下发的媒体地址。
+        """
+        async with session.post(
+            "https://hongguoduanju.com/api/video/protected/fallback-play-info?aid=8662",
+            json={"item_id": video_id}, headers={**headers, "X-XS-From-Web": "1"},
+            timeout=aiohttp.ClientTimeout(total=30), allow_redirects=False,
+        ) as response:
+            data = await _read_json(response)
+        status = data.get("base_resp")
+        code = status.get("StatusCode") if isinstance(status, dict) else None
+        if type(code) is not int or code != 0 or not isinstance(data.get("main_url"), str):
+            raise ValueError("红果官网未返回可播放的视频")
+        return data["main_url"]

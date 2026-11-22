@@ -39,6 +39,7 @@ from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.shared_images import SharedImageDelivery
 from .core.message_adapter.node_builder import (
     build_all_nodes,
+    build_text_node,
     build_translation_nodes_for_all,
     collect_text_metadata,
     summarize_node_counts,
@@ -70,7 +71,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.16.0",
+    "1.17.0",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -516,16 +517,8 @@ class VideoParserPlugin(Star):
         return await render_text_metadata_images(
             text,
             str(image_path),
-            style=getattr(
-                cfg.message.text_metadata,
-                "render_style",
-                "fresh",
-            ),
-            font_family=getattr(
-                cfg.message.text_metadata,
-                "render_font_family",
-                "noto_sans",
-            ),
+            style=cfg.message.text_metadata.render_style,
+            font_family=cfg.message.text_metadata.render_font_family,
             font_size=getattr(
                 cfg.message.text_metadata,
                 "render_font_size",
@@ -815,7 +808,8 @@ class VideoParserPlugin(Star):
         if (rich_enabled and has_media) or (text_enabled and has_text):
             return True
         if not text_enabled:
-            return False
+            # 仅富媒体且没有媒体地址时，仍可能有需要发送的访问或失败提示。
+            return rich_enabled and build_text_node(metadata, enable_text_metadata=False) is not None
         if metadata.get("repository_snapshot") and self.config_manager.message.text_metadata.show_summary:
             return True
         return self.content_summarizer.selected_type(metadata) is not None

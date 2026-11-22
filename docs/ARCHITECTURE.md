@@ -173,7 +173,7 @@ astrbot_plugin_media_parser/
 - 所有平台均为 `关闭` 时：普通消息不进入解析，但管理员清缓存命令仍在停用检查之前处理。
 - 普通解析的开场语按链接发送：每条通过触发、平台输出和频率限制的链接，在调用解析器前发送一次，不依赖最终结果是富媒体还是文本。ZIP 归档不构建聊天节点，但会在归档流程中按 `message.opening.enable` 发送一次 `message.opening.archive_content`。
 
-`message.hot_comments.count` 默认 `5`，控制各支持平台的热评条数；已接入的 29 个平台默认可用，使用 `message.hot_comments.excluded` 排除指定平台。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
+`message.hot_comments.count` 默认 `3`，控制各支持平台的热评条数；已接入的 29 个平台默认可用，使用 `message.hot_comments.excluded` 排除指定平台。解析器工厂统一结合平台输出模式与热评开关计算有效数量，关闭平台热评或选择 `仅富媒体` 时传入 `0`，不发起热评请求。
 
 `parsers.text_platforms`、`parsers.media_platforms` 决定各平台发哪些内容，`parsers.video_without_text` 对同时勾选两者的平台启用视频直发。
 
@@ -209,11 +209,11 @@ V2EX 的 `likes` 表示感谢数。匿名回复接口按楼层返回，分页参
 
 `message.text_metadata.fields` 选择标题、作者、时间、原始链接和简介。默认选择全部五项，只改变展示与翻译输入；访问状态、媒体大小、跳过原因和错误提示不受影响。
 
-`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成 PNG，再移除已成功渲染的 Plain 节点并发送图片。分享卡和具有正文配图的链接逐条绘制，直接复用下载结果，将图片作为正文块参与测量、分页和绘制。成功后替换对应节点；其余媒体仍单独发送。开启分区渲染时热评、翻译单独出图。普通文字卡继续合并非穿插文本。图片版式与四种配色独立。引用取原图按会话和解析结果登记，所有分页共用一组按绘制顺序登记的源文件，一小时后由媒体缓存清理器回收。字体大小限制为 16–42；`render_line_spacing` 为行高相对文字高度的倍数（1.0–3.0，默认 1.55），`render_paragraph_spacing` 为段落空行相对行高的倍数（0–3.0，默认 0.5）。`message.text_metadata.render_paginate` 开启时，渲染器按正文行拆分高度超过 1800 像素的图片，页首不保留空行和分隔线，多页时在底部标注页码并以 `_pNN` 后缀命名；关闭时保持单张输出。图片采用简洁阅读卡片，区分文章标题、辅助信息、正文、热评与翻译；测量和绘制共用字号与字重，英文单词和中文标点按实际宽度换行，标题及评论信息尽量与后续正文同页。
+`message.text_metadata.render_to_image` 开启后，主流程会在节点构建和翻译完成后收集文本节点，使用 `text_renderer.py` 在缓存目录的 `rendered_text/` 下生成 PNG，再移除已成功渲染的 Plain 节点并发送图片。分享卡和具有正文配图的链接逐条绘制，直接复用下载结果，将图片作为正文块参与测量、分页和绘制。成功后替换对应节点；其余媒体仍单独发送。开启分区渲染时热评、翻译单独出图。普通文字卡继续合并非穿插文本。文字卡和分享卡共用同一页绘制函数。每页先按主题绘制卡面，再绘文字与配图。深蓝磨砂取本页首幅素材的明暗，无配图时生成稳定底景。主题与字体独立选择。引用取原图按会话和解析结果登记，所有分页共用一组按绘制顺序登记的源文件，一小时后由媒体缓存清理器回收。字体大小限制为 16–42；`render_line_spacing` 为行高相对文字高度的倍数（1.0–3.0，默认 1.55），`render_paragraph_spacing` 为段落空行相对行高的倍数（0–3.0，默认 0.5）。`message.text_metadata.render_paginate` 开启时，渲染器按正文行拆分高度超过 1800 像素的图片，页首不保留空行和分隔线，多页时在底部标注页码并以 `_pNN` 后缀命名；关闭时保持单张输出。图片采用简洁阅读卡片，区分文章标题、辅助信息、正文、热评与翻译；测量和绘制共用字号与字重，英文单词和中文标点按实际宽度换行，标题及评论信息尽量与后续正文同页。
 
 创建成品画布前限制单页高度为 16384 像素、单页为 1600 万像素、单次渲染为 20 页及 3200 万像素总量；分页时每页仍不得超过 1800 像素。超出任一预算时抛出可回退异常，保留完整原文本，不分配大画布。渲染超时或取消时观察不可强制停止的线程真实结束，再清理本次输出；重复取消不能跳过清理。B站登录二维码生成也先等待线程结束再删除临时文件。
 
-`ensure_render_fonts()` 仅在启用文本图片时于加载阶段准备字体，实际渲染前再次确认。优先以真实加载检查有效的自定义、配置字体族和本地字体，缺少粗体时沿用所选字体族的常规字体；本地可用时不要求默认资源下载。全部本地候选不可用时由 `font_manager.py` 从固定版本 Release 补全默认 Noto Sans CJK，校验大小和 SHA256 后原子落盘。`proxy.uses` 中的 `font` 开启且代理地址非空时经代理下载。字体保存在 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_media_parser/font`，非 AstrBot 运行时回退插件内 `resource/font/`；可用 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。渲染图片记入 `build_result.temp_files` 统一清理；启用文件 Token 中转时逐页注册 Token，并纳入同一 TTL 清理流程。
+`ensure_render_fonts()` 仅在启用文本图片时于加载阶段准备字体，实际渲染前再次确认。优先以真实加载检查有效的自定义、配置字体族和本地字体，缺少粗体时沿用所选字体族的常规字体；本地可用时不要求默认资源下载。缺少所选字体时由 `font_manager.py` 从固定版本地址补全对应字体，校验大小和 SHA256 后原子落盘。`proxy.uses` 中的 `font` 开启且代理地址非空时经代理下载。字体保存在 AstrBot 数据目录下的 `plugin_data/astrbot_plugin_media_parser/font`，非 AstrBot 运行时回退插件内 `resource/font/`；可用 `ASTRBOT_MEDIA_PARSER_FONT` 指定优先字体。字体补全、渲染或 Pillow 不可用时保留原文本节点，不影响富媒体发送。渲染图片记入 `build_result.temp_files` 统一清理；启用文件 Token 中转时逐页注册 Token，并纳入同一 TTL 清理流程。
 
 `message.media_display.interleave_images` 开启后，`node_builder.py` 对提供 `content_blocks` 的链接按正文块顺序输出文字节点与已构建的配图节点：基础文本节点保留“简介/正文：”标题但不再写入正文，正文块之后依次为热评和未穿插的剩余媒体。需要同时满足文本元数据与富媒体输出开启、简介/正文可见且无解析错误，并至少有一张配图节点构建成功，否则回退原有布局。穿插链接在 `LinkBuildMeta.preserve_order` 中标记，发送阶段不再按纯图集把文字与图片分组。
 
@@ -776,7 +776,7 @@ proxy.address
 proxy.uses  # 多选，例如 font、steam.parse、steam.image、twitter.video、github
 ```
 
-`proxy.uses` 中的 `font` 不属于平台解析，仅供 `font_manager.py` 补全默认字体时使用全局代理地址，不写入媒体元数据。
+`proxy.uses` 中的 `font` 不属于平台解析，仅供 `font_manager.py` 补全字体资源时使用全局代理地址，不写入媒体元数据。
 
 解析器初始化时接收代理配置：
 

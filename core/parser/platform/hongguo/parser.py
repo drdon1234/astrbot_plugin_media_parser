@@ -21,7 +21,7 @@ from ....types import MediaMetadata
 from ...utils import build_request_headers, profile_image_url
 from ..base import BaseVideoParser
 from .sign import decode_video_key
-from .web import HongguoClient
+from .web import HongguoClient, HongguoEmptyResponse
 
 
 BASE_URL = "https://hongguoduanju.com"
@@ -218,14 +218,14 @@ class HongguoParser(BaseVideoParser):
                 current = urljoin(canonical, location)
         raise RuntimeError("红果分享跳转次数过多")
 
-    async def _detail(self, session: aiohttp.ClientSession, series_id: str) -> Dict[str, Any]:
-        """从官网详情取得完整分集表和作品资料。"""
+    async def _page(self, session: aiohttp.ClientSession, url: str, page_key: str) -> Dict[str, Any]:
+        """读取官网指定页面的路由数据。"""
         async with session.get(
-            f"{BASE_URL}/detail?series_id={series_id}", headers=self.headers,
+            url, headers=self.headers,
             allow_redirects=False, timeout=aiohttp.ClientTimeout(total=Config.DEFAULT_TIMEOUT),
         ) as response:
             if response.status != 200:
-                raise RuntimeError(f"红果剧集详情请求失败（HTTP {response.status}）")
+                raise RuntimeError(f"红果官网页面请求失败（HTTP {response.status}）")
             chunks = []
             size = 0
             async for chunk in response.content.iter_chunked(64 * 1024):
@@ -246,12 +246,65 @@ class HongguoParser(BaseVideoParser):
             except (ValueError, RecursionError):
                 continue
             loader = data.get("loaderData") if isinstance(data, dict) else None
-            page = loader.get("detail_page") if isinstance(loader, dict) else None
+            page = loader.get(page_key) if isinstance(loader, dict) else None
             if isinstance(page, dict) and page.get("isSuccess") is not False:
-                detail = page.get("seriesDetail")
-                if isinstance(detail, dict):
-                    return detail
+                return page
+        raise RuntimeError("红果官网未返回有效页面数据")
+
+    async def _detail(self, session: aiohttp.ClientSession, series_id: str) -> Dict[str, Any]:
+        """从官网详情取得完整分集表和作品资料。"""
+        page = await self._page(session, f"{BASE_URL}/detail?series_id={series_id}", "detail_page")
+        detail = page.get("seriesDetail")
+        if isinstance(detail, dict):
+            return detail
         raise RuntimeError("红果官网未返回有效剧集资料")
+
+    async def _playback(
+        self, session: aiohttp.ClientSession, series_id: str, video_id: str, web_accessible: bool,
+    ) -> Tuple[List[str], Dict[str, str], float, str]:
+        """优先取得 App 清晰度候选，空响应时读取该分集的官网游客播放源。"""
+        try:
+            payload = await self.client.request(session, "/novel/player/video_model/v1/", {
+                "video_id": video_id, "content_type": 1,
+                "biz_param": {"need_all_video_definition": True, "video_platform": 3},
+            })
+        except HongguoEmptyResponse:
+            if not web_accessible:
+                raise
+            logger.debug("红果 App 播放接口返回空正文，读取指定分集的官网游客播放源")
+            referer = f"{BASE_URL}/player/{series_id}/{video_id}"
+            page = await self._page(session, referer, "player_(series_id)/(vid)/page")
+            seo, request = page.get("publicVideoSeo"), page.get("req")
+            if (page.get("series_id") != series_id or page.get("vid") != video_id
+                    or not isinstance(seo, dict) or seo.get("available") is not True
+                    or seo.get("seriesId") != series_id or seo.get("itemId") != video_id
+                    or not isinstance(request, dict) or request.get("pcLoginRequired") is not False):
+                raise RuntimeError("红果官网未开放所请求分集的游客播放")
+            duration = seo.get("durationSeconds")
+            if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
+                raise RuntimeError("红果官网分集时长无效")
+            # 页面静态 MP4 是短预览，完整视频由游客播放器按 item_id 请求。
+            address = _media_url(await self.client.guest_video_url(
+                session, video_id, build_request_headers(is_video=True, referer=referer),
+            ))
+            if not address:
+                raise RuntimeError("红果官网未返回有效的完整视频地址")
+            return [address], {}, duration, referer
+
+        data = payload.get("data")
+        model = data.get("video_model") if isinstance(data, dict) else None
+        if isinstance(model, str):
+            model = json.loads(model)
+        if not isinstance(model, dict):
+            raise RuntimeError("红果播放信息格式无效")
+        addresses, keys = self._select_media(model)
+        try:
+            duration = float(model.get("video_duration", 0))
+        except (TypeError, ValueError, OverflowError):
+            duration = 0
+        if not math.isfinite(duration) or duration <= 0:
+            raise RuntimeError("红果完整视频时长无效")
+        return addresses, keys, duration, "https://novel.snssdk.com/"
 
     @staticmethod
     def _select_media(model: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
@@ -426,31 +479,19 @@ class HongguoParser(BaseVideoParser):
                     raise RuntimeError("红果剧集不包含所请求的分集")
                 episode = videos.index(video_id) + 1
                 addresses, keys, duration = [], {}, 0
+                video_referer = BASE_URL + "/"
                 video_error = False
                 try:
-                    payload = await self.client.request(session, "/novel/player/video_model/v1/", {
-                        "video_id": video_id, "content_type": 1,
-                        "biz_param": {"need_all_video_definition": True, "video_platform": 3},
-                    })
-                    data = payload.get("data")
-                    model = data.get("video_model") if isinstance(data, dict) else None
-                    if isinstance(model, str):
-                        model = json.loads(model)
-                    if not isinstance(model, dict):
-                        raise RuntimeError("红果播放信息格式无效")
-                    addresses, keys = self._select_media(model)
-                    try:
-                        duration = float(model.get("video_duration", 0))
-                    except (TypeError, ValueError, OverflowError):
-                        duration = 0
-                    if not math.isfinite(duration) or duration <= 0:
-                        raise RuntimeError("红果完整视频时长无效")
+                    accessible = detail.get("accessible_episode_cnt")
+                    addresses, keys, duration, video_referer = await self._playback(
+                        session, series_id, video_id, type(accessible) is int and episode <= accessible,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RuntimeError, UnicodeError) as exc:
-                    addresses, keys, duration = [], {}, 0
                     video_error = True
-                    logger.warning(f"红果完整视频取流失败，继续保留剧集资料与分集弹幕：{type(exc).__name__}")
+                    reason = str(exc) if isinstance(exc, HongguoEmptyResponse) else type(exc).__name__
+                    logger.warning(f"红果完整视频取流失败，继续保留剧集资料与分集弹幕：{reason}")
             except asyncio.CancelledError:
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError, ValueError) as exc:
@@ -463,7 +504,7 @@ class HongguoParser(BaseVideoParser):
             "desc": f"第{episode}集 / 共{len(videos)}集" + (f"\n{desc.strip()}" if isinstance(desc, str) and desc.strip() else ""),
             "video_urls": [addresses] if addresses else [], "video_cover_urls": [[cover]] if cover and addresses else [],
             "image_headers": self.headers.copy(),
-            "video_headers": build_request_headers(is_video=True, referer="https://novel.snssdk.com/"),
+            "video_headers": build_request_headers(is_video=True, referer=video_referer),
             "video_force_download": True,
             "timelength_ms": round(duration * 1000) if duration else None,
         }

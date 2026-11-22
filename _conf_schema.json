@@ -390,7 +390,7 @@
             "text_metadata": {
                 "description": "文本元数据",
                 "type": "object",
-                "hint": "选择显示内容、文字或分享卡版式及配色。",
+                "hint": "选择显示内容、卡片版式、主题与字体。",
                 "items": {
                     "fields": {
                         "description": "消息显示内容",
@@ -441,18 +441,32 @@
                         }
                     },
                     "render_style": {
-                        "description": "图片配色",
+                        "description": "卡片主题",
                         "type": "string",
                         "condition": {
                             "render_to_image": true
                         },
                         "options": [
-                            "浅粉底 · 玫瑰色",
-                            "深蓝底 · 冰蓝色",
-                            "浅灰底 · 钢蓝色",
-                            "米白底 · 灰绿色"
+                            "玫瑰便签",
+                            "雾灰简约",
+                            "深蓝磨砂",
+                            "浅棕细纹纸"
                         ],
-                        "default": "浅粉底 · 玫瑰色"
+                        "default": "玫瑰便签"
+                    },
+                    "render_font_family": {
+                        "description": "卡片字体",
+                        "type": "string",
+                        "condition": {
+                            "render_to_image": true
+                        },
+                        "options": [
+                            "思源黑体",
+                            "思源宋体",
+                            "霞鹜文楷"
+                        ],
+                        "hint": "本地缺少所选字体时自动下载。设置了 ASTRBOT_MEDIA_PARSER_FONT 时优先使用指定字体。",
+                        "default": "思源宋体"
                     },
                     "share_cover": {
                         "description": "分享卡显示封面与图集",
@@ -484,30 +498,13 @@
                         }
                     },
                     "show_render_details": {
-                        "description": "展开字体与排版设置",
+                        "description": "展开排版设置",
                         "type": "bool",
                         "default": false,
                         "hint": "仅控制配置项的展开显示，收起后仍按已保存的配置运行。",
                         "condition": {
                             "render_to_image": true
                         }
-                    },
-                    "render_font_family": {
-                        "description": "图片字体",
-                        "type": "string",
-                        "condition": {
-                            "render_to_image": true,
-                            "show_render_details": true
-                        },
-                        "options": [
-                            "黑体 · 简洁清晰",
-                            "宋体 · 横细竖粗",
-                            "霞鹜文楷 · 手写楷体",
-                            "站酷小薇体 · 装饰宋体",
-                            "站酷庆科黄油体 · 瘦长圆润"
-                        ],
-                        "hint": "未安装所选字体时使用黑体。默认字体缺失时会自动补全，补全失败时发送文本。设置了 ASTRBOT_MEDIA_PARSER_FONT 时优先使用指定字体。",
-                        "default": "黑体 · 简洁清晰"
                     },
                     "render_font_size": {
                         "description": "图片字体大小",
@@ -620,7 +617,7 @@
                         "description": "热评条数",
                         "type": "int",
                         "hint": "填 0 不获取热评；大于 0 后按平台开关选择来源。实际数量受平台公开范围、分页和风控限制，可能少于设置值。",
-                        "default": 5
+                        "default": 3
                     },
                     "excluded": {
                         "description": "不显示热评的平台",

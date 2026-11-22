@@ -13,7 +13,8 @@ from .logger import logger
 from .constants import Config
 from .downloader.utils import check_cache_dir_available
 from .message_adapter.render_options import (
-    FONT_IDS, FONT_NAMES, STYLE_IDS, STYLE_NAMES, normalize_font_family, normalize_style,
+    DEFAULT_RENDER_FONT_FAMILY, DEFAULT_RENDER_STYLE, FONT_IDS, FONT_NAMES,
+    STYLE_IDS, STYLE_NAMES, normalize_font_family, normalize_style,
 )
 from .message_text import MAX_MESSAGE_TEXT_LENGTH
 from .parser.platform import (
@@ -357,8 +358,8 @@ class TextMetadataConfig:
     share_cover: bool = True
     original_keyword: str = "原图"
     link_keyword: str = "链接"
-    render_style: str = "fresh"
-    render_font_family: str = "noto_sans"
+    render_style: str = DEFAULT_RENDER_STYLE
+    render_font_family: str = DEFAULT_RENDER_FONT_FAMILY
     render_font_size: int = 24
     render_line_spacing: float = 1.55
     render_paragraph_spacing: float = 0.5
@@ -380,7 +381,7 @@ class TextMetadataConfig:
 
 @dataclass
 class HotCommentConfig:
-    count: int = 5
+    count: int = 3
     bilibili: bool = True
     douyin: bool = True
     acfun: bool = True
@@ -733,7 +734,7 @@ class ConfigManager:
         hot_comments = self._as_dict(message_raw.get("hot_comments"))
         aggregation_thresholds = self._as_dict(aggregation.get("thresholds"))
 
-        hot_count = self._parse_non_negative_int(hot_comments.get("count", 5), 5)
+        hot_count = self._parse_non_negative_int(hot_comments.get("count", 3), 3)
         any_text_output_enabled = self.parser_output.has_any_text_output()
         if not any_text_output_enabled:
             hot_count = 0

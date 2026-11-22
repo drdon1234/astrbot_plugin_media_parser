@@ -12,6 +12,7 @@ from pathlib import Path
 import aiohttp
 
 from ..config_manager import get_plugin_font_dir
+from .render_options import DEFAULT_RENDER_FONT_FAMILY, normalize_font_family
 
 
 FONT_DIR = Path(get_plugin_font_dir())
@@ -41,24 +42,48 @@ class FontAsset:
         return self.source_url or f"{FONT_RELEASE_BASE_URL}/{self.filename}"
 
 
-FONT_ASSETS = (
-    FontAsset(
-        filename="NotoSansCJKsc-Regular.otf",
-        size=16437364,
-        sha256=(
-            "2c76254f6fc379fddfce0a7e84fb5385"
-            "bb135d3e399294f6eeb6680d0365b74b"
+FONT_ASSETS = {
+    "noto_sans": (
+        FontAsset(
+            filename="NotoSansCJKsc-Regular.otf",
+            size=16437364,
+            sha256=(
+                "2c76254f6fc379fddfce0a7e84fb5385"
+                "bb135d3e399294f6eeb6680d0365b74b"
+            ),
+        ),
+        FontAsset(
+            filename="NotoSansCJKsc-Bold.otf",
+            size=17002248,
+            sha256=(
+                "b5f0d1a190a7f9b43c310a8850630af"
+                "12553df32c4c050543f9059732d9b4c0a"
+            ),
         ),
     ),
-    FontAsset(
-        filename="NotoSansCJKsc-Bold.otf",
-        size=17002248,
-        sha256=(
-            "b5f0d1a190a7f9b43c310a8850630af"
-            "12553df32c4c050543f9059732d9b4c0a"
+    "noto_serif": (
+        FontAsset(
+            filename="NotoSerifSC-VF.ttf",
+            size=25125512,
+            sha256="050080d9255a86808f2945bffac582b31ef32bc36411ce29563b4961670c66f9",
+            source_url=(
+                "https://raw.githubusercontent.com/google/fonts/"
+                "2e61f4355afd22b801791b0df176065082423b87/ofl/notoserifsc/NotoSerifSC%5Bwght%5D.ttf"
+            ),
         ),
     ),
-)
+    "lxgw_wenkai": (
+        FontAsset(
+            filename="LXGWWenKai-Regular.ttf",
+            size=25928940,
+            sha256="2d73eea94ad808999d90c0000c239a84a33b09d4bc6ab6c5b8bbf1eda8a7fc8b",
+            source_url=(
+                "https://raw.githubusercontent.com/lxgw/LxgwWenKai/"
+                "4becfb4d5cf0c92cfdb60a6e9b504bda43315325/fonts/TTF/LXGWWenKai-Regular.ttf"
+            ),
+        ),
+    ),
+}
 
 EMOJI_FONT_ASSET = FontAsset(
     filename="NotoEmoji.ttf",
@@ -70,10 +95,7 @@ EMOJI_FONT_ASSET = FontAsset(
         "ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
     ),
 )
-_emoji_lock = asyncio.Lock()
-_emoji_ready = False
 _ensure_lock = asyncio.Lock()
-_fonts_ready = False
 
 
 async def ensure_emoji_font(proxy_url: str = "") -> None:
@@ -82,72 +104,37 @@ async def ensure_emoji_font(proxy_url: str = "") -> None:
     Args:
         proxy_url: 下载字体使用的代理地址，为空时直接连接。
     """
-    global _emoji_ready
-
-    async with _emoji_lock:
-        target = FONT_DIR / EMOJI_FONT_ASSET.filename
-        if _emoji_ready and _font_has_expected_size(target, EMOJI_FONT_ASSET):
-            return
-        _emoji_ready = False
-        if await asyncio.to_thread(_font_is_valid, target, EMOJI_FONT_ASSET):
-            _emoji_ready = True
-            return
-        try:
-            FONT_DIR.mkdir(parents=True, exist_ok=True)
-            timeout = aiohttp.ClientTimeout(total=FONT_DOWNLOAD_TIMEOUT_SECONDS)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                await _download_font(session, EMOJI_FONT_ASSET, target, proxy_url)
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
-            raise FontDownloadError(f"补全表情字体失败: {exc}") from exc
-        _emoji_ready = True
+    await _ensure_assets((EMOJI_FONT_ASSET,), proxy_url)
 
 
-async def ensure_default_fonts(proxy_url: str = "") -> None:
-    """校验并补全默认 Noto Sans CJK 字体。
+async def ensure_default_fonts(proxy_url: str = "", font_family: str = DEFAULT_RENDER_FONT_FAMILY) -> None:
+    """校验并补全所选字体族的标准资源。
 
     Args:
         proxy_url: 下载字体使用的代理地址，为空时直接连接。
+        font_family: 选中的卡片字体族。
     """
-    global _fonts_ready
+    await _ensure_assets(FONT_ASSETS[normalize_font_family(font_family)], proxy_url)
 
-    if _fonts_ready and _all_assets_have_expected_size():
-        return
 
+async def _ensure_assets(assets: tuple[FontAsset, ...], proxy_url: str) -> None:
+    """串行准备缺失或损坏的资源，下载器校验完整性后原子落盘。"""
     async with _ensure_lock:
-        if _fonts_ready and _all_assets_have_expected_size():
+        missing = []
+        for asset in assets:
+            if not await asyncio.to_thread(_font_is_valid, FONT_DIR / asset.filename, asset):
+                missing.append(asset)
+        if not missing:
             return
-
-        _fonts_ready = False
-        if await asyncio.to_thread(_all_assets_are_valid):
-            _fonts_ready = True
-            return
-
         try:
             FONT_DIR.mkdir(parents=True, exist_ok=True)
             timeout = aiohttp.ClientTimeout(total=FONT_DOWNLOAD_TIMEOUT_SECONDS)
             headers = {"User-Agent": "AstrBot-Media-Parser-Font-Downloader"}
-            async with aiohttp.ClientSession(
-                timeout=timeout,
-                headers=headers,
-            ) as session:
-                for asset in FONT_ASSETS:
-                    target = FONT_DIR / asset.filename
-                    if await asyncio.to_thread(_font_is_valid, target, asset):
-                        continue
-                    await _download_font(session, asset, target, proxy_url)
-        except asyncio.CancelledError:
-            _fonts_ready = False
-            raise
-        except FontDownloadError:
-            _fonts_ready = False
-            raise
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                for asset in missing:
+                    await _download_font(session, asset, FONT_DIR / asset.filename, proxy_url)
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
-            _fonts_ready = False
-            raise FontDownloadError(f"补全字体资源失败: {exc}") from exc
-
-        if not await asyncio.to_thread(_all_assets_are_valid):
-            raise FontDownloadError("字体资源补全后校验失败")
-        _fonts_ready = True
+            raise FontDownloadError(f"补全字体失败: {exc}") from exc
 
 
 async def _download_font(
@@ -196,21 +183,6 @@ async def _download_font(
         raise FontDownloadError(f"下载字体 {asset.filename} 失败: {exc}") from exc
     finally:
         _remove_temp_file(temp_path)
-
-
-def _all_assets_have_expected_size() -> bool:
-    """快速确认全部字体仍存在且大小正确。"""
-    return all(
-        _font_has_expected_size(FONT_DIR / asset.filename, asset)
-        for asset in FONT_ASSETS
-    )
-
-
-def _all_assets_are_valid() -> bool:
-    """完整校验全部字体资源。"""
-    return all(
-        _font_is_valid(FONT_DIR / asset.filename, asset) for asset in FONT_ASSETS
-    )
 
 
 def _font_has_expected_size(path: Path, asset: FontAsset) -> bool:
