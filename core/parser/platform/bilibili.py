@@ -183,6 +183,10 @@ def av2bv(av: int) -> str:
     return "".join(bytes_arr)
 
 
+class _BilibiliRequestLimited(RuntimeError):
+    """B 站明确限制了当前请求。"""
+
+
 class BilibiliParser(BaseVideoParser):
     """B 站解析器，支持视频/动态解析与热评提取。"""
 
@@ -318,7 +322,7 @@ class BilibiliParser(BaseVideoParser):
                 headers=request_headers,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
-                j = await self._check_json_response(resp)
+                j = await self._read_ugc_response(resp, "签名密钥")
             nav_data = j.get("data") or {}
             wbi_img = nav_data.get("wbi_img") or {}
             img_url = str(wbi_img.get("img_url", "")).strip()
@@ -543,20 +547,13 @@ class BilibiliParser(BaseVideoParser):
     @staticmethod
     def _extract_initial_state_from_html(html: str) -> Dict[str, Any]:
         """从 HTML 中提取页面初始化状态 JSON。"""
-        match = re.search(
-            r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\});", html, re.DOTALL
-        )
-        if not match:
-            match = re.search(
-                r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*</script>",
-                html,
-                re.DOTALL,
-            )
+        match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(?=\{)", html)
         if not match:
             return {}
         try:
-            return json.loads(match.group(1))
-        except Exception:
+            state, _ = json.JSONDecoder().raw_decode(html, match.end())
+            return state
+        except (ValueError, RecursionError):
             return {}
 
     async def _resolve_opus_comment_subject(
@@ -734,6 +731,15 @@ class BilibiliParser(BaseVideoParser):
                 f"Content-Type: {resp.content_type}): {text[:200]}"
             )
         return await resp.json()
+
+    async def _read_ugc_response(self, resp: aiohttp.ClientResponse, stage: str) -> dict:
+        """保留分 P、签名密钥和播放请求的限流信号。"""
+        if resp.status in (412, 429):
+            raise _BilibiliRequestLimited(f"B站限制了{stage}请求（HTTP {resp.status}），请稍后重试")
+        data = await self._check_json_response(resp)
+        if data.get("code") == -412:
+            raise _BilibiliRequestLimited(f"B站限制了{stage}请求（业务码 -412），请稍后重试")
+        return data
 
     async def _handle_api_response(self, j: dict, api_name: str) -> None:
         """处理API响应，检查错误码
@@ -1537,13 +1543,44 @@ class BilibiliParser(BaseVideoParser):
                 return "ugc", {"aid": m.group(1)}
         return None, {}
 
+    async def _get_public_ugc_data(
+        self, session: aiohttp.ClientSession, bvid: Optional[str], aid: Optional[str]
+    ) -> Dict[str, Any]:
+        """从匿名投稿的公开视频页读取与目标编号匹配的详情。"""
+        video_id = bvid or f"av{aid}"
+        try:
+            async with session.get(
+                f"https://www.bilibili.com/video/{video_id}/",
+                headers=self._build_api_headers(),
+                timeout=aiohttp.ClientTimeout(total=10),
+                allow_redirects=False,
+            ) as resp:
+                if resp.status in (412, 429):
+                    raise _BilibiliRequestLimited(f"B站限制了视频页请求（HTTP {resp.status}），请稍后重试")
+                if 400 <= resp.status < 500:
+                    raise RuntimeError(f"B站视频页不可访问（HTTP {resp.status}）")
+                if resp.status != 200 or resp.content_type != "text/html":
+                    return {}
+                state = self._extract_initial_state_from_html(await resp.text())
+        except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError) as exc:
+            logger.debug(f"B站视频页读取失败：{type(exc).__name__}")
+            return {}
+        data = state.get("videoData")
+        if not isinstance(data, dict) or not data.get("title"):
+            return {}
+        if bvid and data.get("bvid") != bvid:
+            return {}
+        if not bvid and str(data.get("aid")) != str(aid):
+            return {}
+        return data
+
     async def get_ugc_info(
         self,
         bvid: str = None,
         aid: str = None,
         session: aiohttp.ClientSession = None,
         cookie_header: str = "",
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """获取UGC视频信息
 
         Args:
@@ -1565,6 +1602,15 @@ class BilibiliParser(BaseVideoParser):
             params["aid"] = self._prepare_aid_param(aid)
         else:
             raise ValueError("必须提供bvid或aid参数")
+        data = {} if cookie_header else await self._get_public_ugc_data(session, bvid, aid)
+        if not data:
+            data = await self._get_ugc_api_data(session, params, cookie_header)
+        return self._normalize_ugc_info(data)
+
+    async def _get_ugc_api_data(
+        self, session: aiohttp.ClientSession, params: Dict[str, Any], cookie_header: str
+    ) -> Dict[str, Any]:
+        """使用详情接口获取投稿数据，保留登录态及原有签名回退。"""
         headers = self._build_api_headers(cookie_header=cookie_header)
         original_error = None
         for api in (UGC_INFO_API, UGC_WBI_INFO_API):
@@ -1586,7 +1632,7 @@ class BilibiliParser(BaseVideoParser):
                     api_name = f"{api_name} (HTTP {resp.status})"
                     risk_controlled = resp.status == 412
                     if risk_controlled:
-                        raise RuntimeError("请求失败")
+                        raise RuntimeError("B站限制了详情请求，请稍后重试")
                     if resp.content_type != "application/json":
                         raise RuntimeError(
                             "返回非JSON响应 "
@@ -1615,7 +1661,10 @@ class BilibiliParser(BaseVideoParser):
                     raise error from None
                 original_error = error
                 logger.warning(f"{error}，尝试使用WBI签名接口获取UGC视频信息")
-        data = j["data"]
+        return j["data"]
+
+    def _normalize_ugc_info(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """统一整理页面与接口返回的投稿资料及分 P。"""
         title = data.get("title") or ""
         desc = data.get("desc") or ""
         owner = data.get("owner") or {}
@@ -1660,6 +1709,7 @@ class BilibiliParser(BaseVideoParser):
                 else ""
             ),
             "is_upower_exclusive": bool(data.get("is_upower_exclusive")),
+            "pages": data.get("pages"),
         }
 
     async def get_pgc_info_by_ep(
@@ -1819,7 +1869,7 @@ class BilibiliParser(BaseVideoParser):
             headers=self._build_api_headers(cookie_header=cookie_header),
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
-            j = await self._check_json_response(resp)
+            j = await self._read_ugc_response(resp, "分 P 列表")
         await self._handle_api_response(j, "pagelist")
         return j["data"]
 
@@ -1881,7 +1931,7 @@ class BilibiliParser(BaseVideoParser):
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
-            j = await self._check_json_response(resp)
+            j = await self._read_ugc_response(resp, "播放地址")
         await self._handle_api_response(j, "playurl")
         return j["data"]
 
@@ -2271,44 +2321,20 @@ class BilibiliParser(BaseVideoParser):
         access_info["message"] = self._build_access_message(access_info)
         return access_info
 
-    async def _analyze_target_access(
-        self,
-        vtype: str,
-        referer: str,
-        session: aiohttp.ClientSession,
-        content_meta: Optional[Dict[str, Any]] = None,
-        cookie_header: str = "",
-        bvid: str = None,
-        aid: str = None,
-        cid: int = None,
-        ep_id: str = None,
+    async def _analyze_pgc_access(
+        self, ep_id: str, referer: str, session: aiohttp.ClientSession,
+        content_meta: Dict[str, Any], cookie_header: str,
     ) -> Dict[str, Any]:
-        """异步检测目标链接访问状态并返回分析结果。"""
+        """探测番剧的访问状态。"""
         try:
-            if vtype == "ugc":
-                data = await self.ugc_playurl(
-                    bvid=bvid,
-                    aid=aid,
-                    cid=cid,
-                    qn=120,
-                    fnval=4048,
-                    referer=referer,
-                    session=session,
-                    cookie_header=cookie_header,
-                )
-            else:
-                data = await self.pgc_playurl_v2(
-                    ep_id=ep_id,
-                    qn=120,
-                    fnval=4048,
-                    referer=referer,
-                    session=session,
-                    cookie_header=cookie_header,
-                )
+            data = await self.pgc_playurl_v2(
+                ep_id=ep_id, qn=120, fnval=FNVAL_DASH, referer=referer,
+                session=session, cookie_header=cookie_header,
+            )
             return self._analyze_play_access(
                 data=data, content_meta=content_meta, cookie_header=cookie_header
             )
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError, KeyError) as e:
             return self._analyze_play_access(
                 error=e, content_meta=content_meta, cookie_header=cookie_header
             )
@@ -2331,99 +2357,51 @@ class BilibiliParser(BaseVideoParser):
             "available_length_ms": access_info.get("available_length_ms"),
         }
 
-    async def _get_ugc_download_urls(
-        self,
-        bvid: str = None,
-        aid: str = None,
-        cid: int = None,
-        referer: str = None,
-        session: aiohttp.ClientSession = None,
-        cookie_header: str = "",
-    ) -> List[str]:
-        """获取 UGC 视频的下载候选地址（统一处理 bvid 和 aid）
+    @staticmethod
+    def _ugc_page_cid(pages: Any, p_index: int) -> Optional[int]:
+        """读取目标分 P 的有效 cid，忽略不完整或顺序不符的条目。"""
+        if not isinstance(pages, list) or not 1 <= p_index <= len(pages):
+            return None
+        page = pages[p_index - 1]
+        if not isinstance(page, dict) or page.get("page", p_index) != p_index:
+            return None
+        cid = page.get("cid")
+        return cid if type(cid) is int and cid > 0 else None
 
-        Args:
-            bvid: BV号（优先）
-            aid: AV号（备用）
-            cid: 分P的cid
-            referer: 引用页面URL
-            session: aiohttp会话
+    async def _get_ugc_playback(
+        self, ident: Dict[str, Any], pages: Any, p_index: int, referer: str,
+        session: aiohttp.ClientSession, cookie_header: str,
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        """复用详情中的分 P 和首次播放探测，返回访问分析所需数据与下载候选。"""
+        cid = self._ugc_page_cid(pages, p_index)
+        if cid is None:
+            pages = await self.get_pagelist(**ident, session=session, cookie_header=cookie_header)
+            cid = self._ugc_page_cid(pages, p_index)
+            if cid is None:
+                if isinstance(pages, list) and p_index > len(pages):
+                    raise RuntimeError(f"分P序号超出范围: {p_index}")
+                raise RuntimeError(f"无法获取第 {p_index} P 的 cid")
 
-        Returns:
-            按下载优先级排列的候选地址
-        """
-        FNVAL_MAX = FNVAL_DASH
-        if bvid:
-            probe = await self.ugc_playurl(
-                bvid=bvid,
-                cid=cid,
-                qn=120,
-                fnval=FNVAL_MAX,
-                referer=referer,
-                session=session,
-                cookie_header=cookie_header,
-            )
-        else:
-            probe = await self.ugc_playurl(
-                aid=aid,
-                cid=cid,
-                qn=120,
-                fnval=FNVAL_MAX,
-                referer=referer,
-                session=session,
-                cookie_header=cookie_header,
-            )
-        target_qn = (
-            self.best_qn_from_data(probe)
-            or self._unwrap_playurl_data(probe).get("quality")
-            or 80
-        )
-        if bvid:
-            merged_try = await self.ugc_playurl(
-                bvid=bvid,
-                cid=cid,
-                qn=target_qn,
-                fnval=FNVAL_MP4,
-                referer=referer,
-                session=session,
-                cookie_header=cookie_header,
-            )
-        else:
-            merged_try = await self.ugc_playurl(
-                aid=aid,
-                cid=cid,
-                qn=target_qn,
-                fnval=FNVAL_MP4,
-                referer=referer,
-                session=session,
-                cookie_header=cookie_header,
-            )
-        merged_payload = self._unwrap_playurl_data(merged_try)
-        merged_urls = self._merged_download_urls(merged_payload)
-        if merged_urls:
-            return merged_urls
-        if bvid:
-            dash_try = await self.ugc_playurl(
-                bvid=bvid,
-                cid=cid,
-                qn=target_qn,
-                fnval=FNVAL_MAX,
-                referer=referer,
-                session=session,
-                cookie_header=cookie_header,
-            )
-        else:
-            dash_try = await self.ugc_playurl(
-                aid=aid,
-                cid=cid,
-                qn=target_qn,
-                fnval=FNVAL_MAX,
-                referer=referer,
-                session=session,
-                cookie_header=cookie_header,
-            )
-        dash_payload = self._unwrap_playurl_data(dash_try)
-        return self._build_dash_download_urls(dash_payload.get("dash") or {})
+        request = dict(ident, cid=cid, referer=referer, session=session, cookie_header=cookie_header)
+        probe = await self.ugc_playurl(**request, qn=120, fnval=FNVAL_DASH)
+        payload = self._unwrap_playurl_data(probe)
+        target_qn = self.best_qn_from_data(probe) or payload.get("quality") or 80
+        try:
+            merged = await self.ugc_playurl(**request, qn=target_qn, fnval=FNVAL_MP4)
+        except _BilibiliRequestLimited:
+            # 首次探测可能已经返回可用的 DASH 流，无需再请求受限接口。
+            urls = self._build_dash_download_urls(payload.get("dash") or {})
+            if not urls:
+                raise
+            return probe, urls
+        urls = self._merged_download_urls(self._unwrap_playurl_data(merged))
+        if not urls:
+            if target_qn == 120 or payload.get("quality") == target_qn:
+                urls = self._build_dash_download_urls(payload.get("dash") or {})
+            if not urls and target_qn != 120:
+                dash = await self.ugc_playurl(**request, qn=target_qn, fnval=FNVAL_DASH)
+                urls = self._build_dash_download_urls(self._unwrap_playurl_data(dash).get("dash") or {})
+        return probe, urls
 
     async def parse_opus(
         self,
@@ -2900,63 +2878,31 @@ class BilibiliParser(BaseVideoParser):
             logger.debug(
                 f"[{self.name}] parse_bilibili_minimal: 处理UGC视频，分P={p_index}"
             )
-            bvid = ident.get("bvid")
-            aid = ident.get("aid")
-            if bvid:
-                logger.debug(f"[{self.name}] parse_bilibili_minimal: 使用BV号 {bvid}")
-                info = await self.get_ugc_info(
-                    bvid=bvid, session=session, cookie_header=cookie_header
-                )
-                pages = await self.get_pagelist(
-                    bvid=bvid, session=session, cookie_header=cookie_header
-                )
-            elif aid:
-                logger.debug(f"[{self.name}] parse_bilibili_minimal: 使用AV号 {aid}")
-                info = await self.get_ugc_info(
-                    aid=aid, session=session, cookie_header=cookie_header
-                )
-                pages = await self.get_pagelist(
-                    aid=aid, session=session, cookie_header=cookie_header
-                )
-            else:
-                raise RuntimeError(f"无法获取视频信息: {url}")
-            comment_oid_raw = info.get("aid")
-            if comment_oid_raw is None:
-                comment_oid_raw = aid
+            info = await self.get_ugc_info(**ident, session=session, cookie_header=cookie_header)
+            comment_oid_raw = info.get("aid") or ident.get("aid")
             try:
                 comment_oid = (
                     int(comment_oid_raw) if comment_oid_raw is not None else None
                 )
             except (TypeError, ValueError):
                 comment_oid = None
-            logger.debug(
-                f"[{self.name}] parse_bilibili_minimal: 视频信息获取成功，共{len(pages)}个分P"
-            )
-            if p_index > len(pages):
-                raise RuntimeError(f"分P序号超出范围: {p_index}")
-            cid = pages[p_index - 1]["cid"]
-            access_info = await self._analyze_target_access(
-                vtype="ugc",
-                referer=page_url,
-                session=session,
-                content_meta=info,
-                cookie_header=cookie_header,
-                bvid=bvid,
-                aid=aid,
-                cid=cid,
-            )
-            logger.debug(f"[{self.name}] parse_bilibili_minimal: 获取分P{cid}的直链")
-            download_urls = await self._get_ugc_download_urls(
-                bvid=bvid,
-                aid=aid,
-                cid=cid,
-                referer=page_url,
-                session=session,
-                cookie_header=cookie_header,
-            )
-            if not download_urls:
-                raise RuntimeError(f"无法获取视频直链: {url}")
-            logger.debug(f"[{self.name}] parse_bilibili_minimal: 直链获取成功")
+            try:
+                probe, download_urls = await self._get_ugc_playback(
+                    ident, info.get("pages"), p_index, page_url, session, cookie_header,
+                )
+            except _BilibiliRequestLimited as exc:
+                logger.warning(f"B站投稿保留已获取的资料：{exc}")
+                download_urls = []
+                enable_hot_comments = False
+                access_info = self._analyze_play_access(
+                    error=exc, content_meta=info, cookie_header=cookie_header
+                )
+            else:
+                access_info = self._analyze_play_access(
+                    data=probe, content_meta=info, cookie_header=cookie_header
+                )
+                if not download_urls:
+                    raise RuntimeError(f"无法获取视频直链: {url}")
         elif vtype == "pgc":
             logger.debug(f"[{self.name}] parse_bilibili_minimal: 处理PGC番剧")
             FNVAL_MAX = FNVAL_DASH
@@ -2981,8 +2927,7 @@ class BilibiliParser(BaseVideoParser):
                 )
             except (TypeError, ValueError):
                 comment_oid = None
-            access_info = await self._analyze_target_access(
-                vtype="pgc",
+            access_info = await self._analyze_pgc_access(
                 referer=page_url,
                 session=session,
                 content_meta=info,

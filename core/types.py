@@ -129,6 +129,7 @@ class LinkBuildMeta(TypedDict):
     image_nodes: Dict[int, Any]
     inline_images: List[Any]
     base_nodes: List[Any]
+    comment_nodes: List[Any]
     separate_gallery_ids: set[int]
 
 

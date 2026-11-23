@@ -34,7 +34,7 @@ from .core.constants import Config
 from .core.metadata_visibility import text_metadata_field_enabled
 from .core.parser.platform.steam import fetch_developer_profile
 from .core.message_adapter.body_links import collect_body_links
-from .core.message_adapter.rich_card import build_card_content
+from .core.message_adapter.rich_card import build_card_content, comment_node_blocks, text_card_blocks
 from .core.message_adapter.sender import MessageDeliveryError, MessageSender
 from .core.message_adapter.shared_images import SharedImageDelivery
 from .core.message_adapter.node_builder import (
@@ -71,7 +71,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.17.0",
+    "1.17.1",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -552,6 +552,14 @@ class VideoParserPlugin(Star):
             registered = registered or bool(token_url)
         return references, registered
 
+    async def _render_text_groups(self, groups, cfg, comments) -> list[str]:
+        """合图和分区共用节点顺序，保留真实评论字段与普通文本回退。"""
+        if comments and any(id(node) in comments for group in groups for node in group):
+            blocks = text_card_blocks(groups, comments)
+            return await self._render_text_to_images("", cfg, blocks=tuple(blocks)) if blocks else []
+        text = collect_text_metadata(groups)
+        return await self._render_text_to_images(text, cfg) if text else []
+
     async def _render_nodes_in_place(
         self,
         link_nodes: list,
@@ -560,6 +568,7 @@ class VideoParserPlugin(Star):
         section_starts=(),
         link_meta=None,
         prefer_local_images=False,
+        comments=None,
     ) -> bool:
         """将节点列表中的连续文本节点在原位置渲染为图片。
 
@@ -585,12 +594,8 @@ class VideoParserPlugin(Star):
         rendered_paths: list[str] = []
         try:
             for run_start, run_end in runs:
-                text = "\n".join(
-                    str(node.text or "").strip()
-                    for node in link_nodes[run_start:run_end]
-                    if str(node.text or "").strip()
-                )
-                paths = await self._render_text_to_images(text, cfg) if text else []
+                nodes = link_nodes[run_start:run_end]
+                paths = await self._render_text_groups([nodes], cfg, comments)
                 rendered_paths.extend(paths)
                 rendered_runs.append(paths)
         except asyncio.CancelledError:
@@ -726,9 +731,11 @@ class VideoParserPlugin(Star):
 
         separate = getattr(cfg.message.text_metadata, "render_separate_sections", False)
         relay_registered = False
+        comments = {}
         for link_meta in build_result.link_metadata:
             idx = link_meta.get("metadata_index", 0)
             metadata = metadata_list[idx] if metadata_list else {}
+            comments.update(comment_node_blocks(link_meta, metadata))
             share = getattr(cfg.message.text_metadata, "render_layout", "文字卡") == "分享卡"
             if (metadata and not metadata.get("error") and metadata.get("_enable_text_metadata", True)
                     and (share or link_meta.get("inline_images"))):
@@ -751,6 +758,7 @@ class VideoParserPlugin(Star):
                 link_meta.get("section_starts", []) if separate else (),
                 link_meta,
                 prefer_local_images,
+                comments,
             ):
                 relay_registered = True
         if separate:
@@ -763,12 +771,8 @@ class VideoParserPlugin(Star):
             meta for meta in build_result.link_metadata if not meta.get("preserve_order")
         ]
         combined_nodes = [meta["link_nodes"] for meta in combined_metadata]
-        text = collect_text_metadata(combined_nodes, translation_nodes)
-        if not text:
-            return [], relay_registered
-
         try:
-            rendered_paths = await self._render_text_to_images(text, cfg)
+            rendered_paths = await self._render_text_groups([*combined_nodes, *(translation_nodes or [])], cfg, comments)
         except (
             ImportError,
             OSError,
@@ -779,6 +783,8 @@ class VideoParserPlugin(Star):
             self.logger.warning(f"文本元数据图片渲染失败，保留原文本节点: {exc}")
             return [], relay_registered
 
+        if not rendered_paths:
+            return [], relay_registered
         build_result.temp_files.extend(rendered_paths)
         strip_text_metadata_nodes(combined_nodes, translation_nodes)
         for metadata in combined_metadata:

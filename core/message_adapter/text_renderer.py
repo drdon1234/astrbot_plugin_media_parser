@@ -55,6 +55,14 @@ class PictureBlock:
 
 
 @dataclass(frozen=True)
+class CommentBlock:
+    """保留每条评论的字段边界，供合卡与独立评论卡共用。"""
+
+    title: str
+    items: tuple[dict, ...]
+
+
+@dataclass(frozen=True)
 class ShareHeader:
     """分享卡的作者、原始时间与平台署名，空字段自然收起。"""
 
@@ -88,6 +96,8 @@ class _TextLine:
     shares: tuple[_LanguageShare, ...] = ()
     column_width: int = 0
     tree_folder: bool = False
+    trailing: str = ""
+    baseline_offset: int = 0
 
 
 async def render_text_metadata_images(
@@ -104,7 +114,7 @@ async def render_text_metadata_images(
     paginate: bool = False,
     font_proxy_url: str = "",
     timeout_seconds: int = 60,
-    blocks: tuple[str | PictureBlock | DownloadList, ...] = (),
+    blocks: tuple[str | PictureBlock | DownloadList | CommentBlock, ...] = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
     original_keyword: str = "",
@@ -143,7 +153,7 @@ async def render_text_metadata_images(
         raise ValueError("没有可渲染的文本元数据")
 
     await ensure_render_fonts(font_family, font_proxy_url)
-    visible_text = str(text) + str(title) + "".join(part for part in blocks if isinstance(part, str))
+    visible_text = str(text) + str(title) + _block_text(blocks)
     if share:
         visible_text += share.author + share.platform + original_keyword + link_keyword
     if _has_emoji(visible_text) and not await asyncio.to_thread(_emoji_font_is_available):
@@ -377,7 +387,8 @@ def _draw_avatar(canvas, x: int, y: int, share: ShareHeader, font, color: str, t
         avatar = Image.new("RGBA", (size, size), color)
         draw = ImageDraw.Draw(avatar)
         initial = _text_clusters(share.author)[0]
-        _draw_text(draw, (size - _text_width(draw, initial, font)) / 2, 14, initial, font, text_color)
+        _, _, width, height = _text_bbox(draw, initial, font)
+        _draw_text(draw, round((size - width) / 2), round((size - height) / 2), initial, font, text_color)
 
     # 按高分辨率圆形的像素覆盖率计算透明度，边缘直接与卡片背景混合。
     mask = Image.new("L", (size * 4, size * 4))
@@ -424,7 +435,7 @@ def _render_text_metadata_image_sync(
     max_height: int = 0,
     line_spacing: float = DEFAULT_LINE_SPACING,
     paragraph_spacing: float = DEFAULT_PARAGRAPH_SPACING,
-    blocks: tuple[str | PictureBlock | DownloadList, ...] = (),
+    blocks: tuple[str | PictureBlock | DownloadList | CommentBlock, ...] = (),
     share: ShareHeader | None = None,
     embedded: list[str] | None = None,
     original_keyword: str = "",
@@ -442,18 +453,27 @@ def _render_text_metadata_image_sync(
     palette = theme.palette
     meta_size = max(MIN_RENDER_FONT_SIZE, round(font_size * 0.83))
     fonts = {
-        "body": _load_font(ImageFont, font_size, font_family=font_family),
+        "body": _load_font(ImageFont, font_size, font_family=font_family, axis_weight=550),
         "title": _load_font(ImageFont, round(font_size * 1.5), True, font_family),
         "section": _load_font(ImageFont, font_size, True, font_family),
         "author": _load_font(ImageFont, font_size, True, font_family),
         "meta": _load_font(ImageFont, meta_size, font_family=font_family),
         "label": _load_font(ImageFont, meta_size, True, font_family),
+        "comment": _load_font(ImageFont, meta_size, font_family=font_family),
+        "byline": _load_font(ImageFont, round(font_size * .8), True, font_family),
+        "detail": _load_font(ImageFont, round(font_size * .71), font_family=font_family),
     }
-    if _has_emoji(text + title + "".join(b for b in blocks if isinstance(b, str)) + (share.author + original_keyword + link_keyword if share else "")):
+    emoji_needed = _has_emoji(text + title + _block_text(blocks) + (share.author + original_keyword + link_keyword if share else ""))
+    if emoji_needed:
         fonts = {
             key: _FallbackFont(font, _load_emoji_font(ImageFont, font.size))
             for key, font in fonts.items()
         }
+    primary = fonts["body"].primary if emoji_needed else fonts["body"]
+    if str(getattr(primary, "path", "")).endswith(("NotoSansSC-VF.ttf", "NotoSerifSC-VF.ttf")):
+        body = fonts["body"] if emoji_needed else _FallbackFont(primary, None)
+        body.latin = _load_font(ImageFont, font_size, font_family=font_family, axis_weight=450)
+        fonts["body"] = body
     with Image.new("RGB", (width, 1), palette["background"]) as probe:
         probe_draw = ImageDraw.Draw(probe)
         margin = max(24, width // 30)
@@ -488,15 +508,26 @@ def _render_text_metadata_image_sync(
         lines = []
         for block in blocks or ((text,) if text else ()):
             if isinstance(block, PictureBlock):
-                if block.kind in CONTENT_PICTURE_KINDS and lines and lines[-1].text:
+                if block.kind in COVER_KINDS and lines and lines[-1].kind == "title":
+                    ink = _text_bbox(probe_draw, lines[-1].text, fonts["title"])
+                    lines[-1].height = ink[3] - ink[1] + round(font_size * 5 / 6)
+                elif block.kind in CONTENT_PICTURE_KINDS and lines and lines[-1].text:
                     # 文字行自身已有行距，再补足图前留白；独立空行可在分页边缘自然移除。
                     lines.append(_TextLine("", "blank", round(font_size * 2 / 3), keep_with_next=True))
                 lines.extend(_picture_lines(block, content_width, capacity - PICTURE_GAP if max_height else 2400))
             elif isinstance(block, DownloadList):
                 lines.extend(_download_lines(probe_draw, block, fonts, content_width))
+            elif isinstance(block, CommentBlock):
+                if lines:
+                    lines.append(_TextLine("", "blank", round(font_size * .92)))
+                lines.extend(_comment_lines(probe_draw, block, fonts, content_width, line_spacing))
             elif block.strip():
                 if lines and lines[-1].kind in CONTENT_PICTURE_KINDS:
-                    lines.append(_TextLine("", "blank", font_size, keep_with_next=True))
+                    gap = font_size - PICTURE_GAP if lines[-1].kind in COVER_KINDS else font_size
+                    lines.append(_TextLine("", "blank", gap, keep_with_next=True))
+                if block.strip() == TEXT_SECTION_SEPARATOR:
+                    lines.append(_TextLine("", "separator", meta_size, keep_with_next=True))
+                    continue
                 lines.extend(_layout_text(
                     probe_draw, block, fonts, content_width, line_spacing, paragraph_spacing,
                 ))
@@ -507,9 +538,15 @@ def _render_text_metadata_image_sync(
             hint_parts.append(f"发送「{link_keyword}」获取正文链接")
         if share and hint_parts and lines:
             hint = "引用本消息，" + "，".join(hint_parts) + "。"
-            hint_rows = _wrap_text(probe_draw, hint, page_font, content_width)
-            hint_line_height = _line_height(probe_draw, page_font, 1.25)
-            hint_height = meta_size + len(hint_rows) * hint_line_height
+            hint_font = fonts["detail"]
+            hint_rows = _wrap_text(probe_draw, hint, hint_font, content_width)
+            row_height = _line_height(probe_draw, hint_font, 1.4)
+            hint_lines = [
+                _TextLine(row, "hint", max(row_height, _text_bbox(probe_draw, row, hint_font)[3] + 4),
+                          keep_with_next=i + 1 < len(hint_rows))
+                for i, row in enumerate(hint_rows)
+            ]
+            hint_height = meta_size + sum(line.height for line in hint_lines)
             while lines[-1].kind in ("blank", "separator"):
                 lines.pop()
             # 让提示与末段内容同页；末行若是满页长图，按剩余高度等比缩放。
@@ -518,8 +555,7 @@ def _render_text_metadata_image_sync(
                 last.height = min(last.height, capacity - hint_height)
             last.keep_with_next = True
             lines.append(_TextLine("", "separator", meta_size, keep_with_next=True))
-            lines.extend(_TextLine(row, "meta", hint_line_height, keep_with_next=i < len(hint_rows) - 1)
-                         for i, row in enumerate(hint_rows))
+            lines.extend(hint_lines)
     if blocks and not max_height:
         # 图文长图超过单页硬限制时分页，避免因一张超长图退回逐段发送原图。
         limit = min(MAX_RENDER_HEIGHT, MAX_RENDER_PAGE_PIXELS // width)
@@ -599,6 +635,7 @@ def _draw_page(
     palette = theme.palette
     body_x = margin + padding
     header_y = margin + padding
+    platform_y = header_y
     author_color = palette["accent"]
     if share:
         dark = _relative_luminance(palette["body_text"]) > _relative_luminance(palette["card_fill"])
@@ -609,6 +646,13 @@ def _draw_page(
         if share.author:
             _draw_avatar(canvas, body_x, header_y, share, fonts["section"], author_color, palette["card_fill"])
         top = header_y
+        if profile and header:
+            name, role, _ = profile[0]
+            name_top = _text_bbox(draw, name, fonts[role], baseline=True)[1]
+            platform_top = _text_bbox(draw, header[0], fonts["meta"], baseline=True)[1]
+            baseline = header_y - min(name_top, platform_top)
+            top = baseline + name_top
+            platform_y = baseline + platform_top
         for value, role, row_height in profile:
             _draw_text(draw, body_x + (76 if share.author else 0), top, value, fonts[role],
                        author_color if role == "section" else palette["muted_text"])
@@ -621,7 +665,7 @@ def _draw_page(
     for index, line in enumerate(header):
         _draw_text(
             draw, (width - body_x - _text_width(draw, line, fonts["meta"]) if share else body_x + 18),
-            header_y + index * header_height,
+            platform_y + index * header_height,
             line, fonts["meta"], palette["muted_text"],
         )
     body_y = body_top
@@ -632,6 +676,76 @@ def _draw_page(
                             line.kind, line.picture_widths, line.picture_crops)
             if embedded is not None and line.kind != "video_preview":
                 embedded.extend(line.pictures)
+        elif line.kind in ("comments_title", "byline", "comment", "signature"):
+            detail = fonts["detail"]
+            inset = line.column_width
+            muted = palette["muted_text"]
+            if line.kind == "comments_title":
+                title_box = _text_bbox(draw, line.text, fonts["byline"])
+                count_box = _text_bbox(draw, line.label, detail)
+                _draw_text(draw, body_x, body_y, line.text, fonts["byline"], muted)
+                x = body_x + title_box[2] + detail.size // 2
+                top = body_y + round((title_box[3] - count_box[3]) / 2)
+                draw.rounded_rectangle((x, top - 2, x + count_box[2] + 12, top + count_box[3] + 1),
+                                       radius=count_box[3] // 2 + 2, fill=palette["rule"])
+                _draw_text(draw, x + 6, top, line.label, detail, muted)
+            elif line.kind == "byline":
+                baseline = body_y + line.baseline_offset
+                _draw_text(draw, body_x + inset, baseline, line.text, fonts["byline"], muted, baseline=True)
+                if line.label:
+                    right = body_x + inset - detail.size // 2
+                    _draw_text(draw, right - _text_width(draw, line.label, detail), baseline,
+                               line.label, detail, muted, baseline=True)
+                if line.trailing:
+                    _, top, width_count, bottom = _text_bbox(draw, line.trailing, detail, baseline=True)
+                    x = width - body_x - width_count
+                    icon_y = baseline + round((top + bottom - detail.size) / 2)
+                    _card_icon(canvas, "like", muted, detail.size, x - detail.size - 6, icon_y)
+                    _draw_text(draw, x, baseline, line.trailing, detail, muted, baseline=True)
+            elif line.kind == "comment":
+                _draw_text(draw, body_x + inset, body_y, line.text, fonts["comment"], palette["comment_text"])
+            else:
+                _draw_text(draw, body_x + inset, body_y, line.text, detail, muted)
+        elif line.kind == "hint":
+            font = fonts["detail"]
+            bounds = _text_bbox(draw, line.text, font, baseline=True)
+            baseline = body_y + round((line.height - bounds[3] - bounds[1]) / 2)
+            x = body_x
+            for part in re.split(r"(「[^」]+」)", line.text):
+                if not part:
+                    continue
+                advance = _text_width(draw, part, font)
+                if part.startswith("「") and part.endswith("」") and len(part) > 2:
+                    keyword = part[1:-1]
+                    box = _text_bbox(draw, keyword, font, baseline=True)
+                    left = x + round((advance - box[2]) / 2)
+                    pad = max(2, font.size // 4)
+                    draw.rounded_rectangle((left - pad, baseline + box[1] - 1,
+                                            left + box[2] + pad - 1, baseline + box[3]),
+                                           radius=3, fill=palette["rule"])
+                    _draw_text(draw, left, baseline, keyword, font, palette["accent"], baseline=True)
+                else:
+                    _draw_text(draw, x, baseline, part, font, palette["muted_text"], baseline=True)
+                x += advance
+        elif line.kind == "video_info":
+            detail = fonts["detail"]
+            x = body_x
+            badge_height = detail.size + 10
+            bounds = [_text_bbox(draw, value, detail, baseline=True)
+                      for value in (line.label, line.trailing, line.text) if value]
+            baseline = body_y + round((badge_height - min(b[1] for b in bounds) - max(b[3] for b in bounds)) / 2)
+            if line.label:
+                badge_width = _text_width(draw, line.label, detail) + detail.size * 3
+                draw.rounded_rectangle((x, body_y, x + badge_width, body_y + badge_height - 1),
+                                       radius=7, fill=palette["rule"])
+                _card_icon(canvas, "video", palette["accent"], detail.size + 2, x + 7, body_y + 4)
+                _draw_text(draw, x + detail.size + 17, baseline, line.label, detail, palette["accent"], baseline=True)
+                x += badge_width + detail.size
+            if line.text:
+                if line.trailing:
+                    _card_icon(canvas, "link", palette["accent"], detail.size, x, body_y + 5)
+                    _draw_text(draw, x + detail.size + 6, baseline, line.trailing, detail, palette["muted_text"], baseline=True)
+                _draw_text(draw, body_x + line.column_width, baseline, line.text, detail, palette["accent"], baseline=True)
         elif line.kind == "download_label":
             _draw_text(draw, body_x, body_y, line.text, fonts["meta"], palette["muted_text"])
             if line.label:
@@ -696,7 +810,7 @@ def _draw_page(
         elif line.kind == "separator":
             rule_y = body_y + line.height // 2
             draw.line(
-                (body_x, rule_y, width - body_x, rule_y),
+                (body_x, rule_y, width - body_x - 1, rule_y),
                 fill=palette["rule"], width=1,
             )
         elif line.kind != "blank":
@@ -709,6 +823,12 @@ def _draw_page(
             elif line.kind in ("section", "author"):
                 color = palette["accent"]
             text_x = body_x
+            if line.kind == "title" and line.text.startswith(tuple("《〈「『【（“‘")):
+                # 全角开标点的左侧留白接近半个字宽，标题按首个可见笔画对齐封面。
+                first, face = _font_runs(line.text[0], font)[0]
+                ink = face.getmask(first).getbbox()
+                if ink:
+                    text_x -= ink[0]
             if line.label:
                 _draw_text(
                     draw, text_x, body_y, line.label,
@@ -719,24 +839,121 @@ def _draw_page(
         body_y += line.height
 
 
-def _draw_text(draw: Any, x: float, y: float, text: str, font: object, color: str) -> None:
-    """按字形实际边界对齐，避免字体上边距或负左边距导致溢出。"""
-    for value, run_font in _font_runs(text, font):
-        bbox = draw.textbbox((0, 0), value, font=run_font, anchor="lt")
-        draw.text((x - bbox[0], y), value, font=run_font, fill=color, anchor="lt")
+def _card_icon(canvas, kind, color, size, x, y):
+    """以同一线宽绘制点赞、视频和来源图标。"""
+    from PIL import Image, ImageDraw
+
+    icon = Image.new("RGBA", (48, 48))
+    draw = ImageDraw.Draw(icon)
+    if kind == "like":
+        draw.rounded_rectangle((5, 21, 13, 40), radius=2, outline=color, width=3)
+        draw.line([(15, 23), (22, 15), (24, 6), (29, 6), (31, 10), (28, 18),
+                   (39, 18), (42, 21), (38, 37), (34, 40), (20, 40), (15, 37)], fill=color, width=3)
+    elif kind == "video":
+        draw.rounded_rectangle((3, 8, 45, 40), radius=7, outline=color, width=3)
+        draw.polygon([(20, 16), (32, 24), (20, 32)], fill=color)
+    else:
+        draw.line([(16, 24), (10, 30), (10, 36), (14, 40), (20, 40), (29, 31)], fill=color, width=4)
+        draw.line([(20, 19), (29, 9), (35, 9), (39, 13), (39, 19), (33, 25)], fill=color, width=4)
+        draw.line((18, 30, 30, 18), fill=color, width=4)
+    icon = icon.resize((size, size), Image.Resampling.LANCZOS)
+    canvas.paste(icon, (round(x), round(y)), icon)
+
+
+def _block_text(blocks):
+    """收集画稿中可能需要表情字体的文字。"""
+    parts = []
+    for block in blocks:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, CommentBlock):
+            parts.extend(str(value) for item in block.items for value in item.values())
+    return "".join(parts)
+
+
+def _comment_lines(draw, block, fonts, width, spacing):
+    """按作者、内容与署名组织每条热评，测量时为序号和点赞预留位置。"""
+    byline, detail, comment = fonts["byline"], fonts["detail"], fonts["comment"]
+    labels = [f"{index}." for index in range(1, len(block.items) + 1)]
+    widest = max((_text_width(draw, label, detail) for label in labels), default=0)
+    inset = max(round(comment.size * 1.6), widest + detail.size // 2)
+    rows = [_TextLine(block.title, "comments_title", byline.size * 2, str(len(block.items)), True)]
+    for label, item in zip(labels, block.items):
+        if len(rows) > 1:
+            rows.append(_TextLine("", "blank", round(comment.size * 1.15)))
+        likes = item.get("likes")
+        count = f"{likes:,}" if isinstance(likes, int) else str(likes or "-")
+        # 异常长的计数单独换行，避免侵占作者栏。
+        like_width = detail.size + 12 + _text_width(draw, count, detail)
+        inline = like_width <= width // 3
+        author = str(item.get("username") or "未知用户")
+        available = width - inset - (like_width if inline else 0)
+        for n, part in enumerate(_wrap_text(draw, author, byline, available)):
+            ordinal = label if not n else ""
+            trailing = count if inline and not n else ""
+            bounds = [_text_bbox(draw, part, byline, baseline=True)]
+            bounds.extend(_text_bbox(draw, value, detail, baseline=True) for value in (ordinal, trailing) if value)
+            top = min(b[1] for b in bounds)
+            height = max(byline.size + 6, round(comment.size * 1.5), max(b[3] for b in bounds) - top + 2)
+            rows.append(_TextLine(part, "byline", height, ordinal, keep_with_next=True,
+                                  column_width=inset, trailing=trailing, baseline_offset=-top))
+        if not inline:
+            rows.extend(_TextLine(s, "signature", detail.size + 5, column_width=inset)
+                        for s in _wrap_text(draw, "点赞：" + count, detail, width - inset))
+        message = str(item.get("message") or "").strip() or "（无文本内容）"
+        for paragraph in message.splitlines():
+            for part in _wrap_text(draw, paragraph, comment, width - inset):
+                height = max(_text_bbox(draw, part, comment)[3] + 2, round(comment.size * spacing))
+                rows.append(_TextLine(part, "comment", height, column_width=inset))
+        signature = "    ·    ".join(filter(None, (str(item.get("time") or ""),
+                                      f"UID {item['uid']}" if item.get("uid") else "")))
+        if signature:
+            rows[-1].height += 4
+            rows[-1].keep_with_next = True
+            rows.extend(_TextLine(s, "signature", detail.size + 5, column_width=inset)
+                        for s in _wrap_text(draw, signature, detail, width - inset))
+    return rows
+
+
+def _video_info_lines(draw, size, url, font, width):
+    """测量视频大小标签和来源，空间不足时把来源移到下一行。"""
+    height = font.size + 16
+    prefix = "原始链接："
+    offset = font.size + 6 + _text_width(draw, prefix, font)
+    badge = _text_width(draw, size, font) + font.size * 4 if size else 0
+    rows = []
+    if size and (not url or badge + offset + _text_width(draw, url, font) > width):
+        for part in _wrap_text(draw, size, font, width - font.size * 3):
+            rows.append(_TextLine("", "video_info", height, part))
+        size, badge = "", 0
+    if url:
+        for i, part in enumerate(_wrap_text(draw, url, font, width - offset - badge)):
+            rows.append(_TextLine(part, "video_info", height, size if not i else "",
+                                  column_width=offset + badge, trailing=prefix if not i else ""))
+    return rows
+
+
+def _draw_text(draw: Any, x: float, y: float, text: str, font: object, color: str, *, baseline: bool = False) -> None:
+    """按可见字形顶边或指定基线绘制混排文字。"""
+    runs = _font_runs(text, font)
+    boxes = [draw.textbbox((0, 0), value, font=run_font, anchor="ls") for value, run_font in runs]
+    origin = y if baseline else y - min((box[1] for box in boxes), default=0)
+    for (value, run_font), bbox in zip(runs, boxes):
+        draw.text((x - bbox[0], origin), value, font=run_font, fill=color, anchor="ls")
         x += bbox[2] - bbox[0]
 
 
 class _FallbackFont:
     """保存正文和表情字体，让测量与绘制共用分段规则。"""
 
-    def __init__(self, primary: object, emoji: object) -> None:
+    def __init__(self, primary: object, emoji: object | None) -> None:
         self.primary = primary
         self.size = primary.size
         self.emoji = emoji
+        self.latin = None
         self.coverage: dict[str, bool] = {}
-        missing = emoji.getmask("\U0010ffff")
-        self.missing = (missing.size, bytes(missing))
+        missing = emoji.getmask("\U0010ffff") if emoji else None
+        self.missing = (missing.size, bytes(missing)) if missing is not None else None
 
     def _supports_emoji(self, text: str) -> bool:
         """检查表情字体字形，避免原本可显示的符号被替换成缺字符。"""
@@ -780,10 +997,9 @@ def _font_runs(text: str, font: object) -> List[tuple[str, object]]:
         return [(text, font)]
     runs: List[tuple[str, object]] = []
     for cluster in _text_clusters(text):
-        selected = (
-            font.emoji if _has_emoji(cluster) and "\ufe0e" not in cluster
-            and font._supports_emoji(cluster) else font.primary
-        )
+        selected = font.latin if font.latin and cluster.isascii() else font.primary
+        if font.emoji and _has_emoji(cluster) and "\ufe0e" not in cluster and font._supports_emoji(cluster):
+            selected = font.emoji
         if runs and runs[-1][1] is selected:
             runs[-1] = (runs[-1][0] + cluster, selected)
         else:
@@ -791,12 +1007,14 @@ def _font_runs(text: str, font: object) -> List[tuple[str, object]]:
     return runs
 
 
-def _text_bbox(draw: Any, text: str, font: object) -> tuple[int, int, int, int]:
+def _text_bbox(draw: Any, text: str, font: object, *, baseline: bool = False) -> tuple[int, int, int, int]:
     """测量与实际绘制一致的混排宽度和可见高度。"""
-    boxes = [draw.textbbox((0, 0), value, font=run_font, anchor="lt")
+    boxes = [draw.textbbox((0, 0), value, font=run_font, anchor="ls")
              for value, run_font in _font_runs(text, font)]
-    return (0, 0, sum(box[2] - box[0] for box in boxes),
-            max((box[3] - box[1] for box in boxes), default=0))
+    top = min((box[1] for box in boxes), default=0)
+    bottom = max((box[3] for box in boxes), default=0)
+    return (0, top if baseline else 0, sum(box[2] - box[0] for box in boxes),
+            bottom if baseline else bottom - top)
 
 
 def _clean_inline_markdown(text: str) -> str:
@@ -996,6 +1214,13 @@ def _layout_text(
                         guides = guides.replace("├", "│").replace("└", " ")
                     continue
         label, content = _split_label(value) if not fence else ("", "")
+        if label.rstrip("：:") == "视频大小" and "detail" in fonts:
+            size, _, url = content.partition("  ·  原始链接：")
+            lines.extend(_video_info_lines(draw, size.strip(), url.strip(), fonts["detail"], max_width))
+            continue
+        if label.rstrip("：:") == "原始链接" and "detail" in fonts:
+            lines.extend(_video_info_lines(draw, "", content.strip(), fonts["detail"], max_width))
+            continue
         kind = "body"
         heading = re.match(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", value) if not fence else None
         if heading:
@@ -1136,6 +1361,7 @@ def _load_font(
     size: int,
     bold: bool = False,
     font_family: str = DEFAULT_RENDER_FONT_FAMILY,
+    *, axis_weight: int | None = None,
 ) -> object:
     """按所选字体族加载对应字重，优先使用管理员指定的文件。"""
     configured = os.environ.get("ASTRBOT_MEDIA_PARSER_FONT", "").strip()
@@ -1167,7 +1393,7 @@ def _load_font(
             index = 2 if candidate != configured and candidate.endswith(".ttc") else 0
             font = image_font.truetype(candidate, size, index=index)
             if candidate.endswith(("NotoSansSC-VF.ttf", "NotoSerifSC-VF.ttf")):
-                font.set_variation_by_axes([700 if bold else 400])
+                font.set_variation_by_axes([axis_weight or (700 if bold else 400)])
             return font
         except (OSError, ValueError):
             continue

@@ -105,16 +105,14 @@ BV / AV 号定位视频主体，分 P 对应的 `cid` 定位具体播放单元�
 ```text
 BV / AV
   ↓
-x/web-interface/view
+匿名读取公开视频页；使用账号 Cookie 或页面缺少匹配资料时读取详情接口
   ↓
-x/player/pagelist
-  ↓
-按 p 参数选择 cid
+从详情的 pages 选择目标 cid，条目缺失或无效时请求 x/player/pagelist
   ↓
 x/player/wbi/playurl（WBI 签名）
 ```
 
-`view` 提供标题、作者、简介与发布时间，`pagelist` 提供分 P 列表与 `cid`，`playurl` 提供播放结构。DASH 请求使用 `fnval=4048`，MP4 兼容回退使用 `fnval=1`；不使用旧版 `/x/player/playurl`、HTML5 平台参数或 `fnval=0` 的 FLV 回退。播放结构可能是普通直链，也可能是 DASH 音视频分离流；解析阶段只识别并保留，合并由下载层完成。
+匿名投稿优先读取视频页初始化数据中的 `videoData`，校验作品编号后提取标题、作者、封面、发布时间和分 P。页面缺少匹配数据或读取超时时使用详情 API；页面明确拒绝访问时直接报告。播放接口的首次 DASH 响应同时用于判断访问状态和选择画质，优先取 MP4 合流候选。若分 P、签名密钥或取流请求被限流，且没有可用播放地址，保留作品资料和访问提示。
 
 `view` 仅在 HTTP 412 或 JSON 错误码 `-412` 时，复用导航接口密钥与 WBI 签名，回退一次到 `x/web-interface/wbi/view`，并保持原 BV / AV 参数与 Cookie。其他错误直接上报；回退失败同时保留首次风控与回退错误，不继续重试。该回退用于恢复部分环境下的视频信息请求，不保证解除所有风控限制。
 
@@ -155,7 +153,7 @@ opus_id
 
 ### 视频封面
 
-封面统一写入 `video_cover_urls`：UGC 取 `x/web-interface/view` 的 `pic`；PGC 优先取目标 episode 的 `cover`，缺失时回退 season 的 `cover`，并统一规范为 HTTPS 候选组。动态、opus 与转发内容重组视频元数据时同步透传该字段，否则“视频仅发送封面”模式会退回为截取首帧。
+封面统一写入 `video_cover_urls`：UGC 取投稿详情的 `pic`；PGC 优先取目标 episode 的 `cover`，缺失时回退 season 的 `cover`，并统一规范为 HTTPS 候选组。动态、opus 与转发内容重组视频元数据时同步透传该字段，否则“视频仅发送封面”模式会退回为截取首帧。
 
 ### Cookie
 

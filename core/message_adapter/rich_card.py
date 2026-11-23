@@ -12,8 +12,8 @@ from ..config_manager import TextMetadataConfig
 from ..metadata_visibility import text_metadata_field_enabled
 from ..types import LinkBuildMeta, MediaMetadata
 from .download_list import DownloadList, download_blocks
-from .node_builder import build_text_node
-from .text_renderer import PictureBlock, ShareHeader
+from .node_builder import TEXT_SECTION_SEPARATOR, build_text_node
+from .text_renderer import CommentBlock, PictureBlock, ShareHeader
 
 
 @lru_cache(maxsize=1)
@@ -28,9 +28,43 @@ def _platform_labels() -> dict[str, str]:
 class CardContent:
     """记录画稿与对应消息节点，仅在整张图绘制成功后替换节点。"""
 
-    blocks: list[str | PictureBlock | DownloadList]
+    blocks: list[str | PictureBlock | DownloadList | CommentBlock]
     header: ShareHeader | None
     consumed: set[int]
+
+
+def comment_node_blocks(link: LinkBuildMeta, metadata: MediaMetadata) -> dict[int, CommentBlock | None]:
+    """把同一评论区的消息分片还原为一个画稿块。"""
+    nodes = link.get("comment_nodes", [])
+    if not nodes:
+        return {}
+    items = tuple(item for item in metadata.get("hot_comments") or () if isinstance(item, dict))
+    if not items:
+        return {}
+    title = "分集弹幕" if metadata.get("hot_comments_label") == "分集弹幕" else "热评"
+    return {id(node): CommentBlock(title, items) if i == 0 else None for i, node in enumerate(nodes)}
+
+
+def text_card_blocks(groups: list, comments: dict[int, CommentBlock | None]) -> list[str | CommentBlock]:
+    """按链接及翻译的发送顺序保留正文、评论和组间分隔。"""
+    blocks = []
+    for nodes in groups:
+        group = []
+        for node in nodes:
+            if id(node) in comments:
+                block = comments[id(node)]
+                if block:
+                    group.append(block)
+            elif isinstance(node, Plain) and node.text.strip():
+                if group and isinstance(group[-1], str):
+                    group[-1] += "\n" + node.text.strip()
+                else:
+                    group.append(node.text.strip())
+        if group:
+            if blocks:
+                blocks.append(TEXT_SECTION_SEPARATOR)
+            blocks.extend(group)
+    return blocks
 
 
 async def build_card_content(
@@ -43,7 +77,7 @@ async def build_card_content(
 ) -> CardContent:
     """从已启用的输出字段和本地媒体构造单条链接的图片内容。"""
     share = settings.render_layout == "分享卡"
-    blocks: list[str | PictureBlock | DownloadList] = []
+    blocks: list[str | PictureBlock | DownloadList | CommentBlock] = []
     header = None
     if share:
         author = (
@@ -112,6 +146,7 @@ async def build_card_content(
     base = {id(node) for node in link["base_nodes"]}
     separate = settings.render_separate_sections
     sections = {id(node) for node in link["section_starts"]}
+    comments = comment_node_blocks(link, metadata)
     for node in link["link_nodes"]:
         key = id(node)
         if (
@@ -121,7 +156,10 @@ async def build_card_content(
             and node is not link["metadata_text_node"]
         ):
             break
-        if key in inline:
+        if key in comments:
+            if comments[key]:
+                blocks.append(comments[key])
+        elif key in inline:
             if key not in pictures:
                 raise ValueError("正文配图缺少可绘制的本地文件")
             blocks.append(PictureBlock((pictures[key],)))

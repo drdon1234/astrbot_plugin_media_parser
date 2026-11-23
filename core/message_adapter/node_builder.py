@@ -675,7 +675,7 @@ def _build_node_parts_for_link(
     audio_send_mode: str = "语音",
     interleave_images: bool = False,
 ) -> tuple[
-    List[Union[Plain, Image, Video, Record, File]], Optional[Plain], List[Image], List[Plain], Dict[int, Image], List[Plain]
+    List[Union[Plain, Image, Video, Record, File]], Optional[Plain], List[Image], List[Plain], Dict[int, Image], List[Plain], List[Plain]
 ]:
     nodes: List[Union[Plain, Image, Video, Record, File]] = []
     effective_text_metadata = _resolve_output_flag(
@@ -731,7 +731,7 @@ def _build_node_parts_for_link(
     section_starts = [
         section[0] for section in (text_nodes, hot_comments_nodes) if section
     ]
-    return nodes, metadata_text_node, inline_images, section_starts, image_nodes, text_nodes
+    return nodes, metadata_text_node, inline_images, section_starts, image_nodes, text_nodes, hot_comments_nodes
 
 
 def is_pure_image_gallery(nodes: List[Union[Plain, Image, Video, Record, File]]) -> bool:
@@ -824,6 +824,7 @@ def build_all_nodes(
             section_starts,
             image_nodes,
             base_nodes,
+            comment_nodes,
         ) = _build_node_parts_for_link(
             metadata,
             use_local_files,
@@ -890,6 +891,7 @@ def build_all_nodes(
                     image_nodes=image_nodes,
                     separate_gallery_ids=set(),
                     base_nodes=base_nodes,
+                    comment_nodes=comment_nodes,
                     section_starts=section_starts,
                 )
             )

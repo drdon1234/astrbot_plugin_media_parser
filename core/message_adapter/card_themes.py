@@ -41,22 +41,22 @@ CARD_THEMES = {
     "rose": CardTheme("plain", {
         "background": "#F5F0F0", "card_fill": "#FFFCFC", "card_outline": "#EAE0E2",
         "card_shadow": "#EAE3E5", "title": "#322D35", "accent": "#984D66",
-        "muted_text": "#7B707A", "body_text": "#403A43", "rule": "#EDE3E7",
+        "muted_text": "#7B707A", "body_text": "#403A43", "comment_text": "#615860", "rule": "#EDE3E7",
     }),
     "mist": CardTheme("plain", {
         "background": "#EDF0F4", "card_fill": "#FFFFFF", "card_outline": "#DFE4EA",
         "card_shadow": "#DEE3EA", "title": "#1E293B", "accent": "#355A7E",
-        "muted_text": "#697586", "body_text": "#354052", "rule": "#E2E7ED",
+        "muted_text": "#697586", "body_text": "#354052", "comment_text": "#505D70", "rule": "#E2E7ED",
     }),
     "frost": CardTheme("glass", {
         "background": "#1B2939", "card_fill": "#29394D", "card_outline": "#394C61",
         "card_shadow": "#162130", "title": "#EDF5FC", "accent": "#82C7E8",
-        "muted_text": "#A0B0C1", "body_text": "#D4DEE9", "rule": "#405267",
+        "muted_text": "#A0B0C1", "body_text": "#D4DEE9", "comment_text": "#BDCAD8", "rule": "#405267",
     }),
     "paper": CardTheme("paper", {
         "background": "#E9DAC3", "card_fill": "#FFF3DF", "card_outline": "#DAC9AD",
         "card_shadow": "#C9B69B", "title": "#372B23", "accent": "#785134",
-        "muted_text": "#6F5844", "body_text": "#44372C", "rule": "#DBCBB3",
+        "muted_text": "#6F5844", "body_text": "#44372C", "comment_text": "#64513F", "rule": "#DBCBB3",
     }),
 }
 

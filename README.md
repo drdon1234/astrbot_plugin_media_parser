@@ -1,6 +1,6 @@
 <div align="center">
 
-![:name](https://count.getloli.com/@astrbot_plugin_media_parser?name=astrbot_plugin_media_parser&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
+![仓库浏览计数](https://count.getloli.com/@astrbot_plugin_media_parser?name=astrbot_plugin_media_parser&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
 
 # 流媒体聚合解析器
 
@@ -11,21 +11,25 @@
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.17.0-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser)
+[![Version](https://img.shields.io/badge/Version-v1.17.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser/releases)
 
-[快速开始](#-快速开始) · [支持平台](#-支持平台) · [默认行为](#-默认行为) · [高级功能](#-高级功能)
+[快速开始](#quick-start) · [支持平台](#platforms) · [默认行为](#defaults) · [常用配置](#settings) · [卡片效果](#card-examples) · [高级功能](#advanced)
 
 </div>
 
 ---
 
+<a id="quick-start"></a>
+
 ## 🚀 快速开始
 
-1. 在 AstrBot 4.x WebUI 的插件市场搜索 astrbot_plugin_media_parser 并安装。
-2. 向机器人发送支持平台的链接，插件默认自动解析。
-3. 在插件配置中选择发送文本、富媒体或两者。
+1. 在 AstrBot 4.x WebUI 的插件市场搜索 `astrbot_plugin_media_parser` 并安装。
+2. 在聊天中发送一个支持的平台链接。默认自动解析，可直接收到正文和可获取的媒体。
+3. 如果想把正文和热评合成图片，在 **消息输出 → 文本元数据** 中开启 **将文本元数据渲染为图片**。
 
-大多数平台无需额外配置。首次使用建议先确认缓存目录可用。
+Docker 部署需留意媒体缓存目录。AstrBot 与协议端分开运行时，请先查看下方「高级功能」中的缓存与中转说明。
+
+<a id="platforms"></a>
 
 ## 🌐 支持平台
 
@@ -42,6 +46,8 @@
 | Gitee | TikTok | YouTube | Steam |
 | Twitter/X | Pixiv | GitHub | GitLab |
 
+<a id="defaults"></a>
+
 ## ⚙️ 默认行为
 
 | 配置 | 默认值 | 说明 |
@@ -55,44 +61,45 @@
 | 卡片主题 | 玫瑰便签 | 另有雾灰简约、深蓝磨砂、浅棕细纹纸 |
 | 卡片字体 | 思源宋体 | 另有思源黑体、霞鹜文楷 |
 | 正文、热评与翻译分区渲染 | 关闭 | 默认合并到同一张卡片 |
-| 长图自动分页 | 关闭 | 开启后按 1800 像素分页 |
+| 长图自动分页 | 关闭 | 开启后超过 1800 像素时分页 |
+
+<a id="settings"></a>
 
 ## 🧭 常用配置
 
-### 平台输出模式
+### 按平台选择发送内容
 
-在「平台开关与输出模式」中分别选择发送文本和富媒体的平台。
+在 **平台开关与输出模式** 中分别选择「发送文本的平台」和「发送富媒体的平台」。两项都选会发送正文和媒体。只选文本可跳过媒体下载，只选富媒体则仅发送图片、音频或视频。想保留图文帖的正文、同时让视频帖只发视频，可将对应平台加入「有视频时只发富媒体」。
 
-- 两项都选时发送文本和媒体。
-- 只选文本时不下载媒体。
-- 只选富媒体时不发送正文和热评。
-- 开启「有视频时只发富媒体」后，含视频的内容跳过正文。
+### 热评、配图与音频
 
-### 热评
+- **热评**　在「消息输出 → 附加内容：热评」中设置条数，填 `0` 关闭，也可排除指定平台。内容可能是评论、游戏评价、Issue 讨论或分集弹幕，实际条数取决于来源。
+- **正文配图**　在「消息输出 → 富媒体展示」中开启「正文与配图按原文顺序穿插」，并保留正文与富媒体输出。有图片位置的文章会交替发送段落和配图，生成分享卡时也沿用该顺序。
+- **图集与音频**　在同一处可将普通图集设为多图一条或逐张发送，音频可选语音或原始文件。语音转换需要 ffmpeg。
 
-在「消息输出 → 附加内容：热评」中设置条数。填 0 可关闭热评，也可以排除指定平台。实际来源可能是普通评论、精选评论、游戏评价、Issue 讨论或分集弹幕，数量受平台接口和访问权限影响。
+### 卡片与引用
 
-### 文本图片
+在 **消息输出 → 文本元数据** 中选择分享卡或文字卡，并独立调整主题和字体。分享卡可展示封面与图集。开启「展开排版设置」后，可调整字号和间距，或让正文、热评和翻译分别出图。只想按长度拆分时，直接开启「长图自动分页」，此项也作用于仓库 README 截图。
 
-在「消息输出 → 文本元数据」中开启渲染后，可选择文字卡或分享卡，并独立选择主题和字体。
+引用机器人发送的分享卡，根据卡片底部提示发送关键词。默认有效期为一小时，关键词可自定义。
 
-- 两种卡片使用同一套原生 Pillow 渲染逻辑。
-- 正文、热评和翻译默认合并到同一张卡片。
-- 分享卡可以显示封面和图集。
-- 开启分区渲染后，正文、热评和翻译分别出图。
-- 卡片中的封面、图集和正文配图可以通过引用关键词取回。
+| 发送 | 可取回的内容 |
+| --- | --- |
+| `原图` | 图集、正文配图，以及替代视频发送的封面。随视频展示的封面仅作预览。 |
+| `链接` | 正文中出现的网址及说明，按原文顺序返回。 |
 
-字体资源见[字体资源说明](resource/font/README.md)。
+<a id="card-examples"></a>
 
-### 正文与配图
+## 🖼️ 卡片效果
 
-开启「正文与配图按原文顺序穿插」后，支持的平台会按原文位置交替发送段落和图片。渲染为卡片时，配图会嵌入正文位置。无法识别位置或图片下载失败时，插件保留原有发送方式。
+两张示例均使用玫瑰便签、思源宋体，附三条热评。点击图片可查看原尺寸。
 
-「图片发送方式」支持保持原方式、多图一条和逐张发送。
+| 视频 · 《黑神话：悟空》最终预告 | 图文 · 《万界道友》开发分享 |
+| :---: | :---: |
+| <a href="docs/images/video-card.webp"><img src="docs/images/video-card.webp" width="360" alt="视频分享卡，从标题、封面和简介到三条热评"></a> | <a href="docs/images/article-card.webp"><img src="docs/images/article-card.webp" width="360" alt="图文分享卡，先介绍游戏玩法，中间穿插游戏界面截图，随后是作者的交流邀请和三条热评"></a> |
+| [B 站原视频](https://www.bilibili.com/video/BV1oH4y1c7Kk) | [V2EX 原帖](https://www.v2ex.com/t/1246997) |
 
-### 音频
-
-「音频发送方式」支持语音或原始文件。语音转换、图片格式转换和部分视频处理需要 ffmpeg。
+<a id="advanced"></a>
 
 ## 🧰 高级功能
 
@@ -105,7 +112,7 @@
 
 ### B站高画质
 
-在「B站增强」中开启 Cookie 解析并填写 Cookie。高画质、Cookie 续期和部分视频流需要可用缓存目录，管理员协助登录还需要配置管理员 ID。
+在「B站增强」中启用 Cookie 并填写凭据。高画质、Cookie 续期和部分视频流需要可用缓存目录，管理员协助登录还需要配置管理员 ID。
 
 ### 翻译与内容总结
 
@@ -123,7 +130,7 @@ GitHub、GitLab 和 Gitee 可发送仓库概况与 README 截图。截图功能�
 
 ### 引用和归档
 
-分享卡支持引用取回原图和正文链接。配置归档命令后，可以将引用链接的解析结果和已下载媒体导出为 ZIP。
+在「消息输出」中配置「引用链接归档命令」后，引用链接消息并发送该命令，可将解析结果和已下载的媒体打包为 ZIP。
 
 </details>
 
@@ -131,7 +138,7 @@ GitHub、GitLab 和 Gitee 可发送仓库概况与 README 截图。截图功能�
 
 - 私密、删除、付费、登录限制和风控内容可能无法解析。
 - TikTok、YouTube、Twitter/X、Pixiv、小黑盒和 Steam 的部分请求可能需要代理。
-- 微信视频号短链需要配置腾讯元宝 Cookie。
+- 微信视频号短链需要腾讯元宝 Cookie，公众号文章无需填写。
 - 语音、视频解密和图片转换可能需要 ffmpeg。
 - 机器人会跳过自身消息，直播链接默认跳过。
 - 缓存目录不可用时，必须下载到本地的媒体会被跳过，但文本通常仍会发送。
