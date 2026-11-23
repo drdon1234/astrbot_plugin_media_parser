@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
-[![Version](https://img.shields.io/badge/Version-v1.17.1-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser/releases)
+[![Version](https://img.shields.io/badge/Version-v1.17.2-green.svg)](https://github.com/drdon1234/astrbot_plugin_media_parser/releases)
 
 [快速开始](#quick-start) · [支持平台](#platforms) · [默认行为](#defaults) · [常用配置](#settings) · [卡片效果](#card-examples) · [高级功能](#advanced)
 

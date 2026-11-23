@@ -6,10 +6,12 @@ import json
 import re
 import time
 import unicodedata
+from contextlib import asynccontextmanager
 from datetime import datetime
 from html import unescape
+from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, List
+from typing import AsyncIterator, Optional, Dict, Any, Tuple, List
 from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode
 
 import aiohttp
@@ -41,6 +43,7 @@ XOR_CODE = 23442827791579
 MAX_AID = 1 << 51
 BASE = 58
 NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+VISITOR_API = "https://api.bilibili.com/x/frontend/finger/spi"
 HOT_COMMENT_API = "https://api.bilibili.com/x/v2/reply/wbi/main"
 UGC_INFO_API = "https://api.bilibili.com/x/web-interface/view"
 UGC_WBI_INFO_API = "https://api.bilibili.com/x/web-interface/wbi/view"
@@ -225,8 +228,8 @@ class BilibiliParser(BaseVideoParser):
         self._title_search_cache: Dict[Tuple[str, str], Tuple[float, Optional[str]]] = {}
         self._title_search_pending: Dict[Tuple[str, str], asyncio.Future] = {}
         self._title_search_semaphore = asyncio.Semaphore(2)
-        self._title_search_visitor_cookie = ""
-        self._title_search_lock = asyncio.Lock()
+        self._visitor_cookies: Dict[str, str] = {}
+        self._visitor_lock = asyncio.Lock()
         self._title_search_cookie_fingerprint = ""
         self._default_headers = {
             "User-Agent": UA,
@@ -396,7 +399,6 @@ class BilibiliParser(BaseVideoParser):
         )
         if fingerprint != self._title_search_cookie_fingerprint:
             self._title_search_cache.clear()
-            self._title_search_visitor_cookie = ""
             self._title_search_cookie_fingerprint = fingerprint
         cache_key = (fingerprint, normalized_title)
         cached = self._title_search_cache.get(cache_key)
@@ -446,21 +448,55 @@ class BilibiliParser(BaseVideoParser):
             self._title_search_pending.pop(cache_key, None)
             pending.set_result(matched_url)
 
-    async def _get_title_search_visitor_cookie(
+    async def _get_visitor_cookies(
         self, session: aiohttp.ClientSession
-    ) -> str:
-        """仅串行初始化访客 Cookie，不让慢搜索阻塞缓存命中。"""
-        async with self._title_search_lock:
-            if not self._title_search_visitor_cookie:
-                async with session.get(
-                    "https://www.bilibili.com/", headers=self._build_api_headers()
-                ) as resp:
-                    resp.raise_for_status()
-                    await resp.read()
-                    self._title_search_visitor_cookie = "; ".join(
-                        f"{name}={cookie.value}" for name, cookie in resp.cookies.items()
-                    )
-            return self._title_search_visitor_cookie
+    ) -> Dict[str, str]:
+        """在解析器生命周期内复用 B 站签发的同一对访客标识。"""
+        async with self._visitor_lock:
+            if self._visitor_cookies:
+                return self._visitor_cookies
+            async with session.get(
+                VISITOR_API, headers=self._build_api_headers(),
+                allow_redirects=False, timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status in (412, 429):
+                    raise _BilibiliRequestLimited(f"B站限制了访客会话请求（HTTP {resp.status}），请稍后重试")
+                if resp.status != 200 or resp.content_type != "application/json":
+                    raise RuntimeError(f"B站访客接口未返回有效响应（HTTP {resp.status}）")
+                payload = await resp.json()
+            if isinstance(payload, dict) and payload.get("code") == -412:
+                raise _BilibiliRequestLimited("B站限制了访客会话请求（业务码 -412），请稍后重试")
+            data = payload.get("data") if isinstance(payload, dict) and payload.get("code") == 0 else None
+            if not isinstance(data, dict) or not all(
+                isinstance(data.get(key), str) and re.fullmatch(r"[\w./+=-]+", data[key], re.ASCII)
+                for key in ("b_3", "b_4")
+            ):
+                raise RuntimeError("B站访客接口未返回完整的访客标识")
+            self._visitor_cookies = {"buvid3": data["b_3"], "buvid4": data["b_4"]}
+            return self._visitor_cookies
+
+    @asynccontextmanager
+    async def _visitor_session(self, parent: aiohttp.ClientSession) -> AsyncIterator[aiohttp.ClientSession]:
+        """共用连接池，将访客 Cookie 限于本次匿名解析和 B 站 HTTPS 域。"""
+        async with aiohttp.ClientSession(
+            connector=parent.connector, connector_owner=False, timeout=parent.timeout,
+            requote_redirect_url=parent.requote_redirect_url, cookie_jar=aiohttp.CookieJar(quote_cookie=False),
+        ) as session:
+            try:
+                values = await self._get_visitor_cookies(session)
+            except _BilibiliRequestLimited:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RuntimeError) as exc:
+                logger.warning(f"B站访客会话初始化失败，继续读取公开内容：{type(exc).__name__}")
+            else:
+                cookies = SimpleCookie()
+                for name, value in values.items():
+                    cookies[name] = value
+                    cookies[name]["domain"] = "bilibili.com"
+                    cookies[name]["path"] = "/"
+                    cookies[name]["secure"] = True
+                session.cookie_jar.update_cookies(cookies)
+            yield session
 
     async def _request_video_by_title(
         self, title: str, session: aiohttp.ClientSession, cookie_header: str
@@ -468,7 +504,8 @@ class BilibiliParser(BaseVideoParser):
         """限制上游并发，并用独立的请求头隔离账号与访客 Cookie。"""
         async with self._title_search_semaphore:
             if not cookie_header:
-                cookie_header = await self._get_title_search_visitor_cookie(session)
+                visitor = await self._get_visitor_cookies(session)
+                cookie_header = "; ".join(f"{name}={value}" for name, value in visitor.items())
             headers = self._build_api_headers(cookie_header=cookie_header)
             matched_url = None
             normalized_title = self._normalize_search_title(title)
@@ -1361,10 +1398,10 @@ class BilibiliParser(BaseVideoParser):
         )
 
         if video_url:
-            video_result = await self.parse_bilibili_minimal(
+            video_result = await self._parse_bilibili_resource(
                 video_url,
                 session=session,
-                cookie_header_override=cookie_header,
+                cookie_header=cookie_header,
                 enable_hot_comments=False,
             )
             if not video_result:
@@ -2567,10 +2604,10 @@ class BilibiliParser(BaseVideoParser):
                         origin_data_for_timestamp = origin_data
 
         if video_url:
-            video_result = await self.parse_bilibili_minimal(
+            video_result = await self._parse_bilibili_resource(
                 video_url,
                 session=session,
-                cookie_header_override=cookie_header,
+                cookie_header=cookie_header,
                 enable_hot_comments=False,
             )
 
@@ -2835,6 +2872,19 @@ class BilibiliParser(BaseVideoParser):
                     cookie_header_override=cookie_header_override,
                     enable_hot_comments=enable_hot_comments,
                 )
+        cookie_header = cookie_header_override
+        if cookie_header is None:
+            cookie_header = await self._resolve_cookie_header(session)
+        if cookie_header:
+            return await self._parse_bilibili_resource(url, session, cookie_header, enable_hot_comments, p)
+        async with self._visitor_session(session) as visitor_session:
+            return await self._parse_bilibili_resource(url, visitor_session, "", enable_hot_comments, p)
+
+    async def _parse_bilibili_resource(
+        self, url: str, session: aiohttp.ClientSession, cookie_header: str,
+        enable_hot_comments: bool, p: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """在已准备的会话中解析目标，动态内嵌视频沿用同一访客或账号。"""
         logger.debug(f"[{self.name}] parse_bilibili_minimal: 开始处理 {url}")
         original_url = url
         page_url = await self.expand_b23(url, session)
@@ -2842,11 +2892,6 @@ class BilibiliParser(BaseVideoParser):
             logger.debug(
                 f"[{self.name}] parse_bilibili_minimal: b23短链展开 {url} -> {page_url}"
             )
-
-        if cookie_header_override is not None:
-            cookie_header = cookie_header_override
-        else:
-            cookie_header = await self._resolve_cookie_header(session)
 
         if is_live_url(page_url) or is_live_url(original_url):
             logger.debug(
