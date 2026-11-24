@@ -17,6 +17,51 @@ from ..types import BuildAllNodesResult, LinkBuildMeta, MediaMetadata
 
 
 TEXT_SECTION_SEPARATOR = "-------------------------------------"
+_AUDIO_FILE_NAME_MAX_BYTES = 80
+_SAFE_AUDIO_FILE_STEM_CHARS = re.compile(
+    r"[^A-Za-z0-9\u3400-\u4dbf\u4e00-\u9fff _().-]+"
+)
+_WINDOWS_RESERVED_FILE_STEMS = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """按 UTF-8 字节数截断文本，不拆分字符。"""
+    if max_bytes <= 0:
+        return ""
+    used_bytes = 0
+    result = []
+    for char in text:
+        char_bytes = len(char.encode("utf-8"))
+        if used_bytes + char_bytes > max_bytes:
+            break
+        result.append(char)
+        used_bytes += char_bytes
+    return "".join(result)
+
+
+def _safe_audio_file_name(
+    title: object,
+    extension: str,
+    max_bytes: int = _AUDIO_FILE_NAME_MAX_BYTES,
+) -> str:
+    """生成适合跨协议端发送的音频文件名。"""
+    suffix = str(extension or "")
+    text = _SAFE_AUDIO_FILE_STEM_CHARS.sub("_", str(title or ""))
+    text = re.sub(r"\s+", " ", text).strip(" .-_")
+    text = re.sub(r"_+", "_", text)
+    if text.upper() in _WINDOWS_RESERVED_FILE_STEMS:
+        text = ""
+    suffix_bytes = len(suffix.encode("utf-8"))
+    stem_limit = max(1, max_bytes - suffix_bytes)
+    text = _truncate_utf8(text, stem_limit).strip(" .-_")
+    return (text or "作品音频") + suffix
 
 
 def _split_plain_node(node: Optional[Plain]) -> List[Plain]:
@@ -628,8 +673,10 @@ def build_media_nodes(
         )
         try:
             if audio_send_mode == "文件":
-                title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(metadata.get("title") or "音频"))
-                name = (title.strip(" .")[:120] or "音频") + os.path.splitext(path)[1]
+                name = _safe_audio_file_name(
+                    metadata.get("title"),
+                    os.path.splitext(path)[1],
+                )
                 nodes.append(File(name=name, file=path, url=token_url or ""))
             elif token_url:
                 nodes.append(Record.fromURL(token_url))

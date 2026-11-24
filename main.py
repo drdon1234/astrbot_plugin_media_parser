@@ -71,7 +71,7 @@ if _plugin_directory.parent.name in {"plugins", "reserved_plugins"}:
     "astrbot_plugin_media_parser",
     "drdon1234",
     "聚合解析平台分享内容，发送视频、音频、图片与文本",
-    "1.17.2",
+    "1.17.3",
 )
 class VideoParserPlugin(Star):
     def __init__(self, context: Context, config: dict):
